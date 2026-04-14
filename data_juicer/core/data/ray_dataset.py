@@ -393,7 +393,14 @@ class RayDataset(DJDataset):
         return self.data.to_pandas().to_dict(orient="records")
 
 
-class JSONStreamDatasource(ray.data.read_api.ArrowJSONDatasource):
+_JSON_DATASOURCE_BASE = getattr(
+    ray.data.read_api,
+    "ArrowJSONDatasource",
+    ray.data.read_api.JSONDatasource,
+)
+
+
+class JSONStreamDatasource(_JSON_DATASOURCE_BASE):
     """
     A temp Datasource for reading json stream.
 

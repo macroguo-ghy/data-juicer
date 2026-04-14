@@ -224,7 +224,7 @@ def make_log_summarization(max_show_item=10):
     warning_log_file = add_suffix_to_filename(log_file, "_WARNING")
 
     import jsonlines as jl
-    import regex as re
+    import re
 
     # make error summarization
     error_dict = {}

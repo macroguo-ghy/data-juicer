@@ -11,6 +11,10 @@ def load_ops(process_list, op_env_manager=None):
         dependencies. Only available when min_common_dep_num_to_combine >= 0.
     :return: The op instance list.
     """
+    from . import load_builtin_ops
+
+    load_builtin_ops(list(process.keys())[0] for process in process_list)
+
     ops = []
     new_process_list = []
 

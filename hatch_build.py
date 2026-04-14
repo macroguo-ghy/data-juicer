@@ -1,5 +1,7 @@
 """Hatchling build hook for compiling C++ extensions."""
 
+import os
+
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
@@ -12,8 +14,13 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         # Only compile for wheel builds
-        if self.target_name == "wheel":
+        if self.target_name == "wheel" and self._should_build_extensions():
             self._build_extensions()
+
+    @staticmethod
+    def _should_build_extensions():
+        raw = os.getenv("DATA_JUICER_BUILD_EXTENSIONS", "1").strip().lower()
+        return raw not in {"0", "false", "no"}
 
     def _build_extensions(self):
         """Build C++ extensions using setuptools."""

@@ -13,7 +13,7 @@ from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin
 from data_juicer.core.ray_exporter import RayExporter
 from data_juicer.core.tracer.ray_tracer import RayTracer
-from data_juicer.ops import OPEnvManager, load_ops
+from data_juicer.ops import load_ops
 from data_juicer.ops.op_fusion import fuse_operators
 from data_juicer.utils.lazy_loader import LazyLoader
 
@@ -125,6 +125,8 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         # setup OPEnvManager
         self.op_env_manager = None
         if self.cfg.min_common_dep_num_to_combine >= 0:
+            from data_juicer.ops import OPEnvManager
+
             logger.info("Preparing OPEnvManager...")
             self.op_env_manager = OPEnvManager(
                 min_common_dep_num_to_combine=self.cfg.min_common_dep_num_to_combine,

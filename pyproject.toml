@@ -31,16 +31,11 @@ dependencies = [
     "dill==0.3.8", # serialization
     "psutil", # system monitoring
     "pydantic>=2.0", # data validation
-    "uv",
     "wordcloud==1.9.4",
-    "spacy==3.8.7",
     "httpx",
     "av==13.1.0", # video/audio handling
     "emoji==2.2.0", # emoji handling
     "tabulate",
-    "librosa>=0.10",
-    "resampy",
-    "samplerate==0.1.0",
     "bs4",
     "matplotlib",
     "plotly", # interactive plots
@@ -51,15 +46,11 @@ dependencies = [
     "python-docx",
     "streamlit",
     "Pillow",
-    "fastapi>=0.110",
+    "fastapi>=0.110,<0.126",  # align with bytedray[serve]
     "mwparserfromhell",
-    "regex", # regular expressions
     "tomli",
     "tomli-w",
     "gitpython",
-    "mcp[cli]>=1.7.0",
-    "pylance",
-    "dep-logic",
     "rank-bm25>=0.2.2",
 ]
 
@@ -93,6 +84,8 @@ vision = [
 
 # Natural Language Processing
 nlp = [
+    "spacy==3.8.7",
+    "regex",  # advanced Unicode-aware regular expressions
     "nltk==3.9.1",  # NLP toolkit
     "easyocr==1.7.1",  # OCR
     "fasttext-wheel",  # FastText
@@ -111,6 +104,9 @@ nlp = [
 
 # Audio Processing
 audio = [
+    "librosa>=0.10",
+    "resampy",
+    "samplerate==0.1.0",
     "torchaudio",  # Audio processing with PyTorch
     "torchcodec==0.7",
     "soundfile",  # audio handling
@@ -118,14 +114,33 @@ audio = [
     "audiomentations",
 ]
 
-# Distributed Computing
-distributed = [
-    "ray[default]>=2.51.0",  # distributed computing
-    "uvloop==0.21.0",  # avoid async error before it's fixed in uvloop
-    "pyspark==3.5.5",  # distributed data processing
+# Tooling and optional service integrations
+tooling = [
+    "uv",
+    "mcp[cli]>=1.7.0",
+    "pylance",
+    "dep-logic",
+]
+
+# Optional dependencies for cloud storage and deduplication operators
+cloud = [
     "s3fs",  # S3 filesystem support for cloud storage
     "boto3",  # AWS SDK for S3 operations
-    "bitarray", # efficient arrays of booleans
+]
+
+dedup = [
+    "bitarray",  # compressed masks for MinHash-based deduplication
+]
+
+# Distributed Computing
+distributed = [
+    "bytedray[default,data,serve,bytedance]",  # internal distributed computing runtime
+    "uvloop==0.21.0",  # avoid async error before it's fixed in uvloop
+]
+
+# Spark support is split out so Ray-only deployments do not need to download pyspark.
+spark = [
+    "pyspark==3.5.5",  # distributed data processing
 ]
 
 # Development & Tools
@@ -166,6 +181,10 @@ all = [
     "py-data-juicer[nlp]",
     "py-data-juicer[audio]",
     "py-data-juicer[distributed]",
+    "py-data-juicer[spark]",
+    "py-data-juicer[tooling]",
+    "py-data-juicer[cloud]",
+    "py-data-juicer[dedup]",
     "py-data-juicer[dev]",
     "py-data-juicer[ai_services]",
 ]
@@ -190,14 +209,10 @@ build-backend = "hatchling.build"
 path = "data_juicer/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["data_juicer", "tools"]
-include = ["uv.lock", "pyproject.toml"]
+packages = ["data_juicer"]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
-
-[tool.hatch.build]
-include = ["uv.lock", "pyproject.toml"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "uv.lock" = "uv.lock"

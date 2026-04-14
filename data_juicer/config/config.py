@@ -25,6 +25,7 @@ from jsonargparse._typehints import ActionTypeHint
 from jsonargparse.typing import ClosedUnitInterval, NonNegativeInt, PositiveInt
 from loguru import logger
 
+from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
 from data_juicer.ops.op_fusion import FUSION_STRATEGIES
 from data_juicer.utils.constant import RAY_JOB_ENV_VAR
@@ -794,6 +795,8 @@ def init_configs(args: Optional[List[str]] = None, which_entry: object = None, l
                         for op in config_data["process"]:
                             used_ops.add(list(op.keys())[0])
 
+                load_builtin_ops(used_ops)
+
                 # Add remaining arguments
                 ops_sorted_by_types = sort_op_by_types_and_names(OPERATORS.modules.items())
 
@@ -813,12 +816,13 @@ def init_configs(args: Optional[List[str]] = None, which_entry: object = None, l
                     load_custom_operators(cfg.custom_operator_paths)
 
                 # check the entry
-                from data_juicer.core.analyzer import Analyzer
+                if cfg.auto:
+                    from data_juicer.core.analyzer import Analyzer
 
-                if not isinstance(which_entry, Analyzer) and cfg.auto:
-                    err_msg = "--auto argument can only be used for analyzer!"
-                    logger.error(err_msg)
-                    raise NotImplementedError(err_msg)
+                    if not isinstance(which_entry, Analyzer):
+                        err_msg = "--auto argument can only be used for analyzer!"
+                        logger.error(err_msg)
+                        raise NotImplementedError(err_msg)
 
         with timing_context("Initializing setup from config"):
             cfg = init_setup_from_cfg(cfg, load_configs_only)

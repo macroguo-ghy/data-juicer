@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from abc import ABC, abstractmethod
 from functools import partial
@@ -7,7 +8,6 @@ from typing import List, Optional, Tuple, Union
 from urllib.parse import urljoin
 
 import pandas as pd
-import regex as re
 import requests
 from bs4 import BeautifulSoup
 from datasets import Dataset

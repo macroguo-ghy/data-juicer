@@ -1,9 +1,8 @@
 # Some code here has been modified from:
 # https://huggingface.co/spaces/huggingface/text-data-filtering
 # --------------------------------------------------------
+import re
 from typing import Dict
-
-import regex as re
 
 
 class UnionFind:
