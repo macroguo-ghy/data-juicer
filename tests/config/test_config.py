@@ -430,6 +430,35 @@ class ConfigTest(DataJuicerTestCaseBase):
         self.assertIsInstance(cfg.add_suffix, bool)
         self.assertIsInstance(cfg.export_path, str)
 
+    def test_structured_export_precedence(self):
+        config_data = {
+            'project_name': 'structured_export',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export_path': './outputs/legacy.jsonl',
+            'export': {
+                'target': 'hdfs',
+                'path': 'hdfs://cluster/path/result.parquet',
+                'type': 'parquet',
+                'extra_args': {
+                    'compression': 'snappy'
+                }
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(cfg.export_path, 'hdfs://cluster/path/result.parquet')
+            self.assertEqual(cfg.export.path, 'hdfs://cluster/path/result.parquet')
+            self.assertEqual(cfg.export.type, 'parquet')
+            self.assertEqual(cfg.export_extra_args, {'compression': 'snappy'})
+        finally:
+            os.unlink(temp_config)
+
     def test_cli_override(self):
         """Test that command line arguments correctly override YAML config values."""
         out = StringIO()

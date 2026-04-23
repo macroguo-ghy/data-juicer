@@ -1,17 +1,23 @@
 import os
+import tempfile
 import unittest
-from unittest.mock import patch
-from jsonargparse import Namespace
 from contextlib import redirect_stdout
 from io import StringIO
+from unittest.mock import patch
+
+from datasets import Dataset
+from jsonargparse import Namespace
+
 from data_juicer.config import init_configs
-from data_juicer.core.data.dataset_builder import (rewrite_cli_datapath, 
-                                                   parse_cli_datapath,
-                                                   DatasetBuilder)
+from data_juicer.core.data.dataset_builder import (
+    DatasetBuilder,
+    _align_nested_datasets,
+    parse_cli_datapath,
+    rewrite_cli_datapath,
+)
 from data_juicer.core.data.config_validator import ConfigValidationError
-from data_juicer.utils.unittest_utils import (DataJuicerTestCaseBase, TEST_TAG)
 from data_juicer.core.data.load_strategy import RayLocalJsonDataLoadStrategy
-import tempfile
+from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, TEST_TAG
 
 
 WORK_DIR = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
@@ -57,9 +63,12 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
         ans = rewrite_cli_datapath(dataset_path)
         self.assertEqual(
             {'configs': [
-                {'path': 'hf-internal-testing/librispeech_asr_dummy',
-                'split': 'train',
-                'type': 'huggingface'}]},
+                {
+                    'path': 'hf-internal-testing/librispeech_asr_dummy',
+                    'split': 'train',
+                    'source': 'huggingface',
+                    'type': 'remote'
+                }]},
              ans)
 
     def test_rewrite_cli_datapath_local_wrong_files(self):
@@ -98,7 +107,18 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
         dataset_path = "1.0 huggingface/dataset"
         expected = {
             'configs': [
-                {'type': 'huggingface', 'path': 'huggingface/dataset', 'split': 'train'}
+                {'type': 'remote', 'source': 'huggingface', 'path': 'huggingface/dataset', 'split': 'train'}
+            ]
+        }
+        result = rewrite_cli_datapath(dataset_path)
+        self.assertEqual(result, expected)
+
+    def test_rewrite_cli_datapath_s3_and_hdfs(self):
+        dataset_path = "0.5 s3://bucket/path/data.jsonl 1.0 hdfs://cluster/path/data.parquet"
+        expected = {
+            'configs': [
+                {'type': 'remote', 'source': 's3', 'path': 's3://bucket/path/data.jsonl', 'weight': 0.5},
+                {'type': 'remote', 'source': 'hdfs', 'path': 'hdfs://cluster/path/data.parquet', 'weight': 1.0},
             ]
         }
         result = rewrite_cli_datapath(dataset_path)
@@ -140,6 +160,24 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
             }]
         }
         self.assertEqual(result, expected)
+
+    def test_align_nested_datasets_fill_missing_columns(self):
+        ds1 = Dataset.from_list([{'text': 'a', 'score': 1}])
+        ds2 = Dataset.from_list([{'text': 'b', 'lang': 'en'}])
+
+        aligned = _align_nested_datasets([ds1, ds2])
+
+        self.assertEqual(aligned[0].column_names, ['text', 'score', 'lang'])
+        self.assertEqual(aligned[1].column_names, ['text', 'score', 'lang'])
+        self.assertEqual(aligned[0]['lang'][0], None)
+        self.assertEqual(aligned[1]['score'][0], None)
+
+    def test_align_nested_datasets_type_conflict(self):
+        ds1 = Dataset.from_list([{'score': 1}])
+        ds2 = Dataset.from_list([{'score': 'bad'}])
+
+        with self.assertRaises(ConfigValidationError):
+            _align_nested_datasets([ds1, ds2])
 
     def test_parse_cli_datapath(self):
         dataset_path = "1.0 ds1.jsonl 2.0 ds2_dir 3.0 ds3.jsonl"

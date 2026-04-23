@@ -10,6 +10,16 @@ from loguru import logger
 
 from data_juicer.core.data import DJDataset
 from data_juicer.core.data.config_validator import ConfigValidator
+from data_juicer.core.io_utils import (
+    copy_uri_to_local,
+    export_lark_sheet_to_local,
+    infer_local_name_from_uri,
+    make_staging_dir,
+    materialize_duckdb_query,
+    read_magnus_to_pandas,
+    read_magnus_to_ray,
+    run_tqs_query,
+)
 from data_juicer.download.downloader import validate_snapshot_format
 from data_juicer.format.formatter import unify_format
 from data_juicer.format.load import load_formatter
@@ -57,6 +67,11 @@ class DataLoadStrategy(ABC, ConfigValidator):
         self.ds_config = ds_config
         self.cfg = cfg
         self.weight = ds_config.get("weight", 1.0)  # default weight is 1.0
+
+    def get_load_kwargs(self, **kwargs) -> Dict:
+        merged = dict(kwargs)
+        merged.update(self.ds_config.get("load_kwargs", {}))
+        return merged
 
     @abstractmethod
     def load_data(self, **kwargs) -> DJDataset:
@@ -179,6 +194,32 @@ class DefaultDataLoadStrategy(DataLoadStrategy):
         """Need to be implemented in the"""
 
 
+class StagedLocalLoadMixin:
+    def _make_stage_dir(self, identifier: str) -> str:
+        return make_staging_dir(self.cfg.work_dir, "load", identifier)
+
+    def _make_stage_path(self, identifier: str, remote_path: str | None = None, default_name: str = "dataset") -> str:
+        stage_dir = self._make_stage_dir(identifier)
+        local_name = infer_local_name_from_uri(remote_path, default_name=default_name)
+        return os.path.join(stage_dir, local_name)
+
+
+class DefaultStagedRemoteLoadStrategy(StagedLocalLoadMixin, DefaultDataLoadStrategy):
+    def _load_staged_local_dataset(self, local_path: str, **kwargs):
+        ds_config = dict(self.ds_config)
+        ds_config["type"] = "local"
+        ds_config["path"] = local_path
+        return DefaultLocalDataLoadStrategy(ds_config, self.cfg).load_data(**kwargs)
+
+
+class RayStagedRemoteLoadStrategy(StagedLocalLoadMixin, RayDataLoadStrategy):
+    def _load_staged_local_dataset(self, local_path: str, **kwargs):
+        ds_config = dict(self.ds_config)
+        ds_config["type"] = "local"
+        ds_config["path"] = local_path
+        return RayLocalJsonDataLoadStrategy(ds_config, self.cfg).load_data(**kwargs)
+
+
 # TODO dask support
 # class DaskDataLoadStrategy(DataLoadStrategy):
 #     @abstractmethod
@@ -199,6 +240,7 @@ class RayLocalJsonDataLoadStrategy(RayDataLoadStrategy):
     CONFIG_VALIDATION_RULES = {"required_fields": ["path"], "field_types": {"path": str}, "custom_validators": {}}
 
     def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
         from data_juicer.core.data.ray_dataset import RayDataset
 
         path = self.ds_config["path"]
@@ -317,6 +359,7 @@ class DefaultLocalDataLoadStrategy(DefaultDataLoadStrategy):
     CONFIG_VALIDATION_RULES = {"required_fields": ["path"], "field_types": {"path": str}, "custom_validators": {}}
 
     def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
         # Get config values with defaults
         text_keys = getattr(self.cfg, "text_keys", ["text"])  # Default to ['text']
         suffixes = getattr(self.cfg, "suffixes", None)  # Default to None
@@ -352,6 +395,7 @@ class DefaultHuggingfaceDataLoadStrategy(DefaultDataLoadStrategy):
     }
 
     def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
         num_proc = kwargs.pop("num_proc", 1)
         ds = datasets.load_dataset(
             self.ds_config["path"],
@@ -448,6 +492,7 @@ class DefaultS3DataLoadStrategy(DefaultDataLoadStrategy):
     }
 
     def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
         import os
 
         import datasets
@@ -567,6 +612,7 @@ class RayS3DataLoadStrategy(RayDataLoadStrategy):
     }
 
     def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
         from data_juicer.core.data.ray_dataset import RayDataset
 
         path = self.ds_config["path"]
@@ -658,3 +704,234 @@ class RayS3DataLoadStrategy(RayDataLoadStrategy):
                 f"Ensure your AWS credentials are configured. "
                 f"Error: {str(e)}"
             )
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "hdfs")
+class DefaultHDFSDataLoadStrategy(DefaultStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["path"],
+        "field_types": {"path": str},
+        "custom_validators": {"path": lambda x: x.startswith("hdfs://")},
+    }
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        remote_path = self.ds_config["path"]
+        local_path = self._make_stage_path(f"hdfs:{remote_path}", remote_path=remote_path)
+        staged_path = copy_uri_to_local(remote_path, local_path)
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "hdfs")
+class RayHDFSDataLoadStrategy(RayStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultHDFSDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        remote_path = self.ds_config["path"]
+        local_path = self._make_stage_path(f"hdfs:{remote_path}", remote_path=remote_path)
+        staged_path = copy_uri_to_local(remote_path, local_path)
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+class TQSQueryLoadMixin(StagedLocalLoadMixin):
+    query_field = "query"
+
+    def _materialize_query_output(self) -> str:
+        query = self.ds_config.get(self.query_field)
+        if not query:
+            raise ValueError(f"`{self.query_field}` is required")
+        output_uri = self.ds_config.get("output_uri") or self.ds_config.get("tqs_output_uri")
+        if not output_uri:
+            raise ValueError("TQS/Hive loading requires `output_uri` or `tqs_output_uri`")
+        run_tqs_query(
+            query=query,
+            output_uri=output_uri,
+            tqs_app_id=self.ds_config["tqs_app_id"],
+            tqs_app_key=self.ds_config["tqs_app_key"],
+            user_name=self.ds_config["user_name"],
+            cluster=self.ds_config.get("cluster", ""),
+            queue_name=self.ds_config.get("queue_name", ""),
+            priority=self.ds_config.get("priority", 5),
+            memory=self.ds_config.get("memory", 0),
+        )
+        local_dir = self._make_stage_dir(f"tqs:{output_uri}")
+        return copy_uri_to_local(output_uri, local_dir)
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "tqs")
+class DefaultTQSDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["query", "tqs_app_id", "tqs_app_key", "user_name"],
+        "optional_fields": ["output_uri", "tqs_output_uri"],
+        "field_types": {"query": str},
+        "custom_validators": {},
+    }
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        staged_path = self._materialize_query_output()
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "tqs")
+class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultTQSDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        staged_path = self._materialize_query_output()
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "hive")
+class DefaultHiveDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["tqs_app_id", "tqs_app_key", "user_name"],
+        "optional_fields": ["sql", "table", "output_uri", "tqs_output_uri"],
+        "field_types": {},
+        "custom_validators": {},
+    }
+    query_field = "sql"
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        if "sql" not in self.ds_config:
+            table = self.ds_config.get("table")
+            if not table:
+                raise ValueError("Hive loading requires `sql` or `table`")
+            self.ds_config["sql"] = f"select * from {table}"
+        staged_path = self._materialize_query_output()
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "hive")
+class RayHiveDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultHiveDataLoadStrategy.CONFIG_VALIDATION_RULES
+    query_field = "sql"
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        if "sql" not in self.ds_config:
+            table = self.ds_config.get("table")
+            if not table:
+                raise ValueError("Hive loading requires `sql` or `table`")
+            self.ds_config["sql"] = f"select * from {table}"
+        staged_path = self._materialize_query_output()
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "duckdb")
+class DefaultDuckDBDataLoadStrategy(DefaultStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["sql"],
+        "optional_fields": ["path_mapping"],
+        "field_types": {"sql": str},
+        "custom_validators": {},
+    }
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        output_path = self._make_stage_path(f"duckdb:{self.ds_config['sql']}", default_name="dataset.parquet")
+        staged_path = materialize_duckdb_query(
+            self.ds_config["sql"],
+            output_path,
+            path_mapping=self.ds_config.get("path_mapping"),
+        )
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "duckdb")
+class RayDuckDBDataLoadStrategy(RayStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultDuckDBDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        output_path = self._make_stage_path(f"duckdb:{self.ds_config['sql']}", default_name="dataset.parquet")
+        staged_path = materialize_duckdb_query(
+            self.ds_config["sql"],
+            output_path,
+            path_mapping=self.ds_config.get("path_mapping"),
+        )
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "lark")
+class DefaultLarkDataLoadStrategy(DefaultStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["lark_path", "lark_app_id", "lark_app_secret"],
+        "field_types": {"lark_path": str},
+        "custom_validators": {},
+    }
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        output_path = self._make_stage_path(f"lark:{self.ds_config['lark_path']}", default_name="dataset.csv")
+        staged_path = export_lark_sheet_to_local(
+            lark_path=self.ds_config["lark_path"],
+            lark_app_id=self.ds_config["lark_app_id"],
+            lark_app_secret=self.ds_config["lark_app_secret"],
+            output_path=output_path,
+            file_extension=self.ds_config.get("file_extension", "csv"),
+            document_type=self.ds_config.get("document_type", "sheet"),
+            sheet_id=self.ds_config.get("sheet_id"),
+            wait_export_time_seconds=self.ds_config.get("wait_export_time_seconds", 60),
+        )
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "lark")
+class RayLarkDataLoadStrategy(RayStagedRemoteLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultLarkDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        output_path = self._make_stage_path(f"lark:{self.ds_config['lark_path']}", default_name="dataset.csv")
+        staged_path = export_lark_sheet_to_local(
+            lark_path=self.ds_config["lark_path"],
+            lark_app_id=self.ds_config["lark_app_id"],
+            lark_app_secret=self.ds_config["lark_app_secret"],
+            output_path=output_path,
+            file_extension=self.ds_config.get("file_extension", "csv"),
+            document_type=self.ds_config.get("document_type", "sheet"),
+            sheet_id=self.ds_config.get("sheet_id"),
+            wait_export_time_seconds=self.ds_config.get("wait_export_time_seconds", 60),
+        )
+        return self._load_staged_local_dataset(staged_path, **kwargs)
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "magnus")
+class DefaultMagnusDataLoadStrategy(DefaultDataLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["table_name"],
+        "field_types": {"table_name": str},
+        "custom_validators": {},
+    }
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        from data_juicer.core.data import NestedDataset
+        from datasets import Dataset
+
+        dataset = read_magnus_to_pandas(
+            self.ds_config["table_name"],
+            filter=self.ds_config.get("filter"),
+            magnus_conf=self.ds_config.get("magnus_conf", {}),
+        )
+        return NestedDataset(Dataset.from_pandas(dataset, preserve_index=False))
+
+
+@DataLoadStrategyRegistry.register("ray", "remote", "magnus")
+class RayMagnusDataLoadStrategy(RayDataLoadStrategy):
+    CONFIG_VALIDATION_RULES = DefaultMagnusDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        from data_juicer.core.data.ray_dataset import RayDataset
+
+        dataset = read_magnus_to_ray(
+            self.ds_config["table_name"],
+            filter=self.ds_config.get("filter"),
+            magnus_conf=self.ds_config.get("magnus_conf", {}),
+        )
+        return RayDataset(dataset, cfg=self.cfg)

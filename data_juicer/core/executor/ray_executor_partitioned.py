@@ -26,7 +26,7 @@ from data_juicer.core.data.ray_dataset import RayDataset
 from data_juicer.core.executor import ExecutorBase
 from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin, EventType
-from data_juicer.core.ray_exporter import RayExporter
+from data_juicer.core.export_manager import ExportManager
 from data_juicer.ops import load_ops
 from data_juicer.ops.op_fusion import fuse_operators
 from data_juicer.utils.ckpt_utils import CheckpointStrategy, RayCheckpointManager
@@ -213,39 +213,9 @@ class PartitionedRayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin)
             logger.info(f"Checkpoint strategy: {self.ckpt_manager.checkpoint_strategy.value}")
             logger.info(f"Checkpoint directory: {self.ckpt_manager.ckpt_dir}")
 
-        # Initialize RayExporter for final output
+        # Initialize export manager for final output
         logger.info("Preparing exporter...")
-        # Prepare export extra args, including S3 credentials if export_path is S3
-        export_extra_args = dict(self.cfg.export_extra_args) if hasattr(self.cfg, "export_extra_args") else {}
-
-        # If export_path is S3, extract AWS credentials with priority:
-        # 1. export_aws_credentials (export-specific)
-        # 2. dataset config (for backward compatibility)
-        # 3. environment variables (handled by exporter)
-        if self.cfg.export_path.startswith("s3://"):
-            # Pass export-specific credentials if provided.
-            # The RayExporter will handle falling back to environment variables or other credential mechanisms.
-            if hasattr(self.cfg, "export_aws_credentials") and self.cfg.export_aws_credentials:
-                export_aws_creds = self.cfg.export_aws_credentials
-                if hasattr(export_aws_creds, "aws_access_key_id"):
-                    export_extra_args["aws_access_key_id"] = export_aws_creds.aws_access_key_id
-                if hasattr(export_aws_creds, "aws_secret_access_key"):
-                    export_extra_args["aws_secret_access_key"] = export_aws_creds.aws_secret_access_key
-                if hasattr(export_aws_creds, "aws_session_token"):
-                    export_extra_args["aws_session_token"] = export_aws_creds.aws_session_token
-                if hasattr(export_aws_creds, "aws_region"):
-                    export_extra_args["aws_region"] = export_aws_creds.aws_region
-                if hasattr(export_aws_creds, "endpoint_url"):
-                    export_extra_args["endpoint_url"] = export_aws_creds.endpoint_url
-
-        self.exporter = RayExporter(
-            self.cfg.export_path,
-            getattr(self.cfg, "export_type", None),
-            getattr(self.cfg, "export_shard_size", 0),
-            keep_stats_in_res_ds=getattr(self.cfg, "keep_stats_in_res_ds", True),
-            keep_hashes_in_res_ds=getattr(self.cfg, "keep_hashes_in_res_ds", False),
-            **export_extra_args,
-        )
+        self.exporter = ExportManager(self.cfg, executor_type="ray")
 
     def _configure_partitioning(self):
         """Configure partitioning based on manual or auto mode."""

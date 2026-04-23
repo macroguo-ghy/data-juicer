@@ -1,0 +1,37 @@
+# Git metadata is not needed at runtime and can make Ray working_dir packages huge.
+.git/
+
+# Local Python environments and caches.
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Build outputs and generated artifacts.
+build/
+dist/
+*.egg-info/
+data_juicer.egg-info/
+py_data_juicer.egg-info/
+outputs/
+assets/
+wandb/
+tmp/
+
+# Development-only files that are unnecessary for Ray workers.
+.DS_Store
+.idea/
+.vscode/
+.env
+.claude/
+CLAUDE.md
+
+# Test assets are sizeable and not required by process jobs.
+tests/
+
+# Docs are not required by process jobs.
+docs/
