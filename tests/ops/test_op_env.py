@@ -77,6 +77,18 @@ class OPEnvSpecTest(DataJuicerTestCaseBase):
         spec = self.OPEnvSpec(env_vars=env_vars)
         self.assertEqual(spec.env_vars, env_vars)
 
+    def test_init_without_pip_packages(self):
+        spec = self.OPEnvSpec()
+        self.assertEqual(spec.pip_pkgs, [])
+        self.assertEqual(spec.parsed_requirements, {})
+        self.assertEqual(spec.get_requirement_name_list(), [])
+
+    def test_init_with_empty_pip_packages(self):
+        spec = self.OPEnvSpec(pip_pkgs=[])
+        self.assertEqual(spec.pip_pkgs, [])
+        self.assertEqual(spec.parsed_requirements, {})
+        self.assertEqual(spec.get_requirement_name_list(), [])
+
     def test_to_dict_with_pip_packages(self):
         spec = self.OPEnvSpec(pip_pkgs=["numpy>=1.20.0"], backend="pip")
         expected = {"pip": ["numpy>=1.20.0"]}
@@ -340,6 +352,18 @@ class OPEnvManagerTest(DataJuicerTestCaseBase):
         self.assertNotEqual(manager.op2hash["op1"], manager.op2hash["op2"])
         states = manager.print_the_current_states()
         self.assertEqual(len(states), 2)
+
+    def test_merge_empty_and_non_empty_specs(self):
+        manager = self.OPEnvManager(min_common_dep_num_to_combine=0)
+        empty_spec = self.OPEnvSpec()
+        opencc_spec = self.OPEnvSpec(pip_pkgs=["opencc"])
+
+        manager.record_op_env_spec("python_lambda_mapper", empty_spec)
+        manager.record_op_env_spec("chinese_convert_mapper", opencc_spec)
+
+        self.assertEqual(manager.get_op_env_spec("python_lambda_mapper").pip_pkgs, ["opencc"])
+        self.assertEqual(manager.get_op_env_spec("chinese_convert_mapper").pip_pkgs, ["opencc"])
+        self.assertEqual(len(manager.hash2specs), 1)
 
     def test_merge_op_env_specs_combine_general(self):
         manager = self.OPEnvManager(min_common_dep_num_to_combine=1)

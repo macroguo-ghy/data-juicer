@@ -11,7 +11,7 @@ from data_juicer.core.data.dataset_builder import DatasetBuilder
 from data_juicer.core.executor import ExecutorBase
 from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin
-from data_juicer.core.ray_exporter import RayExporter
+from data_juicer.core.export_manager import ExportManager
 from data_juicer.core.tracer.ray_tracer import RayTracer
 from data_juicer.ops import load_ops
 from data_juicer.ops.op_fusion import fuse_operators
@@ -78,37 +78,7 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         self.datasetbuilder = DatasetBuilder(self.cfg, executor_type="ray")
 
         logger.info("Preparing exporter...")
-        # Prepare export extra args, including S3 credentials if export_path is S3
-        export_extra_args = dict(self.cfg.export_extra_args) if hasattr(self.cfg, "export_extra_args") else {}
-
-        # If export_path is S3, extract AWS credentials with priority:
-        # 1. export_aws_credentials (export-specific)
-        # 2. dataset config (for backward compatibility)
-        # 3. environment variables (handled by exporter)
-        if self.cfg.export_path.startswith("s3://"):
-            # Pass export-specific credentials if provided.
-            # The RayExporter will handle falling back to environment variables or other credential mechanisms.
-            if hasattr(self.cfg, "export_aws_credentials") and self.cfg.export_aws_credentials:
-                export_aws_creds = self.cfg.export_aws_credentials
-                # Iterate through the required fields directly, and copy them to export_extra_args if they exist.
-                credential_fields = {
-                    "aws_access_key_id",
-                    "aws_secret_access_key",
-                    "aws_session_token",
-                    "aws_region",
-                    "endpoint_url",
-                }
-                for field in credential_fields.intersection(export_aws_creds):
-                    export_extra_args[field] = export_aws_creds[field]
-
-        self.exporter = RayExporter(
-            self.cfg.export_path,
-            self.cfg.export_type,
-            self.cfg.export_shard_size,
-            keep_stats_in_res_ds=self.cfg.keep_stats_in_res_ds,
-            keep_hashes_in_res_ds=self.cfg.keep_hashes_in_res_ds,
-            **export_extra_args,
-        )
+        self.exporter = ExportManager(self.cfg, executor_type=self.executor_type)
 
         # setup tracer
         self.tracer = None

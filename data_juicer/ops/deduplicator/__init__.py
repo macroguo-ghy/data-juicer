@@ -1,33 +1,16 @@
-from .document_deduplicator import DocumentDeduplicator
-from .document_minhash_deduplicator import (
-    DocumentMinhashDeduplicator,
-    DocumentMinhashDeduplicatorWithUid,
-)
-from .document_simhash_deduplicator import DocumentSimhashDeduplicator
-from .image_deduplicator import ImageDeduplicator
-from .ray_basic_deduplicator import RayBasicDeduplicator
-from .ray_bts_minhash_cpp_deduplicator import RayBTSMinhashCppDeduplicator
-from .ray_bts_minhash_deduplicator import (
-    RayBTSMinhashDeduplicator,
-    RayBTSMinhashDeduplicatorWithUid,
-)
-from .ray_document_deduplicator import RayDocumentDeduplicator
-from .ray_image_deduplicator import RayImageDeduplicator
-from .ray_video_deduplicator import RayVideoDeduplicator
-from .video_deduplicator import VideoDeduplicator
+from data_juicer.ops._lazy_imports import load_class, make_class_index
 
-__all__ = [
-    "DocumentDeduplicator",
-    "DocumentMinhashDeduplicator",
-    "DocumentMinhashDeduplicatorWithUid",
-    "DocumentSimhashDeduplicator",
-    "ImageDeduplicator",
-    "RayBasicDeduplicator",
-    "RayDocumentDeduplicator",
-    "RayImageDeduplicator",
-    "RayVideoDeduplicator",
-    "RayBTSMinhashDeduplicator",
-    "RayBTSMinhashDeduplicatorWithUid",
-    "RayBTSMinhashCppDeduplicator",
-    "VideoDeduplicator",
-]
+_class_index = make_class_index(__file__)
+
+
+def __getattr__(name: str):
+    value = load_class(__name__, _class_index, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_class_index()))
+
+
+__all__ = sorted(_class_index())

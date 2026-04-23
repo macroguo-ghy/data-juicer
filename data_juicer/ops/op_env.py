@@ -157,7 +157,8 @@ class OPEnvSpec:
         self.backend = backend
         assert self.backend in ["pip", "uv"], "Backend should be one of ['pip', 'uv']"
         self.extra_env_params = extra_env_params or {}
-        if parsed_requirements:
+        self.parsed_requirements = {}
+        if parsed_requirements is not None:
             self.parsed_requirements = parsed_requirements
             # update pip_pkgs with the parsed pip package list
             self.pip_pkgs = [str(req) for req in self.parsed_requirements.values()]
@@ -345,11 +346,13 @@ class OPEnvManager:
                 combined_hash = combined_spec.get_hash()
                 if combined_hash != curr_hash:
                     # use a new env spec
+                    old_ops = self.hash2ops.pop(curr_hash)
+                    self.hash2specs.pop(curr_hash, None)
                     self.hash2specs[combined_hash] = combined_spec
                     # update existing OPs that use the current env spec
-                    for op in self.hash2ops[curr_hash]:
+                    for op in old_ops:
                         self.op2hash[op] = combined_hash
-                    self.hash2ops[combined_hash] = self.hash2ops.pop(curr_hash)
+                    self.hash2ops[combined_hash].extend(old_ops)
                 return combined_hash
         # no existing env specs can be combined
         self.hash2specs[new_hash] = new_env_spec

@@ -1,61 +1,45 @@
-# The data-juicer image includes all open-source contents of data-juicer,
-# and it will be installed in editable mode.
+FROM hub.byted.org/base/debian.bookworm.python310:9e2c5d4d41f2e7dce6eeac497b78793a
 
-FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# avoid hanging on interactive installation
-ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
 
-# add aliyun apt source mirrors for faster download in China
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    MPLCONFIGDIR=/app/.mplconfig \
+    DATA_JUICER_BUILD_EXTENSIONS=0 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=https://bytedpypi.byted.org/simple
 
-# install some basic system dependencies
-RUN apt-get update && apt-get install -y \
-    git curl vim wget aria2 openssh-server gnupg build-essential cmake gfortran \
-    ffmpeg libsm6 libxext6 libgl1 libglx-mesa0 libglib2.0-0 libosmesa6-dev \
-    freeglut3-dev libglfw3-dev libgles2-mesa-dev vulkan-tools \
-    libopenblas-dev liblapack-dev postgresql postgresql-contrib libpq-dev \
-    software-properties-common gcc-11 g++-11 && \
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 200 && \
-    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 200 && \
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends build-essential libgomp1 libxml2 ssh sshpass; \
+    if ! command -v sudo >/dev/null 2>&1; then \
+        apt-get install -y --no-install-recommends sudo; \
+    fi; \
+    if ! id -u tiger >/dev/null 2>&1; then \
+        useradd -u 1000 -d /home/tiger -m -s /bin/bash tiger; \
+    fi; \
+    mkdir -p /home/tiger/.service /opt/tiger /opt/log/tiger /var/log/tiger; \
+    chown -R tiger:tiger /home/tiger /opt/tiger /opt/log/tiger /var/log/tiger; \
+    printf '%s\n' \
+        'Cmnd_Alias TIGER_COMMANDS = /usr/bin/svstat, /usr/bin/svc, /etc/init.d/nginx, /usr/bin/uwsgi, /usr/sbin/iotop, /sbin/setcap, /opt/tiger/bin/cgroups_root_util, /usr/sbin/tcpdump, /usr/bin/perf, /bin/echo_oom' \
+        'tiger ALL=(ALL) NOPASSWD: TIGER_COMMANDS' \
+        > /etc/sudoers.d/tiger; \
+    printf '%s\n' 'tiger ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sudoers; \
+    chmod 0440 /etc/sudoers.d/tiger /etc/sudoers.d/sudoers; \
     rm -rf /var/lib/apt/lists/*
 
-# install Python 3.11
-RUN add-apt-repository -y ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y python3.11 python3.11-dev python3.11-venv python3.11-distutils && \
-    # set the default Python
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    # install pip
-    curl https://bootstrap.pypa.io/get-pip.py   | python3.11 && \
-    pip install --upgrade pip && \
-    rm -rf /var/lib/apt/lists/*
+COPY . /app
 
-# install uv
-RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN set -eux; \
+    PYTHON_BIN="$(command -v python3 || command -v python)"; \
+    "$PYTHON_BIN" -m ensurepip --upgrade || true; \
+    "$PYTHON_BIN" -m pip install --upgrade pip; \
+    "$PYTHON_BIN" -m pip install "/app[distributed]" "byted-iceberg[pyarrow]==0.2.360"; \
+    "$PYTHON_BIN" -m pip check
 
-# install java
-WORKDIR /opt
-RUN wget https://aka.ms/download-jdk/microsoft-jdk-17.0.9-linux-x64.tar.gz   -O jdk.tar.gz \
-    && tar -xzf jdk.tar.gz \
-    && rm -rf jdk.tar.gz \
-    && mv jdk-17.0.9+8 jdk
-ENV JAVA_HOME=/opt/jdk
-ENV PATH=$JAVA_HOME/bin:$PATH
-
-WORKDIR /data-juicer
-
-# install basic dependencies for Data-Juicer
-ENV UV_HTTP_TIMEOUT=600
-RUN uv pip install --upgrade --no-cache-dir setuptools==69.5.1 setuptools_scm -i https://pypi.tuna.tsinghua.edu.cn/simple --system \
-    && uv pip install --no-cache-dir git+https://github.com/datajuicer/recognize-anything.git -i https://pypi.tuna.tsinghua.edu.cn/simple --system
-
-# copy source code and install
-COPY . .
-RUN uv pip install --no-cache-dir -v -e .[all] -i https://pypi.tuna.tsinghua.edu.cn/simple --system \
-    && python -c "import nltk; nltk.download('punkt_tab'); nltk.download('punkt'); nltk.download('averaged_perceptron_tagger');  nltk.download('averaged_perceptron_tagger_eng')"
-
-# 最终入口配置
-CMD ["/bin/bash"]
+RUN set -eux; \
+    PYTHON_BIN="$(command -v python3 || command -v python)"; \
+    "$PYTHON_BIN" -c 'import importlib.metadata as md; from data_juicer.config import init_configs; import ray; from pyiceberg.magnus import MagnusClient; import pyiceberg.magnus.lance_writer as lance_writer; print("py-data-juicer", md.version("py-data-juicer")); print("bytedray", md.version("bytedray")); print("ray module", ray.__file__); print("data_juicer.config", init_configs.__module__); print("MagnusClient", MagnusClient); print("lance_writer", lance_writer.__file__)'

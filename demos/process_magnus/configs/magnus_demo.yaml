@@ -1,0 +1,33 @@
+project_name: "magnus-demo"
+executor_type: "default"
+np: 1
+work_dir: "./outputs/magnus_demo"
+
+# Source table:
+# ghy_test.default.lance_format
+# Columns: id(int64), name(string), score(double)
+dataset:
+  configs:
+    - type: remote
+      source: magnus
+      table_name: "ghy_test.default.lance_format"
+      magnus_conf: {}
+
+# Target table:
+# ghy_test.default.lance_format_output3
+# Columns: id(int64), name(string), score(double), processed_by(string)
+export:
+  target: magnus
+  table_name: "ghy_test.default.lance_format_output3"
+  magnus_conf: {}
+
+# This demo keeps only rows with score >= 85.0, then adds a new processed_by column.
+# Expected remaining names from the sample source data:
+# Alice, Bob, Charlie, Eve
+process:
+  - specified_numeric_field_filter:
+      field_key: "score"
+      min_value: 85.0
+      max_value: 100.0
+  - python_lambda_mapper:
+      lambda_str: 'lambda sample: {**sample, "processed_by": "data_juicer_magnus_demo"}'

@@ -3,6 +3,7 @@ import shlex
 from typing import List, Tuple
 
 import numpy as np
+import pyarrow
 from datasets import concatenate_datasets
 from jsonargparse import Namespace
 from loguru import logger
@@ -13,6 +14,82 @@ from data_juicer.core.data.data_validator import DataValidatorRegistry
 from data_juicer.core.data.load_strategy import DataLoadStrategyRegistry
 from data_juicer.utils.file_utils import is_absolute_path
 from data_juicer.utils.sample import random_sample
+
+
+def normalize_data_type_and_source(ds_config):
+    data_type = ds_config.get("type", None)
+    data_source = ds_config.get("source", None)
+    if data_source is None and data_type not in {None, "local", "remote"}:
+        data_source = data_type
+        data_type = "remote"
+    return data_type, data_source
+
+
+def _align_nested_datasets(datasets_to_merge):
+    if len(datasets_to_merge) <= 1:
+        return datasets_to_merge
+
+    union_columns = []
+    feature_defs = {}
+    feature_signatures = {}
+    for dataset in datasets_to_merge:
+        for column_name, feature in dataset.features.items():
+            if column_name not in union_columns:
+                union_columns.append(column_name)
+            signature = str(feature)
+            if column_name in feature_signatures and feature_signatures[column_name] != signature:
+                raise ConfigValidationError(
+                    f"Conflicting column types detected for `{column_name}`: "
+                    f"{feature_signatures[column_name]} vs {signature}"
+                )
+            feature_signatures.setdefault(column_name, signature)
+            feature_defs.setdefault(column_name, feature)
+
+    aligned = []
+    for dataset in datasets_to_merge:
+        for column_name in union_columns:
+            if column_name not in dataset.column_names:
+                dataset = dataset.add_column(column_name, [None] * len(dataset), feature=feature_defs[column_name])
+        dataset = dataset.select_columns(union_columns)
+        aligned.append(dataset)
+    return aligned
+
+
+def _add_null_column_to_ray(dataset, column_name: str):
+    def build_null_column(batch: pyarrow.Table):
+        return pyarrow.array([None] * len(batch))
+
+    return dataset.add_column(column_name, build_null_column, batch_format="pyarrow")
+
+
+def _align_ray_datasets(datasets_to_merge):
+    if len(datasets_to_merge) <= 1:
+        return datasets_to_merge
+
+    union_columns = []
+    type_signatures = {}
+    for dataset in datasets_to_merge:
+        schema = dataset.schema()
+        for column_name, column_type in zip(schema.names, schema.types):
+            if column_name not in union_columns:
+                union_columns.append(column_name)
+            signature = str(column_type)
+            if column_name in type_signatures and type_signatures[column_name] != signature:
+                raise ConfigValidationError(
+                    f"Conflicting column types detected for `{column_name}`: "
+                    f"{type_signatures[column_name]} vs {signature}"
+                )
+            type_signatures.setdefault(column_name, signature)
+
+    aligned = []
+    for dataset in datasets_to_merge:
+        current_columns = set(dataset.columns())
+        for column_name in union_columns:
+            if column_name not in current_columns:
+                dataset = _add_null_column_to_ray(dataset, column_name)
+        dataset = dataset.select_columns(union_columns)
+        aligned.append(dataset)
+    return aligned
 
 
 class DatasetBuilder(object):
@@ -72,18 +149,11 @@ class DatasetBuilder(object):
         for ds_config in ds_configs["configs"]:
             if not isinstance(ds_config, dict):
                 raise ConfigValidationError("Dataset configs should be dictionaries")
-        types = [ds_config.get("type", None) for ds_config in ds_configs["configs"]]
-        if len(set(types)) > 1:
-            raise ConfigValidationError("Mixture of diff types (LOCAL/REMOTE/...) are not supported")
-        if types[0] == "remote" and len(ds_configs["configs"]) > 1:
-            raise ConfigValidationError("Multiple remote datasets are not supported")
-
         # initialize the data load strategies
         self.load_strategies = []
         for ds_config in ds_configs["configs"]:
             # initialize data loading strategy
-            data_type = ds_config.get("type", None)
-            data_source = ds_config.get("source", None)
+            data_type, data_source = normalize_data_type_and_source(ds_config)
             stra = DataLoadStrategyRegistry.get_strategy_class(self.executor_type, data_type, data_source)
             if stra is None:
                 raise ValueError(f"No data load strategy found for" f" {data_type} {data_source}")
@@ -137,11 +207,18 @@ class DatasetBuilder(object):
 
         # handle data mixture
         if self.executor_type == "default":
-            return NestedDataset(concatenate_datasets(_datasets))
+            aligned = _align_nested_datasets(_datasets)
+            return NestedDataset(concatenate_datasets(aligned))
         elif self.executor_type == "ray":
-            # TODO: support multiple datasets and mixing for ray
-            assert len(_datasets) == 1, "Ray setup only supports one dataset now"
-            return _datasets[0]
+            if len(_datasets) == 1:
+                return _datasets[0]
+            from data_juicer.core.data.ray_dataset import RayDataset
+
+            aligned = _align_ray_datasets([dataset.data for dataset in _datasets])
+            dataset = aligned[0]
+            for other in aligned[1:]:
+                dataset = dataset.union(other)
+            return RayDataset(dataset, cfg=self.cfg)
 
     @classmethod
     def load_dataset_by_generated_config(cls, generated_dataset_config):
@@ -176,15 +253,19 @@ def rewrite_cli_datapath(dataset_path, max_sample_num=None) -> List:
         if os.path.isdir(p) or os.path.isfile(p):
             # local files
             ret["configs"].append({"type": "local", "path": p, "weight": w})
+        elif p.startswith("s3://"):
+            ret["configs"].append({"type": "remote", "source": "s3", "path": p, "weight": w})
+        elif p.startswith("hdfs://"):
+            ret["configs"].append({"type": "remote", "source": "hdfs", "path": p, "weight": w})
         elif not is_absolute_path(p) and not p.startswith(".") and p.count("/") <= 1:
             # remote huggingface
-            ret["configs"].append({"type": "huggingface", "path": p, "split": "train"})
+            ret["configs"].append({"type": "remote", "source": "huggingface", "path": p, "split": "train"})
         else:
             #
             raise ValueError(
                 f"Unable to load the dataset from [{dataset_path}]. "
                 f"Data-Juicer CLI mode only supports local files "
-                f"w or w/o weights, or huggingface path"
+                f"w or w/o weights, huggingface path, s3:// path, or hdfs:// path"
             )
     return ret
 

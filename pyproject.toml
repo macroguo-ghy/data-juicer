@@ -128,6 +128,14 @@ cloud = [
     "boto3",  # AWS SDK for S3 operations
 ]
 
+internal_io = [
+    "duckdb",  # DuckDB-based staging queries
+    "lark-oapi",  # Lark sheet import/export
+    "byted-iceberg[pyarrow]==0.2.360; sys_platform == 'linux'",  # Magnus/Iceberg read/write support
+    "byted-iceberg[pyarrow]==0.2.341; sys_platform == 'darwin'",  # macos test
+    "tos",  # TOS object storage client
+]
+
 dedup = [
     "bitarray",  # compressed masks for MinHash-based deduplication
 ]
@@ -184,6 +192,7 @@ all = [
     "py-data-juicer[spark]",
     "py-data-juicer[tooling]",
     "py-data-juicer[cloud]",
+    "py-data-juicer[internal_io]",
     "py-data-juicer[dedup]",
     "py-data-juicer[dev]",
     "py-data-juicer[ai_services]",
@@ -191,6 +200,7 @@ all = [
 
 [project.scripts]
 dj-process = "data_juicer.tools.process_data:main"
+dj-process-base64 = "data_juicer.tools.process_data_base64:main"
 dj-analyze = "data_juicer.tools.analyze_data:main"
 dj-install = "data_juicer.tools.dj_install:main"
 dj-mcp = "data_juicer.tools.mcp_server:main"

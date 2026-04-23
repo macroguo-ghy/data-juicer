@@ -263,6 +263,12 @@ def build_base_parser() -> ArgumentParser:
         "and optionally aws_session_token and endpoint_url.",
     )
     parser.add_argument(
+        "--export",
+        type=Dict,
+        default=None,
+        help="Structured single-target export config. When present, it takes precedence over legacy export_* fields.",
+    )
+    parser.add_argument(
         "--keep_stats_in_res_ds",
         type=bool,
         default=False,
@@ -808,6 +814,7 @@ def init_configs(args: Optional[List[str]] = None, which_entry: object = None, l
             # Parse all arguments
             with timing_context("Parsing arguments"):
                 cfg = parser.parse_args(args=args)
+                cfg = normalize_export_config(cfg)
 
                 if cfg.executor_type == "ray":
                     os.environ[RAY_JOB_ENV_VAR] = "1"
@@ -876,6 +883,51 @@ def update_ds_cache_dir_and_related_vars(new_ds_cache_path):
     config.EXTRACTED_DATASETS_PATH = Path(config.DEFAULT_EXTRACTED_DATASETS_PATH)
 
 
+def _plain_cfg_value(value):
+    if isinstance(value, Namespace):
+        value = namespace_to_dict(value)
+    if isinstance(value, dict):
+        return {k: _plain_cfg_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain_cfg_value(v) for v in value]
+    return value
+
+
+def _substitute_nested_placeholders(value, placeholders):
+    if isinstance(value, str):
+        return value.format(**placeholders)
+    if isinstance(value, dict):
+        return {k: _substitute_nested_placeholders(v, placeholders) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_substitute_nested_placeholders(v, placeholders) for v in value]
+    return value
+
+
+def normalize_export_config(cfg: Namespace) -> Namespace:
+    export_cfg = _plain_cfg_value(getattr(cfg, "export", None))
+    if not export_cfg:
+        return cfg
+    if not isinstance(export_cfg, dict):
+        raise ValueError("Structured `export` config must be a dictionary")
+
+    path = export_cfg.get("path")
+    if path:
+        cfg.export_path = path
+    if "type" in export_cfg or "export_type" in export_cfg:
+        cfg.export_type = export_cfg.get("type", export_cfg.get("export_type"))
+    if "shard_size" in export_cfg or "export_shard_size" in export_cfg:
+        cfg.export_shard_size = export_cfg.get("shard_size", export_cfg.get("export_shard_size"))
+    if "in_parallel" in export_cfg or "export_in_parallel" in export_cfg:
+        cfg.export_in_parallel = export_cfg.get("in_parallel", export_cfg.get("export_in_parallel"))
+    if "extra_args" in export_cfg:
+        cfg.export_extra_args = export_cfg.get("extra_args") or {}
+    if "aws_credentials" in export_cfg:
+        cfg.export_aws_credentials = export_cfg.get("aws_credentials")
+
+    cfg.export = dict_to_namespace(export_cfg)
+    return cfg
+
+
 def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
     """
     Do some extra setup tasks after parsing config file or command line.
@@ -888,15 +940,15 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
     :param cfg: an updated cfg
     """
 
-    # Handle S3 paths differently from local paths
-    if cfg.export_path.startswith("s3://"):
-        # For S3 paths, keep as-is (don't use os.path.abspath)
+    # Handle remote export paths differently from local paths
+    if cfg.export_path.startswith(("s3://", "hdfs://")):
+        # For remote paths, keep as-is (don't use os.path.abspath)
         # If work_dir is not provided, use a default local directory for logs/checkpoints
         if cfg.work_dir is None:
-            # Use a default local work directory for S3 exports
+            # Use a default local work directory for remote exports
             # This is where logs, checkpoints, and other local artifacts will be stored
             cfg.work_dir = os.path.abspath("./outputs")
-            logger.info(f"Using default work_dir [{cfg.work_dir}] for S3 export_path [{cfg.export_path}]")
+            logger.info(f"Using default work_dir [{cfg.work_dir}] for remote export_path [{cfg.export_path}]")
     else:
         # For local paths, convert to absolute path
         cfg.export_path = os.path.abspath(cfg.export_path)
@@ -906,14 +958,19 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
     # Call resolve_job_directories to finalize all job-related paths
     cfg = resolve_job_id(cfg)
     cfg = resolve_job_directories(cfg)
+    if getattr(cfg, "export", None):
+        export_cfg = _plain_cfg_value(cfg.export)
+        placeholders = {"work_dir": cfg.work_dir, "job_id": getattr(cfg, "job_id", "")}
+        export_cfg = _substitute_nested_placeholders(export_cfg, placeholders)
+        if export_cfg.get("path"):
+            export_cfg["path"] = cfg.export_path
+        cfg.export = dict_to_namespace(export_cfg)
 
     timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime(time.time()))
     if not load_configs_only:
-        # For S3 paths, use a simplified export path for log filename
-        if cfg.export_path.startswith("s3://"):
-            # Extract bucket and key from S3 path for log filename
-            s3_path_parts = cfg.export_path.replace("s3://", "").split("/", 1)
-            export_rel_path = s3_path_parts[1] if len(s3_path_parts) > 1 else s3_path_parts[0]
+        # For remote paths, use a simplified export path for log filename
+        if cfg.export_path.startswith(("s3://", "hdfs://")):
+            export_rel_path = cfg.export_path.split("://", 1)[1]
         else:
             export_rel_path = os.path.relpath(cfg.export_path, start=cfg.work_dir)
 

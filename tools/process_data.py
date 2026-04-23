@@ -15,10 +15,9 @@ def timing_context(description):
     logger.info(f"{description} took {elapsed_time:.2f} seconds")
 
 
-@logger.catch(reraise=True)
-def main():
+def run(args=None):
     with timing_context("Loading configuration"):
-        cfg = init_configs()
+        cfg = init_configs(args=args)
 
     with timing_context("Initializing executor"):
         if cfg.executor_type == "default":
@@ -38,6 +37,11 @@ def main():
 
     with timing_context("Running executor"):
         executor.run()
+
+
+@logger.catch(reraise=True)
+def main():
+    run()
 
 
 if __name__ == "__main__":

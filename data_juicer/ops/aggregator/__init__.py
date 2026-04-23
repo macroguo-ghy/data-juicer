@@ -1,6 +1,16 @@
-from .entity_attribute_aggregator import EntityAttributeAggregator
-from .meta_tags_aggregator import MetaTagsAggregator
-from .most_relevant_entities_aggregator import MostRelevantEntitiesAggregator
-from .nested_aggregator import NestedAggregator
+from data_juicer.ops._lazy_imports import load_class, make_class_index
 
-__all__ = ["NestedAggregator", "MetaTagsAggregator", "EntityAttributeAggregator", "MostRelevantEntitiesAggregator"]
+_class_index = make_class_index(__file__)
+
+
+def __getattr__(name: str):
+    value = load_class(__name__, _class_index, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_class_index()))
+
+
+__all__ = sorted(_class_index())
