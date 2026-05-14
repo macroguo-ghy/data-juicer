@@ -1,8 +1,11 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
+from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper import (
     CONFIG_PAGE_KEY,
     AdAiDataCenterHttpMapper,
@@ -53,6 +56,38 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
         result = op.run(dataset).to_list()
 
         self.assertIsInstance(result[0]["dimension_and_metric"], dict)
+
+    def test_config_process_accepts_endpoint_and_input_fields(self):
+        config_path = Path("/private/tmp/ad_ai_data_center_http_mapper_config_test.yaml")
+        config_path.write_text(
+            """
+project_name: test_http_mapper
+dataset_path: /private/tmp/not-used.jsonl
+export_path: /private/tmp/out.jsonl
+process:
+  - ad_test_processing_timestamp_mapper: {}
+  - ad_ai_data_center_http_mapper:
+      endpoint: "https://bpboost.bytedance.net/api/query-site/openapi/dimension-and-metric?datasourceGroupId=11308"
+      output_field: "http_output"
+      error_field: "http_err"
+      method: "GET"
+      headers:
+        Project-Identifier: "ai_data_center"
+      input_fields:
+        - "1"
+""",
+            encoding="utf-8",
+        )
+
+        cfg = init_configs(
+            args=["--config", str(config_path)],
+            load_configs_only=True,
+        )
+        ops = load_ops(cfg.process)
+
+        self.assertIsInstance(ops[1], AdAiDataCenterHttpMapper)
+        self.assertEqual(ops[1].output_field, "http_output")
+        self.assertEqual(ops[1].error_field, "http_err")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_writes_http_response_to_output_field(self, mock_client_cls):

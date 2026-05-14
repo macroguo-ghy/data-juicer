@@ -11,8 +11,8 @@ class AdAiDataCenterHttpMapper(Mapper):
 
     def __init__(
         self,
-        endpoint: str,
-        input_fields: list[str],
+        endpoint: str | None = None,
+        input_fields: list[str] | None = None,
         output_field: str = "http_result",
         error_field: str = "http_error",
         method: str = "POST",
@@ -35,6 +35,8 @@ class AdAiDataCenterHttpMapper(Mapper):
         :param kwargs: extra args.
         """
         super().__init__(*args, **kwargs)
+        if not endpoint:
+            raise ValueError("endpoint must be provided")
         if not input_fields:
             raise ValueError("input_fields must be provided")
         if not output_field:
