@@ -2,7 +2,7 @@ import unittest
 
 from loguru import logger
 
-from data_juicer.ops.mapper.calibrate_query_mapper import CalibrateQueryMapper
+from data_juicer.ops.mapper.qa.calibrate_query_mapper import CalibrateQueryMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 class CalibrateQueryMapperTest(DataJuicerTestCaseBase):

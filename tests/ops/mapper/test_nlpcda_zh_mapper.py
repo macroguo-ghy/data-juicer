@@ -3,7 +3,7 @@
 import unittest
 
 from data_juicer.core import NestedDataset as Dataset
-from data_juicer.ops.mapper.nlpcda_zh_mapper import NlpcdaZhMapper
+from data_juicer.ops.mapper.text.nlpcda_zh_mapper import NlpcdaZhMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 @unittest.skip('unknown UnicodeEncodeError')

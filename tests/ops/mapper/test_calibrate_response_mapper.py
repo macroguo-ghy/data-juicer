@@ -2,7 +2,7 @@ import unittest
 
 from loguru import logger
 
-from data_juicer.ops.mapper.calibrate_response_mapper import \
+from data_juicer.ops.mapper.qa.calibrate_response_mapper import \
     CalibrateResponseMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

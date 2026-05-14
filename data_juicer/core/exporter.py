@@ -334,6 +334,23 @@ class Exporter:
         else:
             dataset.to_parquet(export_path)
 
+    @staticmethod
+    def to_csv(dataset, export_path, num_proc=1, **kwargs):
+        """
+        Export method for csv target files.
+
+        :param dataset: the dataset to export.
+        :param export_path: the path to store the exported dataset.
+        :param num_proc: the number of processes used to export the dataset.
+        :param kwargs: extra arguments.
+        :return:
+        """
+        storage_options = kwargs.get("storage_options")
+        if storage_options is not None:
+            dataset.to_csv(export_path, num_proc=num_proc, storage_options=storage_options)
+        else:
+            dataset.to_csv(export_path, num_proc=num_proc)
+
     # suffix to export method
     @staticmethod
     def _router():
@@ -346,4 +363,5 @@ class Exporter:
             "jsonl": Exporter.to_jsonl,
             "json": Exporter.to_json,
             "parquet": Exporter.to_parquet,
+            "csv": Exporter.to_csv,
         }

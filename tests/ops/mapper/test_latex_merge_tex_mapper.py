@@ -7,7 +7,7 @@ import unittest
 import zipfile
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.latex_merge_tex_mapper import LatexMergeTexMapper
+from data_juicer.ops.mapper.text.latex_merge_tex_mapper import LatexMergeTexMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 TEX_A = r"""\documentclass{article}

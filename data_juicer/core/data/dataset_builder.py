@@ -55,9 +55,9 @@ def _align_nested_datasets(datasets_to_merge):
     return aligned
 
 
-def _add_null_column_to_ray(dataset, column_name: str):
+def _add_null_column_to_ray(dataset, column_name: str, column_type):
     def build_null_column(batch: pyarrow.Table):
-        return pyarrow.array([None] * len(batch))
+        return pyarrow.array([None] * len(batch), type=column_type)
 
     return dataset.add_column(column_name, build_null_column, batch_format="pyarrow")
 
@@ -67,6 +67,7 @@ def _align_ray_datasets(datasets_to_merge):
         return datasets_to_merge
 
     union_columns = []
+    column_types = {}
     type_signatures = {}
     for dataset in datasets_to_merge:
         schema = dataset.schema()
@@ -80,13 +81,14 @@ def _align_ray_datasets(datasets_to_merge):
                     f"{type_signatures[column_name]} vs {signature}"
                 )
             type_signatures.setdefault(column_name, signature)
+            column_types.setdefault(column_name, column_type)
 
     aligned = []
     for dataset in datasets_to_merge:
         current_columns = set(dataset.columns())
         for column_name in union_columns:
             if column_name not in current_columns:
-                dataset = _add_null_column_to_ray(dataset, column_name)
+                dataset = _add_null_column_to_ray(dataset, column_name, column_types[column_name])
         dataset = dataset.select_columns(union_columns)
         aligned.append(dataset)
     return aligned

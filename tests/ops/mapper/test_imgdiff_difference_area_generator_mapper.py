@@ -6,7 +6,7 @@ from data_juicer.ops.base_op import OP
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.op_fusion import fuse_operators
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
-from data_juicer.ops.mapper.imgdiff_difference_area_generator_mapper import Difference_Area_Generator_Mapper
+from data_juicer.ops.mapper.image.imgdiff_difference_area_generator_mapper import Difference_Area_Generator_Mapper
 
 
 class Difference_Area_Generator_FusedOPTest(DataJuicerTestCaseBase):

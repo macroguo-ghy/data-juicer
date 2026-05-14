@@ -33,7 +33,7 @@ export_in_parallel: false                                   # whether to export 
 keep_stats_in_res_ds: false                                 # whether to keep the computed stats in the result dataset. The intermediate fields to store the stats computed by Filters will be removed if it's False. It's False in default.
 keep_hashes_in_res_ds: false                                # whether to keep the computed hashes in the result dataset. The intermediate fields to store the hashes computed by Deduplicators will be removed if it's False. It's False in default.
 export_extra_args: {}                                       # Other optional arguments for exporting in dict. For example, the key mapping info for exporting the WebDataset format.
-export: null                                                # structured single-target export config. When present, it takes precedence over legacy export_* fields.
+export: null                                                # structured single-target export config. When present, it takes precedence over legacy export_* fields. For Magnus OVERWRITE with partition_values, validate_overwrite_partition_before_write controls whether to eagerly materialize/count for pre-write validation; default false keeps Ray Data lazy until write. Magnus infer_schema_on_create defaults false and can infer a schema when create_table_if_not_exists is true and export.schema is omitted. Magnus failure policy supports abort (default) and commit_completed_unsafe (requires Ray Data checkpointing).
 load_dataset_kwargs: {}                                     # extra kwargs passed to datasets.load_dataset(). Useful for format-specific options, e.g. chunksize (JSON), columns (Parquet), delimiter (CSV).
 
 auto_op_parallelism: true                                   # whether to automatically set num_proc according to system resources. It is true in default.
@@ -47,6 +47,11 @@ use_cache: true                                             # whether to use the
 ds_cache_dir: null                                          # cache dir for Hugging Face datasets. In default, it\'s the same as the environment variable `HF_DATASETS_CACHE`, whose default value is usually "~/.cache/huggingface/datasets". If this argument is set to a valid path by users, it will override the default cache dir
 open_monitor: true                                          # Whether to open the monitor to trace resource utilization for each OP during data processing. It\'s True in default.
 use_checkpoint: false                                       # whether to use the checkpoint management to save the latest version of dataset to work dir when processing. Rerun the same config will reload the checkpoint and skip ops before it. Cache will be disabled when using checkpoint. If args of ops before the checkpoint are changed, all ops will be rerun from the beginning.
+ray_data_checkpoint:                                        # Ray Data source-to-sink checkpoint configuration. Temporarily unavailable and forced off at runtime.
+  enabled: false                                            # Ray Data checkpointing is temporarily unavailable; setting this to true is ignored.
+  dir: null                                                 # checkpoint directory for this dataset. Supports {work_dir} and {job_id}; use an isolated path per task/run.
+  delete_no_checkpoint_files: false                         # whether to delete sink files that are not recorded in checkpoint metadata after a successful Ray Data write.
+  write_interval: null                                      # optional Ray Data checkpoint metadata write interval. Null uses Ray's default.
 temp_dir: null                                              # the path to the temp directory to store intermediate caches when cache is disabled, these cache files will be removed on-the-fly. In default, it's None, so the temp dir will be specified by system. NOTICE: you should be caution when setting this argument because it might cause unexpected program behaviors when this path is set to an unsafe directory.
 open_tracer: false                                          # whether to open the tracer to trace the changes during process. It might take more time when opening tracer
 op_list_to_trace: []                                        # only ops in this list will be traced by tracer. If it's empty, all ops will be traced. Only available when tracer is opened.
@@ -71,6 +76,8 @@ eoc_special_token: '<|__dj__eoc|>'                          # the special token 
 # for distributed processing
 executor_type: default                                      # type of executor, support "default" or "ray" for now.
 ray_address: auto                                           # the address of the Ray cluster.
+ray_collect_real_metrics: false                             # whether RayExecutor eagerly materializes and counts the processed Ray Dataset before export to collect real metrics. Disabled by default to preserve lazy streaming execution.
+ray_dry_run_plan: false                                     # whether RayExecutor only builds and prints the Ray Data logical/physical plan, then skips materialization and export.
 
 # partition configuration (for ray_partitioned executor)
 partition:
@@ -311,6 +318,7 @@ process:
       resume_download: false                                  # Whether to resume download. if True, skip the sample if it exists.
       timeout: 30                                             # The timeout in seconds for each HTTP request.
       max_concurrent: 10                                      # Maximum concurrent downloads.
+      filter_non_url: false                                   # Whether to drop values that are not remote URLs before download.
   - fix_unicode_mapper:                                     # fix unicode errors in text.
   - generate_qa_from_examples_mapper:                       # mapper to generate question and answer pairs from examples.
       hf_model: 'Qwen/Qwen2.5-7B-Instruct'                    # Model name on huggingface to generate question and answer pairs.
@@ -452,6 +460,8 @@ process:
       model_params: {}                                        # Parameters for initializing the API model.
       sampling_params: {}                                     # Extra parameters passed to the API call.
   - punctuation_normalization_mapper:                       # normalize unicode punctuations to English punctuations.
+  - ad_test_processing_timestamp_mapper:                    # Add the current processing timestamp to each sample.
+      field_name: 'processing_timestamp'                       # Field name used to store the Unix timestamp.
   - python_file_mapper:                                     # executing Python lambda function defined in a file.
       file_path: ''                                           # The path to the Python file containing the function to be executed.
       function_name: 'process_single'                         # The name of the function defined in the file to be executed.

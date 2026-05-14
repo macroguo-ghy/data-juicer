@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.remove_table_text_mapper import \
+from data_juicer.ops.mapper.text.remove_table_text_mapper import \
     RemoveTableTextMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

@@ -2,10 +2,15 @@ import os
 import os.path as osp
 import shutil
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
 import uuid
 import yaml
+import builtins
+from unittest.mock import patch
+
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, TEST_TAG
 
 
@@ -110,6 +115,96 @@ class ProcessDataTest(DataJuicerTestCaseBase):
 
         self.assertEqual(status_code, 1)
         self.assertFalse(osp.exists(tmp_out_path))
+
+
+class ProcessDataBase64Test(unittest.TestCase):
+    def test_decode_base64_config_accepts_whitespace_and_missing_padding(self):
+        from tools.process_data_base64 import decode_base64_config
+
+        self.assertEqual(decode_base64_config("cHJvamVjdF9uYW1lOiB0ZXN0Cg"), "project_name: test\n")
+        self.assertEqual(decode_base64_config("cHJvam VjdF9uYW1lOiB0ZXN0Cg==\n"), "project_name: test\n")
+
+    def test_get_process_data_run_loads_default_entrypoint(self):
+        from tools.process_data import run
+        from tools.process_data_base64 import get_process_data_run
+
+        self.assertIs(get_process_data_run(), run)
+
+    def test_get_process_data_run_falls_back_to_package_entrypoint(self):
+        from tools.process_data_base64 import get_process_data_run
+
+        fake_module = types.ModuleType("data_juicer.tools.process_data")
+        fake_module.run = object()
+        original_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tools.process_data":
+                raise ImportError("missing local tools entrypoint")
+            return original_import(name, globals, locals, fromlist, level)
+
+        with patch.dict(sys.modules, {"data_juicer.tools.process_data": fake_module}):
+            with patch("builtins.__import__", side_effect=fake_import):
+                self.assertIs(get_process_data_run(), fake_module.run)
+
+    def test_main_writes_decoded_config_and_forwards_data_juicer_args(self):
+        import base64
+
+        from tools import process_data_base64
+
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            config_path = args[1]
+            with open(config_path, encoding="utf-8") as fin:
+                self.assertEqual(fin.read(), "project_name: test\n")
+            self.assertEqual(args[2:], ["--ray_address", "local"])
+
+        encoded_config = base64.b64encode(b"project_name: test\n").decode()
+        with patch.object(process_data_base64, "get_process_data_run", return_value=fake_run):
+            with patch("sys.argv", ["process_data_base64.py", "--config_base64", encoded_config, "--ray_address", "local"]):
+                process_data_base64.main()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "--config")
+
+    def test_main_reads_config_from_environment(self):
+        import base64
+
+        from tools import process_data_base64
+
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            with open(args[1], encoding="utf-8") as fin:
+                self.assertEqual(fin.read(), "project_name: env-test\n")
+
+        encoded_config = base64.b64encode(b"project_name: env-test\n").decode()
+        with patch.dict(os.environ, {"DJ_CONFIG_BASE64": encoded_config}):
+            with patch.object(process_data_base64, "get_process_data_run", return_value=fake_run):
+                with patch("sys.argv", ["process_data_base64.py"]):
+                    process_data_base64.main()
+
+        self.assertEqual(len(calls), 1)
+
+    def test_main_requires_config_base64_or_environment(self):
+        from tools import process_data_base64
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("sys.argv", ["process_data_base64.py"]):
+                with self.assertRaises(SystemExit):
+                    process_data_base64.main()
+
+    def test_main_rejects_config_argument_when_config_base64_is_used(self):
+        import base64
+
+        from tools import process_data_base64
+
+        encoded_config = base64.b64encode(b"project_name: test\n").decode()
+        with patch("sys.argv", ["process_data_base64.py", "--config_base64", encoded_config, "--config", "x.yaml"]):
+            with self.assertRaises(SystemExit):
+                process_data_base64.main()
 
 
 class ProcessDataRayTest(DataJuicerTestCaseBase):

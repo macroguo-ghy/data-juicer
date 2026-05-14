@@ -5,7 +5,7 @@ import shutil
 
 from data_juicer.core.data import NestedDataset as Dataset
 
-from data_juicer.ops.mapper.video_split_by_scene_mapper import \
+from data_juicer.ops.mapper.video.video_split_by_scene_mapper import \
     VideoSplitBySceneMapper
 from data_juicer.utils.mm_utils import SpecialTokens, load_file_byte
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

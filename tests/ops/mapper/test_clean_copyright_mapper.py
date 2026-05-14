@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.clean_copyright_mapper import CleanCopyrightMapper
+from data_juicer.ops.mapper.text.clean_copyright_mapper import CleanCopyrightMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

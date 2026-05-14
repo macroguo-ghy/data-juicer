@@ -3,7 +3,7 @@ import unittest
 from loguru import logger
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.generate_qa_from_text_mapper import \
+from data_juicer.ops.mapper.qa.generate_qa_from_text_mapper import \
     GenerateQAFromTextMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

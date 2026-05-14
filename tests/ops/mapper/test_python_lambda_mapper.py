@@ -1,6 +1,6 @@
 import unittest
 
-from data_juicer.ops.mapper.python_lambda_mapper import PythonLambdaMapper
+from data_juicer.ops.mapper.code.python_lambda_mapper import PythonLambdaMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 class PythonLambdaMapperMapper(DataJuicerTestCaseBase):

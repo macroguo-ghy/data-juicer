@@ -39,10 +39,7 @@ class SpecifiedFieldFilter(Filter):
 
     def compute_stats_single(self, sample):
         # get the value from the original field
-        field_value = sample
-        for key in self.field_key.split("."):
-            assert key in field_value.keys(), "'{}' not in {}".format(key, field_value.keys())
-            field_value = field_value[key]
+        field_value = self._field_value_from_sample(sample)
         # copy it into the stats field
         if self.field_key not in sample[Fields.stats]:
             sample[Fields.stats][self.field_key] = field_value
@@ -52,7 +49,11 @@ class SpecifiedFieldFilter(Filter):
         if not (self.field_key and self.target_value):
             return True
 
-        field_value = sample[Fields.stats][self.field_key]
+        stats = sample.get(Fields.stats, {})
+        if self.field_key in stats:
+            field_value = stats[self.field_key]
+        else:
+            field_value = self._field_value_from_sample(sample)
 
         if not (isinstance(field_value, list) or isinstance(field_value, tuple)):
             field_value = [field_value]
@@ -63,3 +64,10 @@ class SpecifiedFieldFilter(Filter):
         if self.reversed_range:
             res_bool = not res_bool
         return res_bool
+
+    def _field_value_from_sample(self, sample):
+        field_value = sample
+        for key in self.field_key.split("."):
+            assert key in field_value.keys(), "'{}' not in {}".format(key, field_value.keys())
+            field_value = field_value[key]
+        return field_value

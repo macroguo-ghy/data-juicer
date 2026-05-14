@@ -3,7 +3,7 @@ from PIL import Image
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.sdxl_prompt2prompt_mapper import SDXLPrompt2PromptMapper
+from data_juicer.ops.mapper.text.sdxl_prompt2prompt_mapper import SDXLPrompt2PromptMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 from data_juicer.utils.cache_utils import DATA_JUICER_ASSETS_CACHE
 

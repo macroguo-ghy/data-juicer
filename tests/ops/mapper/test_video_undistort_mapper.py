@@ -2,7 +2,7 @@ import os
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_undistort_mapper import VideoUndistortMapper
+from data_juicer.ops.mapper.video.video_undistort_mapper import VideoUndistortMapper
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 from data_juicer.utils.cache_utils import DATA_JUICER_ASSETS_CACHE

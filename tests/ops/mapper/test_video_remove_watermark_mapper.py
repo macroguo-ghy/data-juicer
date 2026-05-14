@@ -4,7 +4,7 @@ import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
 
-from data_juicer.ops.mapper.video_remove_watermark_mapper import \
+from data_juicer.ops.mapper.video.video_remove_watermark_mapper import \
     VideoRemoveWatermarkMapper
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

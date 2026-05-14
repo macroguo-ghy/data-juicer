@@ -4,7 +4,7 @@ import unittest
 
 from datasets import load_dataset
 from data_juicer.core.data import NestedDataset
-from data_juicer.ops.mapper.optimize_prompt_mapper import OptimizePromptMapper
+from data_juicer.ops.mapper.qa.optimize_prompt_mapper import OptimizePromptMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, FROM_FORK
 
 @unittest.skipIf(FROM_FORK, "Skipping API-based test because running from a fork repo")

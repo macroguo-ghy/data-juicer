@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_depth_estimation_mapper import \
+from data_juicer.ops.mapper.video.video_depth_estimation_mapper import \
     VideoDepthEstimationMapper
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.latex_figure_context_extractor_mapper import (
+from data_juicer.ops.mapper.text.latex_figure_context_extractor_mapper import (
     LatexFigureContextExtractorMapper,
 )
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

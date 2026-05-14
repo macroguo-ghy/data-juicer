@@ -4,7 +4,7 @@ import unittest
 from data_juicer.utils.constant import Fields
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.audio_add_gaussian_noise_mapper import AudioAddGaussianNoiseMapper
+from data_juicer.ops.mapper.audio.audio_add_gaussian_noise_mapper import AudioAddGaussianNoiseMapper
 
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

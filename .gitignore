@@ -16,6 +16,11 @@ wandb/
 __pycache__
 .vscode/
 .ipynb_checkpoints/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+cov_annotate/
 
 # label studio related
 label_studio_data/

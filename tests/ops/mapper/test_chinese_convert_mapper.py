@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.chinese_convert_mapper import ChineseConvertMapper
+from data_juicer.ops.mapper.text.chinese_convert_mapper import ChineseConvertMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

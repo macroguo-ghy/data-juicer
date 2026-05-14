@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.sentence_split_mapper import SentenceSplitMapper
+from data_juicer.ops.mapper.text.sentence_split_mapper import SentenceSplitMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

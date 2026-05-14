@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.replace_content_mapper import ReplaceContentMapper
+from data_juicer.ops.mapper.qa.replace_content_mapper import ReplaceContentMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

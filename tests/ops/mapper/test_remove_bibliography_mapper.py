@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.remove_bibliography_mapper import \
+from data_juicer.ops.mapper.text.remove_bibliography_mapper import \
     RemoveBibliographyMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

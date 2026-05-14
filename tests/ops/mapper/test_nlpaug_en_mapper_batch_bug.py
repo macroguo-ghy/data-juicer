@@ -4,7 +4,7 @@
 
 import unittest
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
-from data_juicer.ops.mapper.nlpaug_en_mapper import NlpaugEnMapper
+from data_juicer.ops.mapper.text.nlpaug_en_mapper import NlpaugEnMapper
 
 
 class NlpaugEnMapperBatchBugTest(DataJuicerTestCaseBase):

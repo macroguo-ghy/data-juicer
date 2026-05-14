@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_camera_calibration_static_moge_mapper import VideoCameraCalibrationStaticMogeMapper
+from data_juicer.ops.mapper.video.video_camera_calibration_static_moge_mapper import VideoCameraCalibrationStaticMogeMapper
 from data_juicer.utils.mm_utils import SpecialTokens
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

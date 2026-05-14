@@ -4,7 +4,7 @@ import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
 
-from data_juicer.ops.mapper.image_face_blur_mapper import ImageFaceBlurMapper
+from data_juicer.ops.mapper.image.image_face_blur_mapper import ImageFaceBlurMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

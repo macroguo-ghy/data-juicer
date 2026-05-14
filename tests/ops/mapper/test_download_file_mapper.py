@@ -7,11 +7,12 @@ import threading
 import numpy as np
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from unittest.mock import patch
 
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.utils.mm_utils import load_image, load_image_byte
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
-from data_juicer.ops.mapper.download_file_mapper import DownloadFileMapper
+from data_juicer.ops.mapper.io.download_file_mapper import DownloadFileMapper
 
 
 class DownloadFileMapperTest(DataJuicerTestCaseBase):
@@ -226,6 +227,93 @@ class DownloadFileMapperTest(DataJuicerTestCaseBase):
                     res[save_field][j],
                     load_image_byte(os.path.join(self.data_path, fname))
                 )
+
+    def test_filter_non_url_keeps_only_remote_downloads(self):
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            filter_non_url=True,
+        )
+
+        samples = {
+            "images": [
+                [self.img1_url, self.img2_path, "", None, "not-a-url"],
+                ["ftp://example.com/img.png", self.img3_url],
+            ],
+        }
+
+        output = op.process_batched(samples)
+
+        self.assertEqual(output["images"], [[self.img1_url], [self.img3_url]])
+        self.assertEqual(
+            output["image_bytes"],
+            [[load_image_byte(self.img1_path)], [load_image_byte(self.img3_path)]],
+        )
+
+    def test_retry_remote_download_after_first_failure(self):
+        attempts = {"count": 0}
+
+        async def flaky_download(*args, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("temporary failure")
+            return object(), b"ok"
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            retry_times=2,
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=flaky_download):
+            results = op.download_files_async(["http://example.com/a.png"], [True])
+
+        self.assertEqual(attempts["count"], 2)
+        self.assertEqual(results[0][2], "success")
+        self.assertEqual(results[0][4], b"ok")
+
+    def test_default_retry_times_preserves_failed_download_shape(self):
+        attempts = {"count": 0}
+
+        async def failing_download(*args, **kwargs):
+            attempts["count"] += 1
+            raise RuntimeError("download failed")
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=failing_download):
+            results = op.download_files_async(["http://example.com/a.png"], [True])
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(results[0][2], "failed")
+        self.assertEqual(results[0][4], None)
+
+    def test_failed_download_logs_are_aggregated_per_worker(self):
+        async def failing_download(*args, **kwargs):
+            raise RuntimeError("403, message='Forbidden', url='http://example.com/image.png'")
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            max_concurrent=1,
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=failing_download), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.logger.error"
+        ) as log_error:
+            op.process_batched({"images": [f"http://example.com/{idx}.png" for idx in range(99)]})
+            log_error.assert_not_called()
+
+            op.process_batched({"images": ["http://example.com/99.png"]})
+
+        log_error.assert_called_once()
+        message = log_error.call_args.args[0]
+        self.assertIn("download_file_mapper failures reached 100 in this worker", message)
+        self.assertIn("100 x 403, message='Forbidden'", message)
+        self.assertNotIn("url=", message)
 
     def test_image_with_savefield_and_savedir(self):
         ds_list = [{

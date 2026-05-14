@@ -5,7 +5,7 @@ import numpy as np
 from PIL import ImageFilter
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_blur_mapper import ImageBlurMapper
+from data_juicer.ops.mapper.image.image_blur_mapper import ImageBlurMapper
 from data_juicer.utils.mm_utils import load_image
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

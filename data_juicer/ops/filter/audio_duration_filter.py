@@ -1,15 +1,16 @@
 import sys
 
-import librosa
 import numpy as np
 
 from data_juicer.utils.constant import Fields, StatsKeys
+from data_juicer.utils.lazy_loader import LazyLoader
 from data_juicer.utils.mm_utils import load_audio, load_data_with_context
 
 from ..base_op import OPERATORS, Filter
 from ..op_fusion import LOADED_AUDIOS
 
 OP_NAME = "audio_duration_filter"
+librosa = LazyLoader("librosa")
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -24,6 +25,8 @@ class AudioDurationFilter(Filter):
     computed using the `librosa` library. If the audio duration has already been computed,
     it is retrieved from the sample's stats under the key 'audio_duration'. If no audio is
     present in the sample, an empty array is stored in the stats."""
+
+    _requirements = ["librosa>=0.10"]
 
     def __init__(
         self, min_duration: int = 0, max_duration: int = sys.maxsize, any_or_all: str = "any", *args, **kwargs

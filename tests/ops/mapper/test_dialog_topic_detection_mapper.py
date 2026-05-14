@@ -3,7 +3,7 @@ import unittest
 from loguru import logger
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.dialog_topic_detection_mapper import DialogTopicDetectionMapper
+from data_juicer.ops.mapper.text.dialog_topic_detection_mapper import DialogTopicDetectionMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, FROM_FORK
 from data_juicer.utils.constant import Fields, MetaKeys
 

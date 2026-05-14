@@ -148,6 +148,36 @@ class SpecifiedFieldFilterTest(DataJuicerTestCaseBase):
                                   target_value=['pdf', 'txt', 'json'])
         self._run_specified_field_filter(dataset, tgt_list, op)
 
+    def test_process_single_falls_back_to_original_field_when_stats_missing(self):
+        op = SpecifiedFieldFilter(field_key='qwen_postprocess_error',
+                                  target_value=[''])
+
+        self.assertTrue(op.process_single({
+            Fields.stats: {},
+            'qwen_postprocess_error': '',
+        }))
+        self.assertFalse(op.process_single({
+            Fields.stats: {},
+            'qwen_postprocess_error': 'invalid_json',
+        }))
+
+    def test_process_single_falls_back_to_nested_original_field_when_stats_missing(self):
+        op = SpecifiedFieldFilter(field_key='meta.suffix',
+                                  target_value=['.pdf'])
+
+        self.assertTrue(op.process_single({
+            Fields.stats: {},
+            'meta': {
+                'suffix': '.pdf',
+            },
+        }))
+        self.assertFalse(op.process_single({
+            Fields.stats: {},
+            'meta': {
+                'suffix': '.docx',
+            },
+        }))
+
 
 if __name__ == '__main__':
     unittest.main()

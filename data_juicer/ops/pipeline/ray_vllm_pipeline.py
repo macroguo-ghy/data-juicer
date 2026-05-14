@@ -30,9 +30,9 @@ class RayVLLMEnginePipeline(Pipeline):
 
         assert is_ray_mode(), "Ray vLLM engine only works in Ray mode."
 
-        from ray.llm._internal.serve.core.configs.llm_config import GPUType
-
         if self.accelerator_type:
+            from ray.llm._internal.serve.core.configs.llm_config import GPUType
+
             all_accelerator_types = [t.value for t in GPUType]
             assert self.accelerator_type in all_accelerator_types, (
                 f"Unsupported accelerator type: {self.accelerator_type}. "

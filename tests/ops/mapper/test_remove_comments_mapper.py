@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.remove_comments_mapper import RemoveCommentsMapper
+from data_juicer.ops.mapper.text.remove_comments_mapper import RemoveCommentsMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

@@ -21,9 +21,16 @@ dependencies = [
     "fsspec==2023.5.0", # file system operations
     "pandas", # data manipulation
     "numpy>=1.26.4,<2.0.0", # numerical operations
+    "pyarrow", # Arrow tables and Ray/Data-Juicer batch conversion
     "loguru", # logging
     "tqdm", # progress bars
     "jsonargparse[signatures]", # configuration
+    "packaging", # requirement parsing for operator runtime environments
+    "bytedeuler", # internal Euler RPC client
+    "bytedance.metrics>=0.5.2,<1.0.0", # internal Metrics 1.0 SDK for RPC/VLM QPS monitoring
+    "thriftpy2", # Thrift IDL loading for Euler RPC clients
+    "typing-extensions", # typing helpers used by Python 3.10 operator configs
+    "attrs", # metadata helpers used by video utilities
     "jsonlines", # JSONL handling
     "zstandard", # compression
     "lz4", # compression
@@ -41,6 +48,7 @@ dependencies = [
     "plotly", # interactive plots
     "seaborn",
     "requests",
+    "aiohttp",  # async HTTP client used by built-in download operators
     "wget",
     "pdfplumber",
     "python-docx",
@@ -52,6 +60,7 @@ dependencies = [
     "tomli-w",
     "gitpython",
     "rank-bm25>=0.2.2",
+    "regex",  # advanced Unicode-aware regular expressions used by built-in deduplicators
 ]
 
 [project.optional-dependencies]
@@ -61,7 +70,7 @@ generic = [
     "transformers==4.57.1",  # Hugging Face Transformers
     "einops",  # Tensor operations
     "accelerate",  # Model acceleration
-    "vllm==0.11.0",  # LLM serving
+    "vllm==0.8.5",  # LLM serving
     "uvloop==0.21.0",  # avoid async error before it's fixed in uvloop
     "onnxruntime",  # ONNX runtime
     "cudf-cu12==25.4.0", # dataframe on GPU
@@ -85,7 +94,6 @@ vision = [
 # Natural Language Processing
 nlp = [
     "spacy==3.8.7",
-    "regex",  # advanced Unicode-aware regular expressions
     "nltk==3.9.1",  # NLP toolkit
     "easyocr==1.7.1",  # OCR
     "fasttext-wheel",  # FastText
@@ -129,6 +137,7 @@ cloud = [
 ]
 
 internal_io = [
+    "bytedtqs",  # TQS client for Hive/TQS small-sample client-result loading
     "duckdb",  # DuckDB-based staging queries
     "lark-oapi",  # Lark sheet import/export
     "byted-iceberg[pyarrow]==0.2.360; sys_platform == 'linux'",  # Magnus/Iceberg read/write support
@@ -142,7 +151,7 @@ dedup = [
 
 # Distributed Computing
 distributed = [
-    "bytedray[default,data,serve,bytedance]",  # internal distributed computing runtime
+    "bytedray[default,data,serve,bytedance,hive]>=2.46",  # internal Ray runtime with Hive support
     "uvloop==0.21.0",  # avoid async error before it's fixed in uvloop
 ]
 

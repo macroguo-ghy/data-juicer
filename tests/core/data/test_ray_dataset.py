@@ -2,6 +2,30 @@ import unittest
 import os
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
 
+
+class RayDatasetImportTest(unittest.TestCase):
+    def test_json_stream_datasource_imports_with_current_ray(self):
+        from data_juicer.core.data.ray_dataset import JSONStreamDatasource
+
+        self.assertIsNotNone(JSONStreamDatasource)
+
+    def test_configured_ray_columns_accepts_hive_cast_mapping(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import get_configured_ray_columns
+
+        cfg = SimpleNamespace(
+            dataset={
+                "configs": [
+                    {"columns": {"id": "BIGINT", "text": "STRING"}},
+                    {"columns": ["image"]},
+                ]
+            }
+        )
+
+        self.assertEqual(get_configured_ray_columns(cfg), ["id", "text", "image"])
+
+
 class RayDatasetFuncsTest(DataJuicerTestCaseBase):
 
     def setUp(self):
@@ -109,6 +133,163 @@ class RayDatasetFuncsTest(DataJuicerTestCaseBase):
         # Check that videos were converted to absolute paths
         self.assertTrue(result_dict['videos'][0][0].startswith('/'))
         self.assertTrue(result_dict['videos'][1][0].startswith('/'))
+
+    @TEST_TAG('ray')
+    def test_convert_to_absolute_paths_preserves_image_bytes(self):
+        """Test path conversion keeps bytes/list bytes media fields unchanged."""
+        import pyarrow as pa
+
+        table = pa.Table.from_pydict({
+            'images': [[b'image-a', b'image-b'], [b'image-c']],
+            'videos': [['video.mp4'], [None]],
+        })
+        video_path = os.path.join(self.tmp_dir, 'video.mp4')
+        os.makedirs(os.path.dirname(video_path), exist_ok=True)
+        self._touch_a_file(video_path)
+
+        result_table = self.convert_to_absolute_paths(
+            table,
+            self.tmp_dir,
+            ['images', 'videos'],
+        )
+
+        result_dict = result_table.to_pydict()
+        self.assertEqual(result_dict['images'], [[b'image-a', b'image-b'], [b'image-c']])
+        self.assertTrue(result_dict['videos'][0][0].startswith('/'))
+        self.assertEqual(result_dict['videos'][1], [None])
+
+    @TEST_TAG('ray')
+    def test_set_dataset_to_absolute_path_skips_binary_media_columns(self):
+        """Binary media columns are already materialized data, not paths."""
+        import pyarrow as pa
+
+        class FakeDataset:
+            def __init__(self, schema):
+                self._schema = schema
+                self.map_batches_called = False
+
+            def columns(self):
+                return self._schema.names
+
+            def schema(self, *args, **kwargs):
+                return self._schema
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_called = True
+                return self
+
+        dataset = FakeDataset(pa.schema([pa.field('images', pa.list_(pa.binary()))]))
+
+        result = self.set_dataset_to_absolute_path(dataset, '/tmp/data.parquet', {'image_key': 'images'})
+
+        self.assertIs(result, dataset)
+        self.assertFalse(dataset.map_batches_called)
+
+    @TEST_TAG('ray')
+    def test_set_dataset_to_absolute_path_keeps_string_media_columns(self):
+        """String media columns still get relative path normalization."""
+        import pyarrow as pa
+
+        class FakeDataset:
+            def __init__(self, schema):
+                self._schema = schema
+                self.map_batches_kwargs = None
+
+            def columns(self):
+                return self._schema.names
+
+            def schema(self, *args, **kwargs):
+                return self._schema
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_kwargs = kwargs
+                return self
+
+        dataset = FakeDataset(pa.schema([pa.field('images', pa.list_(pa.string()))]))
+
+        result = self.set_dataset_to_absolute_path(dataset, '/tmp/data.parquet', {'image_key': 'images'})
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.map_batches_kwargs['batch_format'], 'pyarrow')
+        self.assertEqual(dataset.map_batches_kwargs['batch_size'], 1000)
+
+    @TEST_TAG('ray')
+    def test_set_dataset_to_absolute_path_uses_export_schema_when_ray_schema_unknown(self):
+        """Configured binary media schema should skip path conversion even if Ray schema is unavailable."""
+        class FakeDataset:
+            def __init__(self):
+                self.map_batches_called = False
+
+            def columns(self):
+                return ['images']
+
+            def schema(self, *args, **kwargs):
+                return None
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_called = True
+                return self
+
+        cfg = {
+            'image_key': 'images',
+            'export': {'schema': {'fields': [{'name': 'images', 'type': 'list<binary>'}]}},
+        }
+        dataset = FakeDataset()
+
+        result = self.set_dataset_to_absolute_path(dataset, '/tmp/data.parquet', cfg)
+
+        self.assertIs(result, dataset)
+        self.assertFalse(dataset.map_batches_called)
+
+    @TEST_TAG('ray')
+    def test_set_dataset_to_absolute_path_uses_configured_binary_media_without_fetch(self):
+        """Configured binary media schema should avoid eager Ray column/schema fetches."""
+        class StrictLazyRayDataset:
+            def columns(self, *args, **kwargs):
+                raise AssertionError("configured columns should avoid eager column fetch")
+
+            def schema(self, *args, **kwargs):
+                raise AssertionError("configured media schema should avoid eager schema fetch")
+
+            def map_batches(self, *args, **kwargs):
+                raise AssertionError("binary media column should not be path-normalized")
+
+        cfg = {
+            'image_key': 'images',
+            'dataset': {'configs': [{'columns': ['images']}]},
+            'export': {'schema': {'fields': [{'name': 'images', 'type': 'list<binary>'}]}},
+        }
+        dataset = StrictLazyRayDataset()
+
+        self.assertIs(self.set_dataset_to_absolute_path(dataset, '/tmp/data.parquet', cfg), dataset)
+
+    @TEST_TAG('ray')
+    def test_set_dataset_to_absolute_path_keeps_configured_string_media_when_ray_schema_unknown(self):
+        """Configured string media schema should still trigger path conversion."""
+        class FakeDataset:
+            def __init__(self):
+                self.map_batches_kwargs = None
+
+            def columns(self):
+                return ['images']
+
+            def schema(self, *args, **kwargs):
+                return None
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_kwargs = kwargs
+                return self
+
+        cfg = {
+            'image_key': 'images',
+            'export': {'schema': {'fields': [{'name': 'images', 'type': 'list<string>'}]}},
+        }
+        dataset = FakeDataset()
+
+        result = self.set_dataset_to_absolute_path(dataset, '/tmp/data.parquet', cfg)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.map_batches_kwargs['batch_format'], 'pyarrow')
     
     @TEST_TAG('ray')
     def test_get_abs_path_with_nonexistent_local_path(self):
@@ -314,6 +495,438 @@ class TestRayDataset(DataJuicerTestCaseBase):
         self.assertIsInstance(row, dict)
         self.assertIsInstance(row['text'], str)
         self.assertIsInstance(row['score'], int)
+
+    def test_mapper_batch_output_preserves_existing_arrow_schema(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import process_mapper_batch_preserving_schema
+
+        input_batch = pa.table(
+            {
+                "cost": pa.array([None], type=pa.int64()),
+                "site_id": pa.array([123], type=pa.int64()),
+            }
+        )
+
+        def process_func(batch):
+            values = batch.to_pydict()
+            values["new_field"] = [None]
+            return values
+
+        output = process_mapper_batch_preserving_schema(input_batch, process_func)
+
+        self.assertEqual(output.schema.field("cost").type, pa.int64())
+        self.assertEqual(output.schema.field("site_id").type, pa.int64())
+        self.assertEqual(output.schema.field("new_field").type, pa.null())
+
+    def test_mapper_batch_output_expands_struct_schema_for_new_stats_keys(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import process_mapper_batch_preserving_schema
+        from data_juicer.ops.filter.character_repetition_filter import CharacterRepetitionFilter
+        from data_juicer.utils.constant import Fields, StatsKeys
+
+        input_batch = pa.table(
+            {
+                Fields.stats: pa.array(
+                    [{"ocr_type_en": "simple_extract"}],
+                    type=pa.struct([pa.field("ocr_type_en", pa.string())]),
+                ),
+                "qwen_response_text": pa.array(["hello hello"]),
+            }
+        )
+
+        op = CharacterRepetitionFilter(text_key="qwen_response_text", rep_len=2)
+        output = process_mapper_batch_preserving_schema(input_batch, op.compute_stats)
+
+        self.assertEqual(
+            output.schema.field(Fields.stats).type,
+            pa.struct(
+                [
+                    pa.field(StatsKeys.char_rep_ratio, pa.float64()),
+                    pa.field("ocr_type_en", pa.string()),
+                ]
+            ),
+        )
+        self.assertEqual(
+            output.column(Fields.stats).to_pylist(),
+            [{StatsKeys.char_rep_ratio: 0.4, "ocr_type_en": "simple_extract"}],
+        )
+
+    def test_mapper_batch_output_all_null_struct_key_can_later_infer_concrete_type(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import process_mapper_batch_preserving_schema
+        from data_juicer.utils.constant import Fields
+
+        input_batch = pa.table(
+            {
+                Fields.stats: pa.array(
+                    [{"ocr_type_en": "simple_extract"}],
+                    type=pa.struct([pa.field("ocr_type_en", pa.string())]),
+                ),
+                "text": pa.array(["sample"]),
+            }
+        )
+
+        def add_null_stat(batch):
+            values = batch.to_pydict()
+            values[Fields.stats][0]["new_score"] = None
+            return values
+
+        def fill_stat(batch):
+            values = batch.to_pydict()
+            values[Fields.stats][0]["new_score"] = 0.7
+            return values
+
+        first = process_mapper_batch_preserving_schema(input_batch, add_null_stat)
+        second = process_mapper_batch_preserving_schema(first, fill_stat)
+        first_stats_types = {field.name: field.type for field in first.schema.field(Fields.stats).type}
+        second_stats_types = {field.name: field.type for field in second.schema.field(Fields.stats).type}
+
+        self.assertEqual(first_stats_types["new_score"], pa.null())
+        self.assertEqual(first.column(Fields.stats).to_pylist(), [{"new_score": None, "ocr_type_en": "simple_extract"}])
+        self.assertEqual(second_stats_types["new_score"], pa.float64())
+        self.assertEqual(second.column(Fields.stats).to_pylist(), [{"new_score": 0.7, "ocr_type_en": "simple_extract"}])
+
+    def test_mapper_batch_output_preserves_multiple_filter_stats_extensions(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import process_mapper_batch_preserving_schema
+        from data_juicer.ops.filter.character_repetition_filter import CharacterRepetitionFilter
+        from data_juicer.ops.filter.specified_numeric_field_filter import SpecifiedNumericFieldFilter
+        from data_juicer.utils.constant import Fields, StatsKeys
+
+        input_batch = pa.table(
+            {
+                Fields.stats: pa.array(
+                    [{"ocr_type_en": "simple_extract"}],
+                    type=pa.struct([pa.field("ocr_type_en", pa.string())]),
+                ),
+                "qwen_response_text": pa.array(["hello hello"]),
+                "valid_image_count": pa.array([3], type=pa.int64()),
+            }
+        )
+
+        char_filter = CharacterRepetitionFilter(text_key="qwen_response_text", rep_len=2)
+        numeric_filter = SpecifiedNumericFieldFilter(field_key="valid_image_count", min_value=1)
+
+        after_char = process_mapper_batch_preserving_schema(input_batch, char_filter.compute_stats)
+        after_numeric = process_mapper_batch_preserving_schema(after_char, numeric_filter.compute_stats)
+        stats_types = {field.name: field.type for field in after_numeric.schema.field(Fields.stats).type}
+
+        self.assertEqual(stats_types[StatsKeys.char_rep_ratio], pa.float64())
+        self.assertEqual(stats_types["valid_image_count"], pa.int64())
+        self.assertEqual(
+            after_numeric.column(Fields.stats).to_pylist(),
+            [{StatsKeys.char_rep_ratio: 0.4, "ocr_type_en": "simple_extract", "valid_image_count": 3}],
+        )
+
+    def test_cpu_mapper_uses_operator_name_for_ray_map_batches(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        class FakeRayDataset:
+            def __init__(self):
+                self.fn = None
+                self.kwargs = None
+
+            def columns(self):
+                return ["text"]
+
+            def map_batches(self, fn, **kwargs):
+                self.fn = fn
+                self.kwargs = kwargs
+                return self
+
+        class NamedTestMapper(Mapper):
+            _name = "named_test_mapper"
+            _batched_op = True
+
+            def process_batched(self, samples):
+                samples = samples.to_pydict() if isinstance(samples, pa.Table) else dict(samples)
+                samples["text"] = [text.upper() for text in samples["text"]]
+                return samples
+
+        fake_dataset = FakeRayDataset()
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = fake_dataset
+
+        op = NamedTestMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset._run_single_op(op, cached_columns=set(fake_dataset.columns()))
+
+        self.assertEqual(fake_dataset.fn.__name__, "named_test_mapper")
+        self.assertEqual(fake_dataset.fn.__qualname__, "named_test_mapper")
+        self.assertNotIn("partial", fake_dataset.fn.__qualname__)
+        output = fake_dataset.fn(pa.table({"text": ["hello"]}))
+        self.assertEqual(output.column("text").to_pylist(), ["HELLO"])
+
+    def test_filter_compute_stats_preserves_existing_arrow_schema(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.specified_numeric_field_filter import SpecifiedNumericFieldFilter
+        from data_juicer.utils.constant import Fields
+
+        class FakeRayDataset:
+            def __init__(self, table):
+                self.table = table
+
+            def columns(self):
+                return self.table.column_names
+
+            def map_batches(self, fn, **kwargs):
+                self.table = fn(self.table)
+                return self
+
+            def filter(self, fn, **kwargs):
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = FakeRayDataset(
+            pa.table(
+                {
+                    "is_highlight": pa.array([1], type=pa.int64()),
+                    "valid_image_count": pa.array([1], type=pa.int64()),
+                }
+            )
+        )
+        op = SpecifiedNumericFieldFilter(
+            field_key="valid_image_count",
+            min_value=1,
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+
+        ray_dataset._run_single_op(op, cached_columns=set(ray_dataset.data.columns()))
+
+        self.assertEqual(ray_dataset.data.table.schema.field("is_highlight").type, pa.int64())
+        self.assertEqual(ray_dataset.data.table.schema.field("valid_image_count").type, pa.int64())
+        self.assertEqual(ray_dataset.data.table.column(Fields.stats).to_pylist(), [{"valid_image_count": 1}])
+
+    def test_process_with_ray_data_checkpoint_avoids_eager_count_and_columns(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        class StrictLazyRayDataset:
+            def __init__(self):
+                self.map_batches_calls = 0
+
+            def count(self):
+                raise AssertionError("checkpoint mode must not count before export")
+
+            def columns(self, *args, **kwargs):
+                raise AssertionError("checkpoint mode must not fetch columns before export")
+
+            def schema(self, *args, **kwargs):
+                return None
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_calls += 1
+                return self
+
+        class CheckpointNoEagerTestMapper(Mapper):
+            def process_single(self, sample):
+                sample["text"] = sample["text"].upper()
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = StrictLazyRayDataset()
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset._auto_proc = False
+
+        op = CheckpointNoEagerTestMapper(auto_op_parallelism=False, num_proc=1)
+        with patch("data_juicer.core.data.ray_dataset._is_ray_data_checkpoint_enabled", return_value=True):
+            ray_dataset.process([op])
+
+        self.assertEqual(ray_dataset.data.map_batches_calls, 1)
+
+    def test_process_uses_configured_columns_without_eager_count(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        class StrictLazyRayDataset:
+            def __init__(self):
+                self.map_batches_calls = 0
+
+            def count(self):
+                raise AssertionError("process must not count lazy Ray datasets before operators")
+
+            def columns(self, *args, **kwargs):
+                raise AssertionError("configured columns should avoid eager column fetch")
+
+            def schema(self, *args, **kwargs):
+                raise AssertionError("configured columns should avoid eager schema fetch")
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_calls += 1
+                return self
+
+        class ConfiguredColumnsTestMapper(Mapper):
+            def process_single(self, sample):
+                sample["text"] = sample["text"].upper()
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = StrictLazyRayDataset()
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset._auto_proc = False
+
+        op = ConfiguredColumnsTestMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset.process([op])
+
+        self.assertEqual(ray_dataset.data.map_batches_calls, 1)
+
+    def test_count_uses_cached_row_count_until_processing(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        class FakeRayDataset:
+            def __init__(self):
+                self.map_batches_calls = 0
+                self.count_calls = 0
+
+            def count(self):
+                self.count_calls += 1
+                return 3
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_calls += 1
+                return self
+
+        class CountInvalidatingMapper(Mapper):
+            def process_single(self, sample):
+                sample["text"] = sample["text"].upper()
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = FakeRayDataset()
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = 7
+        getter_calls = []
+        ray_dataset._row_count_getter = lambda: getter_calls.append("called") or 11
+
+        self.assertEqual(ray_dataset.count(), 7)
+        self.assertEqual(ray_dataset.data.count_calls, 0)
+        self.assertEqual(getter_calls, [])
+
+        ray_dataset._cached_row_count = None
+        self.assertEqual(ray_dataset.count(), 11)
+        self.assertEqual(ray_dataset.count(), 11)
+        self.assertEqual(getter_calls, ["called"])
+        self.assertEqual(ray_dataset.data.count_calls, 0)
+
+        op = CountInvalidatingMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset.process([op])
+
+        self.assertIsNone(ray_dataset._cached_row_count)
+        self.assertIsNone(ray_dataset._row_count_getter)
+        self.assertEqual(ray_dataset.count(), 3)
+        self.assertEqual(ray_dataset.data.count_calls, 1)
+
+    def test_process_plan_only_avoids_eager_count_and_columns(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        class StrictLazyRayDataset:
+            def __init__(self):
+                self.map_batches_calls = 0
+
+            def count(self):
+                raise AssertionError("plan-only mode must not count")
+
+            def columns(self, *args, **kwargs):
+                if kwargs.get("fetch_if_missing") is False:
+                    return None
+                raise AssertionError("plan-only mode must not eagerly fetch columns")
+
+            def schema(self, *args, **kwargs):
+                if kwargs.get("fetch_if_missing") is False:
+                    return None
+                raise AssertionError("plan-only mode must not eagerly fetch schema")
+
+            def map_batches(self, *args, **kwargs):
+                self.map_batches_calls += 1
+                return self
+
+        class PlanOnlyTestMapper(Mapper):
+            def process_single(self, sample):
+                sample["text"] = sample["text"].upper()
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = StrictLazyRayDataset()
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": []})
+        ray_dataset._auto_proc = False
+
+        op = PlanOnlyTestMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset.process([op], plan_only=True)
+
+        self.assertEqual(ray_dataset.data.map_batches_calls, 1)
+
+    def test_process_plan_only_uses_pipeline_plan_only_hook(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Pipeline
+
+        class StrictLazyRayDataset:
+            pass
+
+        class PlanOnlyPipeline(Pipeline):
+            def __init__(self):
+                super().__init__()
+                self.plan_only_calls = 0
+
+            def run(self, dataset, *, exporter=None, tracer=None):
+                raise AssertionError("plan-only mode must not call normal pipeline run")
+
+            def run_plan_only(self, dataset):
+                self.plan_only_calls += 1
+                return dataset
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = StrictLazyRayDataset()
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": []})
+        ray_dataset._auto_proc = False
+
+        op = PlanOnlyPipeline()
+        ray_dataset.process([op], plan_only=True)
+
+        self.assertEqual(op.plan_only_calls, 1)
+
+    def test_set_absolute_path_dry_run_avoids_eager_columns(self):
+        from types import SimpleNamespace
+
+        from data_juicer.core.data.ray_dataset import set_dataset_to_absolute_path
+
+        class StrictLazyRayDataset:
+            def columns(self, *args, **kwargs):
+                if kwargs.get("fetch_if_missing") is False:
+                    return None
+                raise AssertionError("dry-run path preprocessing must not eagerly fetch columns")
+
+            def schema(self, *args, **kwargs):
+                if kwargs.get("fetch_if_missing") is False:
+                    return None
+                raise AssertionError("dry-run path preprocessing must not eagerly fetch schema")
+
+        dataset = StrictLazyRayDataset()
+        cfg = SimpleNamespace(ray_dry_run_plan=True, dataset={"configs": []})
+
+        self.assertIs(set_dataset_to_absolute_path(dataset, "/tmp/input/data.jsonl", cfg), dataset)
 
 
 if __name__ == '__main__':

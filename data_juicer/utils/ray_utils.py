@@ -1,16 +1,87 @@
 import os
+import shutil
 import subprocess
 
 import psutil
 from loguru import logger
 
-from data_juicer.utils.constant import RAY_JOB_ENV_VAR
+from data_juicer.utils.constant import (
+    METRICS_JOB_ID_ENV_VAR,
+    METRICS_RAY_ADDRESS_ENV_VAR,
+    RAY_JOB_ENV_VAR,
+)
 from data_juicer.utils.lazy_loader import LazyLoader
+from data_juicer.utils.metrics_utils import set_metrics_context
 from data_juicer.utils.mm_utils import SPECIAL_TOKEN_ENV_PREFIX
 
 ray = LazyLoader("ray")
 
 _RAY_NODES_INFO = None
+
+_HADOOP_HIVE_ENV_KEYS = [
+    "CLASSPATH",
+    "JAVA_HOME",
+    "HADOOP_HOME",
+    "HADOOP_CONF_DIR",
+    "YARN_CONF_DIR",
+    "HIVE_HOME",
+    "HIVE_CONF_DIR",
+    "ARROW_LIBHDFS_DIR",
+    "HADOOP_COMMON_LIB_NATIVE_DIR",
+    "LD_LIBRARY_PATH",
+]
+_METRICS_ENV_KEYS = [
+    METRICS_JOB_ID_ENV_VAR,
+    METRICS_RAY_ADDRESS_ENV_VAR,
+]
+
+
+def _get_hadoop_command():
+    hadoop_home = os.environ.get("HADOOP_HOME")
+    if hadoop_home:
+        hadoop_cmd = os.path.join(hadoop_home, "bin", "hadoop")
+        if os.path.exists(hadoop_cmd) and os.access(hadoop_cmd, os.X_OK):
+            return hadoop_cmd
+
+    return shutil.which("hadoop")
+
+
+def _get_hadoop_classpath():
+    hadoop_cmd = _get_hadoop_command()
+    if not hadoop_cmd:
+        return None
+
+    try:
+        return subprocess.check_output(
+            [hadoop_cmd, "classpath", "--glob"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception as err:
+        logger.warning(f"Failed to get Hadoop classpath via `{hadoop_cmd} classpath --glob`: {err}")
+        return None
+
+
+def ensure_hadoop_classpath_env():
+    if os.environ.get("CLASSPATH"):
+        return
+
+    classpath_entries = []
+    hadoop_classpath = _get_hadoop_classpath()
+    if hadoop_classpath:
+        classpath_entries.append(hadoop_classpath)
+
+    hive_conf_dir = os.environ.get("HIVE_CONF_DIR")
+    if hive_conf_dir:
+        classpath_entries.append(hive_conf_dir)
+
+    hive_home = os.environ.get("HIVE_HOME")
+    if hive_home:
+        classpath_entries.append(os.path.join(hive_home, "lib", "*"))
+
+    if classpath_entries:
+        os.environ["CLASSPATH"] = ":".join(classpath_entries)
+        logger.info("Set CLASSPATH from Hadoop and Hive runtime paths.")
 
 
 def is_ray_mode():
@@ -21,6 +92,8 @@ def is_ray_mode():
 
 
 def initialize_ray(cfg=None, force=False):
+    ensure_hadoop_classpath_env()
+
     if ray.is_initialized() and not force:
         return
 
@@ -29,9 +102,16 @@ def initialize_ray(cfg=None, force=False):
         logger.warning("No ray config provided, using default ray address 'auto'.")
     else:
         ray_address = cfg.ray_address
+        set_metrics_context(
+            job_id=getattr(cfg, "job_id", None),
+            ray_address=ray_address,
+        )
 
     # collect ray envs
     env_vars = {RAY_JOB_ENV_VAR: os.environ.get(RAY_JOB_ENV_VAR, "0")}
+    for k in [*_HADOOP_HIVE_ENV_KEYS, *_METRICS_ENV_KEYS]:
+        if os.environ.get(k):
+            env_vars[k] = os.environ[k]
     for k, v in dict(os.environ).items():
         if k.startswith(SPECIAL_TOKEN_ENV_PREFIX):
             env_vars.update({k: v})
@@ -40,7 +120,8 @@ def initialize_ray(cfg=None, force=False):
         ray_address,
         ignore_reinit_error=True,
         runtime_env=dict(
-            py_modules=cfg.custom_operator_paths if cfg.get("custom_operator_paths", None) else None, env_vars=env_vars
+            py_modules=cfg.custom_operator_paths if cfg.get("custom_operator_paths", None) else None,
+            env_vars=env_vars,
         ),
     )
 

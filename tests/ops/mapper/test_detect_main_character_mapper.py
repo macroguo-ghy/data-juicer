@@ -1,6 +1,6 @@
 import unittest
 from data_juicer.core import NestedDataset
-from data_juicer.ops.mapper.detect_main_character_mapper import DetectMainCharacterMapper
+from data_juicer.ops.mapper.image.detect_main_character_mapper import DetectMainCharacterMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 import os
 

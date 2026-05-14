@@ -4,7 +4,7 @@ import os
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_split_by_duration_mapper import \
+from data_juicer.ops.mapper.video.video_split_by_duration_mapper import \
     VideoSplitByDurationMapper
 from data_juicer.utils.file_utils import add_suffix_to_filename
 from data_juicer.utils.mm_utils import SpecialTokens

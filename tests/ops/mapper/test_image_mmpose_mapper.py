@@ -9,7 +9,7 @@ import tempfile
 import numpy as np
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_mmpose_mapper import ImageMMPoseMapper
+from data_juicer.ops.mapper.image.image_mmpose_mapper import ImageMMPoseMapper
 from data_juicer.utils.cache_utils import DATA_JUICER_CACHE_HOME
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.lazy_loader import LazyLoader
