@@ -1,0 +1,274 @@
+# 电商视频-多图
+project_name: "ecom-video-item-ocr-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: "ad_addrd_stats.ecom_video_item_sample_stats_daily_v2"
+      columns:
+        - "item_id"
+        - "item_status"
+        - "cart_video"
+        - "item_title"
+        - "cover_image_uri"
+        - "item_link"
+        - "item_create_time"
+        - "item_create_time_str"
+        - "item_create_day"
+        - "item_country_name"
+        - "item_province_cn"
+        - "item_city_code"
+        - "is_image_beat"
+        - "is_intel_artc"
+        - "shoot_way"
+        - "author_authority"
+        - "signed_type"
+        - "author_label"
+        - "vertical_author_label"
+        - "vv"
+        - "finish_vv"
+        - "play_time"
+        - "feed_vv"
+        - "feed_finish_vv"
+        - "feed_play_time"
+        - "like_cnt"
+        - "comment_cnt"
+        - "share_cnt"
+        - "follow_cnt"
+        - "vv_all"
+        - "like_cnt_all"
+        - "comment_cnt_all"
+        - "share_cnt_all"
+        - "finish_vv_all"
+        - "follow_cnt_all"
+        - "product_id"
+        - "product_title"
+        - "shop_id"
+        - "shop_name"
+        - "gmv_level"
+        - "addr_extract_province"
+        - "addr_extract_city"
+        - "brand_id"
+        - "first_cid_new"
+        - "second_cid_new"
+        - "third_cid_new"
+        - "fourth_cid_new"
+        - "first_name_new"
+        - "second_name_new"
+        - "third_name_new"
+        - "fourth_name_new"
+        - "industry_id"
+        - "detail_url"
+        - "gmv_all"
+        - "order_num_all"
+        - "video_product_entrance_click_pv"
+        - "click_product_pv"
+        - "click_add_to_cart_pv"
+        - "item_duration"
+        - "music_id"
+        - "app_id"
+        - "vertical_category_new"
+        - "vertical_category_ka_new"
+        - "industry_name"
+        - "brand_name_cn"
+        - "brand_level"
+        - "quality_tag_high_acc"
+        - "first_level_label_name_new"
+        - "second_level_label_name_new"
+        - "third_level_label_name_new"
+        - "fourth_level_label_name_new"
+        - "medium_type"
+        - "publish_date"
+        - "double_high_recall_tag"
+        - "date"
+        - "app_name"
+      filter: |
+        date = '<DATE>'
+        AND app_name = '<APP_NAME>'
+        AND item_id IS NOT NULL
+      override_num_blocks: 256
+      concurrency: 128
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: "magnus"
+  table_name: "<CATALOG>.<DATABASE>.ecom_video_item_image_ocr"
+  operation: "OVERWRITE"
+  partition_columns: ["date", "app_name"]
+  partition_values:
+    date: "<DATE>"
+    app_name: "<APP_NAME>"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "list<string>"}
+      - {name: "images", type: "list<binary>"}
+      - {name: "audios", type: "list<binary>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+      - {name: "extra", type: "string"}
+      - {name: "md5", type: "string"}
+      - {name: "ocr_result", type: "list<string>"}
+      - {name: "date", type: "string"}
+      - {name: "app_name", type: "string"}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - item_id_image_url_mapper:
+      id_field: "item_id"
+      output_url_field: "item_image_urls"
+      batch_size: 100
+  - multi_source_image_url_mapper:
+      id_field: "item_id"
+      text_fields: []
+      output_url_key: "image_urls"
+      extra_keys:
+        - "item_id"
+        - "item_status"
+        - "cart_video"
+        - "item_title"
+        - "cover_image_uri"
+        - "item_link"
+        - "item_create_time"
+        - "item_create_time_str"
+        - "item_create_day"
+        - "item_country_name"
+        - "item_province_cn"
+        - "item_city_code"
+        - "is_image_beat"
+        - "is_intel_artc"
+        - "shoot_way"
+        - "author_authority"
+        - "signed_type"
+        - "author_label"
+        - "vertical_author_label"
+        - "vv"
+        - "finish_vv"
+        - "play_time"
+        - "feed_vv"
+        - "feed_finish_vv"
+        - "feed_play_time"
+        - "like_cnt"
+        - "comment_cnt"
+        - "share_cnt"
+        - "follow_cnt"
+        - "vv_all"
+        - "like_cnt_all"
+        - "comment_cnt_all"
+        - "share_cnt_all"
+        - "finish_vv_all"
+        - "follow_cnt_all"
+        - "product_id"
+        - "product_title"
+        - "shop_id"
+        - "shop_name"
+        - "gmv_level"
+        - "addr_extract_province"
+        - "addr_extract_city"
+        - "brand_id"
+        - "first_cid_new"
+        - "second_cid_new"
+        - "third_cid_new"
+        - "fourth_cid_new"
+        - "first_name_new"
+        - "second_name_new"
+        - "third_name_new"
+        - "fourth_name_new"
+        - "industry_id"
+        - "detail_url"
+        - "gmv_all"
+        - "order_num_all"
+        - "video_product_entrance_click_pv"
+        - "click_product_pv"
+        - "click_add_to_cart_pv"
+        - "item_duration"
+        - "music_id"
+        - "app_id"
+        - "vertical_category_new"
+        - "vertical_category_ka_new"
+        - "industry_name"
+        - "brand_name_cn"
+        - "brand_level"
+        - "quality_tag_high_acc"
+        - "first_level_label_name_new"
+        - "second_level_label_name_new"
+        - "third_level_label_name_new"
+        - "fourth_level_label_name_new"
+        - "medium_type"
+        - "publish_date"
+        - "double_high_recall_tag"
+      source_specs:
+        - name: "item_images"
+          url_field: "item_image_urls"
+          source: "ecom_video_item_raw_data"
+          extra_url_key: "item_image_urls"
+          extra_url_mode: "list"
+      passthrough_keys: ["date", "app_name"]
+      passthrough_types:
+        date: "string"
+        app_name: "string"
+      batch_size: 100
+  - download_file_mapper:
+      download_field: "image_urls"
+      save_field: "image_bytes"
+      timeout: 10
+      retry_times: 3
+      max_concurrent: 8
+      batch_size: 100
+  - image_bytes_prune_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      valid_image_count_key: "valid_image_count"
+      batch_size: 100
+  - specified_numeric_field_filter:
+      field_key: "valid_image_count"
+      min_value: 2
+      batch_size: 100
+  - image_bytes_exact_dedup_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      valid_image_count_key: "valid_image_count"
+      batch_size: 100
+  - ray_document_deduplicator:
+      text_key: "md5"
+      lowercase: false
+      ignore_non_character: false
+      dedup_set_num: 8
+      batch_size: 100
+      num_proc: 8
+  - image_schema_finalize_mapper:
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      passthrough_keys: ["date", "app_name"]
+      passthrough_types:
+        date: "string"
+        app_name: "string"
+      batch_size: 100
+  - image_ocr_mapper:
+      image_key: "images"
+      ocr_result_key: "ocr_result"
+      psm: "lab.ocrx.fusion_general"
+      cluster: "default"
+      timeout: 30
+      caller: "life.gen_ai.dorado_llm"
+      expected_caller_psm: "life.gen_ai.dorado_llm"
+      split_size: 10
+      batch_size: 100
+  - specified_field_non_empty_filter:
+      field_key: "ocr_result"
+      batch_size: 100

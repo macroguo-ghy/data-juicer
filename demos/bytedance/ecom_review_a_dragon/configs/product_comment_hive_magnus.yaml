@@ -1,0 +1,156 @@
+# 电商评论图
+# doing
+project_name: "ecom-product-comment-image-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: "ad_addrd_stats.product_comment_sample_v2_stats_daily"
+      columns:
+        - "comment_id"
+        - "product_id"
+        - "shop_id"
+        - "user_id"
+        - "content"
+        - "sku_name"
+        - "total_score"
+        - "shop_score"
+        - "express_score"
+        - "product_score"
+        - "like_count"
+        - "is_high_quality_cmnt_v2"
+        - "is_usefulness_cmnt"
+        - "comment_pic_url"
+        - "cmmt_img_uri"
+        - "with_pic"
+        - "cmnt_level"
+        - "p_date"
+      filter: |
+        p_date = '<P_DATE>'
+      override_num_blocks: 256
+      concurrency: 128
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: "magnus"
+  table_name: "<CATALOG>.<DATABASE>.ecom_product_comment_image_schema"
+  operation: "OVERWRITE"
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: "<P_DATE>"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "list<string>"}
+      - {name: "images", type: "list<binary>"}
+      - {name: "audios", type: "list<binary>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+      - {name: "extra", type: "string"}
+      - {name: "md5", type: "string"}
+      - {name: "p_date", type: "string"}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - specified_field_non_empty_filter:
+      field_key: "content"
+      batch_size: 100
+  - ray_field_dedup_pipeline:
+      field_key: "comment_id"
+      dedup_set_num: 8
+      batch_size: 100
+  - ecom_comment_schema_prepare_mapper:
+      id_field: "comment_id"
+      id_prefix: "comment_id"
+      text_field: "content"
+      uri_field: "cmmt_img_uri"
+      image_uri_key: "image_uris"
+      image_url_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      with_pic_source: "ecom_comment_with_pic_raw_data"
+      no_pic_source: "ecom_comment_no_pic_raw_data"
+      extra_keys:
+        - "comment_id"
+        - "product_id"
+        - "shop_id"
+        - "user_id"
+        - "content"
+        - "sku_name"
+        - "total_score"
+        - "shop_score"
+        - "express_score"
+        - "product_score"
+        - "like_count"
+        - "is_high_quality_cmnt_v2"
+        - "is_usefulness_cmnt"
+        - "comment_pic_url"
+        - "cmmt_img_uri"
+        - "with_pic"
+        - "cmnt_level"
+      passthrough_keys: ["p_date"]
+      passthrough_types:
+        p_date: "string"
+      batch_size: 100
+  - aweme_pack_url_mapper:
+      uri_field: "image_uris"
+      url_field: "image_urls"
+      source_psm: "ad.ai.data_forge"
+      source_cluster: "default"
+      target_psm: "aweme.pack.url"
+      target_cluster: "default"
+      batch_size: 100
+  - download_file_mapper:
+      download_field: "image_urls"
+      save_field: "image_bytes"
+      resume_download: true
+      timeout: 10
+      retry_times: 3
+      max_concurrent: 8
+      batch_size: 100
+  - image_bytes_prune_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      valid_image_count_key: "valid_image_count"
+      batch_size: 100
+  - image_bytes_exact_dedup_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      valid_image_count_key: "valid_image_count"
+      preserve_existing_md5_on_empty: true
+      batch_size: 100
+  - general_field_filter:
+      filter_condition: "type == 'text' or valid_image_count >= 1"
+      batch_size: 100
+  - json_extra_update_mapper:
+      extra_key: "extra"
+      field_mappings:
+        image_urls: "valid_urls"
+      skip_empty: true
+      batch_size: 100
+  - image_schema_finalize_mapper:
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      type_key: "type"
+      passthrough_keys: ["p_date"]
+      passthrough_types:
+        p_date: "string"
+      batch_size: 100
+  - ray_field_dedup_pipeline:
+      field_key: "md5"
+      dedup_set_num: 8
+      batch_size: 100

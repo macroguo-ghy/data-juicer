@@ -1,0 +1,195 @@
+# 电商商品图-单图
+project_name: "ecom-product-hive-magnus-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: "ad_addrd_stats.product_core_attribute_sample_stats_daily_v2"
+      columns:
+        - "product_id"
+        - "product_title"
+        - "shop_id"
+        - "shop_name"
+        - "sell_quantity"
+        - "market_price"
+        - "bargain_price"
+        - "first_category_id_new"
+        - "first_category_name_new"
+        - "second_category_id_new"
+        - "second_category_name_new"
+        - "third_category_id_new"
+        - "third_category_name_new"
+        - "first_cid_ai"
+        - "first_name_ai"
+        - "second_cid_ai"
+        - "second_name_ai"
+        - "third_cid_ai"
+        - "third_name_ai"
+        - "product_img_url"
+        - "main_pic"
+        - "info_pic"
+        - "brand_id"
+        - "brand_name"
+        - "own_str"
+        - "sku_str"
+        - "kvinfo"
+        - "llm_cpv"
+        - "llm_sellpoint"
+        - "p_date"
+      filter: |
+        p_date = '<P_DATE>'
+        AND product_img_url IS NOT NULL
+        AND product_img_url != ''
+        AND main_pic IS NOT NULL
+        AND main_pic != ''
+        AND info_pic IS NOT NULL
+        AND info_pic != ''
+        AND second_category_name_new IS NOT NULL
+        AND second_category_name_new != ''
+        AND third_category_name_new IS NOT NULL
+        AND third_category_name_new != ''
+      override_num_blocks: 256
+      concurrency: 128
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: "magnus"
+  table_name: "<CATALOG>.<DATABASE>.ecom_product_image_schema"
+  operation: "OVERWRITE"
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: "<P_DATE>"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "list<string>"}
+      - {name: "images", type: "list<binary>"}
+      - {name: "audios", type: "list<binary>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+      - {name: "extra", type: "string"}
+      - {name: "md5", type: "string"}
+      - {name: "p_date", type: "string"}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - ray_field_dedup_pipeline:
+      field_key: "product_id"
+      dedup_set_num: 8
+      batch_size: 100
+      num_proc: 8
+  - multi_source_image_url_mapper:
+      id_field: "product_id"
+      output_url_key: "image_urls"
+      extra_keys:
+        - "product_id"
+        - "product_title"
+        - "shop_id"
+        - "shop_name"
+        - "sell_quantity"
+        - "market_price"
+        - "bargain_price"
+        - "first_category_id_new"
+        - "first_category_name_new"
+        - "second_category_id_new"
+        - "second_category_name_new"
+        - "third_category_id_new"
+        - "third_category_name_new"
+        - "first_cid_ai"
+        - "first_name_ai"
+        - "second_cid_ai"
+        - "second_name_ai"
+        - "third_cid_ai"
+        - "third_name_ai"
+        - "product_img_url"
+        - "main_pic"
+        - "info_pic"
+        - "brand_id"
+        - "brand_name"
+        - "own_str"
+        - "sku_str"
+        - "kvinfo"
+        - "llm_cpv"
+        - "llm_sellpoint"
+      source_specs:
+        - name: "product"
+          url_field: "product_img_url"
+          source: "ecom_product_product_raw_data"
+          extra_url_key: "product_url"
+          extra_url_mode: "single"
+          max_urls: 1
+        - name: "main"
+          url_field: "main_pic"
+          source: "ecom_product_main_raw_data"
+          extra_url_key: "main_urls"
+          extra_url_mode: "list"
+        - name: "info"
+          url_field: "info_pic"
+          source: "ecom_product_info_raw_data"
+          extra_url_key: "info_urls"
+          extra_url_mode: "list"
+      passthrough_keys: ["p_date"]
+      passthrough_types:
+        p_date: "string"
+      batch_size: 100
+  - download_file_mapper:
+      download_field: "image_urls"
+      save_field: "image_bytes"
+      timeout: 10
+      retry_times: 3
+      max_concurrent: 8
+      batch_size: 100
+  - image_bytes_prune_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      valid_image_count_key: "valid_image_count"
+      batch_size: 100
+  - ray_group_required_field_filter_pipeline:
+      group_key: "id"
+      field_key: "source"
+      count_key: "valid_image_count"
+      required_values:
+        ecom_product_product_raw_data: 1
+        ecom_product_main_raw_data: 1
+        ecom_product_info_raw_data: 1
+      batch_size: 100
+  - image_bytes_exact_dedup_mapper:
+      image_key: "image_urls"
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      valid_image_count_key: "valid_image_count"
+      batch_size: 100
+  - general_field_filter:
+      filter_condition: "(source == 'ecom_product_product_raw_data' and valid_image_count >= 1) or (source != 'ecom_product_product_raw_data' and valid_image_count >= 2)"
+      batch_size: 100
+  - python_lambda_mapper:
+      lambda_str: 'lambda sample: {**sample, "__dj_source_md5": str(sample.get("source", "")) + ":" + str(sample.get("md5", ""))}'
+      batch_size: 100
+  - ray_document_deduplicator:
+      text_key: "__dj_source_md5"
+      lowercase: false
+      ignore_non_character: false
+      dedup_set_num: 8
+      batch_size: 100
+      num_proc: 8
+  - image_schema_finalize_mapper:
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      passthrough_keys: ["p_date"]
+      passthrough_types:
+        p_date: "string"
+      batch_size: 100

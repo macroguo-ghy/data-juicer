@@ -1,0 +1,55 @@
+# Ray Hive read-only probe for isolating ray.data.read_hive_table behavior.
+# Run it through RayExecutor.run(skip_export=True); tools/process_data.py always exports.
+project_name: "landing-page-hive-read-only-probe-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: "ad_addrd_stats.site_creative_center_df_stats_daily_sample_v2_chengzi"
+      columns:
+        p_date: "STRING"
+        site_id: "BIGINT"
+        local_stat_time_day: "STRING"
+        external_url: "STRING"
+        thumbnail: "STRING"
+        preload_resources: "STRING"
+        page_public_data: "STRING"
+        site_type: "BIGINT"
+        is_highlight: "BIGINT"
+        cost: "BIGINT"
+        send_count: "BIGINT"
+        show_count: "BIGINT"
+        click_count: "BIGINT"
+        convert_count: "BIGINT"
+        ad_id: "BIGINT"
+        campaign_id: "BIGINT"
+        advertiser_id: "BIGINT"
+        customer_id: "BIGINT"
+        company_id: "BIGINT"
+        first_industry_id: "BIGINT"
+        first_industry_name: "STRING"
+        second_industry_id: "BIGINT"
+        second_industry_name: "STRING"
+        third_industry_id: "BIGINT"
+        ad_first_industry_id: "BIGINT"
+        ad_first_industry_name: "STRING"
+        ad_second_industry_id: "BIGINT"
+        ad_second_industry_name: "STRING"
+        ad_third_industry_id: "BIGINT"
+        ad_third_industry_name: "STRING"
+      filter: |
+        p_date = '20260423'
+        AND preload_resources IS NOT NULL
+      override_num_blocks: 256
+      concurrency: 64
+      ray_remote_args:
+        num_cpus: 1
+
+# Required by normal config initialization. It should not be used for this probe.
+export_path: "/tmp/data_juicer_hive_read_only_probe.jsonl"
+
+process: []

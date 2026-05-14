@@ -1,0 +1,288 @@
+project_name: "landing-page-preloads-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+#ray_data_checkpoint:
+#  enabled: true
+#  dir: "hdfs://haruna/ad_base/addrd_core/addrd_stats/ray_checkpoint/landing_page_preloads"
+#  delete_no_checkpoint_files: true
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: "ad_addrd_stats.site_creative_center_df_stats_daily_sample_v2_chengzi"
+      columns:
+        p_date: "STRING"
+        site_id: "BIGINT"
+        local_stat_time_day: "STRING"
+        external_url: "STRING"
+        thumbnail: "STRING"
+        preload_resources: "STRING"
+        page_public_data: "STRING"
+        site_type: "BIGINT"
+        is_highlight: "BIGINT"
+        cost: "BIGINT"
+        send_count: "BIGINT"
+        show_count: "BIGINT"
+        click_count: "BIGINT"
+        convert_count: "BIGINT"
+        ad_id: "BIGINT"
+        campaign_id: "BIGINT"
+        advertiser_id: "BIGINT"
+        customer_id: "BIGINT"
+        company_id: "BIGINT"
+        first_industry_id: "BIGINT"
+        first_industry_name: "STRING"
+        second_industry_id: "BIGINT"
+        second_industry_name: "STRING"
+        third_industry_id: "BIGINT"
+        ad_first_industry_id: "BIGINT"
+        ad_first_industry_name: "STRING"
+        ad_second_industry_id: "BIGINT"
+        ad_second_industry_name: "STRING"
+        ad_third_industry_id: "BIGINT"
+        ad_third_industry_name: "STRING"
+      filter: |
+        p_date = '20260423'
+        AND preload_resources IS NOT NULL
+      override_num_blocks: 1024
+      concurrency: 32
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: "magnus"
+  table_name: "ai_data_forge.ccu.landing_page_chengzi_lance"
+  create_table_if_not_exists: true
+  operation: "OVERWRITE"
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: "20260423"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "list<string>"}
+      - {name: "images", type: "list<binary>"}
+      - {name: "audios", type: "list<binary>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+      - {name: "md5", type: "string"}
+      - {name: "site_id", type: "int64"}
+      - {name: "local_stat_time_day", type: "string"}
+      - {name: "p_date", type: "string"}
+      - {name: "external_url", type: "string"}
+      - {name: "thumbnail", type: "string"}
+      - {name: "page_public_data", type: "string"}
+      - {name: "preload_resources", type: "string"}
+      - {name: "site_type", type: "int64"}
+      - {name: "is_highlight", type: "int64"}
+      - {name: "cost", type: "int64"}
+      - {name: "send_count", type: "int64"}
+      - {name: "show_count", type: "int64"}
+      - {name: "click_count", type: "int64"}
+      - {name: "convert_count", type: "int64"}
+      - {name: "ad_id", type: "int64"}
+      - {name: "campaign_id", type: "int64"}
+      - {name: "advertiser_id", type: "int64"}
+      - {name: "customer_id", type: "int64"}
+      - {name: "company_id", type: "int64"}
+      - {name: "first_industry_id", type: "int64"}
+      - {name: "first_industry_name", type: "string"}
+      - {name: "second_industry_id", type: "int64"}
+      - {name: "second_industry_name", type: "string"}
+      - {name: "third_industry_id", type: "int64"}
+      - {name: "ad_first_industry_id", type: "int64"}
+      - {name: "ad_first_industry_name", type: "string"}
+      - {name: "ad_second_industry_id", type: "int64"}
+      - {name: "ad_second_industry_name", type: "string"}
+      - {name: "ad_third_industry_id", type: "int64"}
+      - {name: "ad_third_industry_name", type: "string"}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - landing_page_image_url_mapper:
+      image_source: "preloads"
+      id_field: "site_id"
+      preload_resources_key: "preload_resources"
+      batch_size: 5000
+      passthrough_types:
+        site_id: "int64"
+        local_stat_time_day: "string"
+        p_date: "string"
+        external_url: "string"
+        thumbnail: "string"
+        page_public_data: "string"
+        preload_resources: "string"
+        site_type: "int64"
+        is_highlight: "int64"
+        cost: "int64"
+        send_count: "int64"
+        show_count: "int64"
+        click_count: "int64"
+        convert_count: "int64"
+        ad_id: "int64"
+        campaign_id: "int64"
+        advertiser_id: "int64"
+        customer_id: "int64"
+        company_id: "int64"
+        first_industry_id: "int64"
+        first_industry_name: "string"
+        second_industry_id: "int64"
+        second_industry_name: "string"
+        third_industry_id: "int64"
+        ad_first_industry_id: "int64"
+        ad_first_industry_name: "string"
+        ad_second_industry_id: "int64"
+        ad_second_industry_name: "string"
+        ad_third_industry_id: "int64"
+        ad_third_industry_name: "string"
+      num_proc: 192
+  - list_field_flatten_mapper:
+      field_key: "images"
+      index_key: "__dj_landing_page_image_index"
+      id_key: "__dj_landing_page_id"
+      id_index_separator: "-"
+      wrap_value: true
+      drop_empty: true
+      passthrough_types:
+        site_id: "int64"
+        local_stat_time_day: "string"
+        p_date: "string"
+        external_url: "string"
+        thumbnail: "string"
+        page_public_data: "string"
+        preload_resources: "string"
+        site_type: "int64"
+        is_highlight: "int64"
+        cost: "int64"
+        send_count: "int64"
+        show_count: "int64"
+        click_count: "int64"
+        convert_count: "int64"
+        ad_id: "int64"
+        campaign_id: "int64"
+        advertiser_id: "int64"
+        customer_id: "int64"
+        company_id: "int64"
+        first_industry_id: "int64"
+        first_industry_name: "string"
+        second_industry_id: "int64"
+        second_industry_name: "string"
+        third_industry_id: "int64"
+        ad_first_industry_id: "int64"
+        ad_first_industry_name: "string"
+        ad_second_industry_id: "int64"
+        ad_second_industry_name: "string"
+        ad_third_industry_id: "int64"
+        ad_third_industry_name: "string"
+      num_proc: 128
+  - download_file_mapper:
+      download_field: "images"
+      save_field: "image_bytes"
+      timeout: 2
+      retry_times: 1
+      max_concurrent: 1
+      filter_non_url: true
+      batch_size: 8
+      num_proc: 256
+      num_cpus: 1
+  - image_bytes_prune_mapper:
+      image_key: "images"
+      image_bytes_key: "image_bytes"
+      valid_image_count_key: "valid_image_count"
+      num_proc: 192
+      num_cpus: 1
+  - specified_numeric_field_filter:
+      field_key: "valid_image_count"
+      min_value: 1
+      num_proc: 128
+  - image_bytes_exact_dedup_mapper:
+      image_key: "images"
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      valid_image_count_key: "valid_image_count"
+      num_proc: 192
+      num_cpus: 1
+  - ray_document_deduplicator:
+      text_key: "md5"
+      lowercase: false
+      ignore_non_character: false
+      dedup_set_num: 24
+      num_proc: 192
+  - landing_page_image_schema_finalize_mapper:
+      image_bytes_key: "image_bytes"
+      md5_key: "md5"
+      passthrough_keys:
+        - "site_id"
+        - "local_stat_time_day"
+        - "p_date"
+        - "external_url"
+        - "thumbnail"
+        - "page_public_data"
+        - "preload_resources"
+        - "site_type"
+        - "is_highlight"
+        - "cost"
+        - "send_count"
+        - "show_count"
+        - "click_count"
+        - "convert_count"
+        - "ad_id"
+        - "campaign_id"
+        - "advertiser_id"
+        - "customer_id"
+        - "company_id"
+        - "first_industry_id"
+        - "first_industry_name"
+        - "second_industry_id"
+        - "second_industry_name"
+        - "third_industry_id"
+        - "ad_first_industry_id"
+        - "ad_first_industry_name"
+        - "ad_second_industry_id"
+        - "ad_second_industry_name"
+        - "ad_third_industry_id"
+        - "ad_third_industry_name"
+      passthrough_types:
+        site_id: "int64"
+        local_stat_time_day: "string"
+        p_date: "string"
+        external_url: "string"
+        thumbnail: "string"
+        page_public_data: "string"
+        preload_resources: "string"
+        site_type: "int64"
+        is_highlight: "int64"
+        cost: "int64"
+        send_count: "int64"
+        show_count: "int64"
+        click_count: "int64"
+        convert_count: "int64"
+        ad_id: "int64"
+        campaign_id: "int64"
+        advertiser_id: "int64"
+        customer_id: "int64"
+        company_id: "int64"
+        first_industry_id: "int64"
+        first_industry_name: "string"
+        second_industry_id: "int64"
+        second_industry_name: "string"
+        third_industry_id: "int64"
+        ad_first_industry_id: "int64"
+        ad_first_industry_name: "string"
+        ad_second_industry_id: "int64"
+        ad_second_industry_name: "string"
+        ad_third_industry_id: "int64"
+        ad_third_industry_name: "string"
+      batch_size: 32
+      num_proc: 128

@@ -1,0 +1,362 @@
+project_name: "third-site-ocr-qwen3vl30b-simple-extract-hard-sample-label-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: magnus
+      table_name: "ai_data_forge.ccu.third_site_ocr_seed_main_demo1_qwen3vl30b_simple_extract_hard"
+      magnus_conf: {}
+
+export:
+  target: "magnus"
+  table_name: "ai_data_forge.ccu.third_site_ocr_seed_main_demo1_qwen3vl30b_simple_extract_hard_sample_labels"
+  operation: "OVERWRITE"
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: "20260509"
+  create_table_if_not_exists: true
+  schema:
+    fields:
+      - name: "id"
+        type: "string"
+      - name: "extra"
+        type: "string"
+      - name: "images"
+        type: "list<binary>"
+      - name: "md5"
+        type: "string"
+      - name: "source"
+        type: "string"
+      - name: "texts"
+        type: "list<string>"
+      - name: "audios"
+        type: "string"
+      - name: "videos"
+        type: "string"
+      - name: "has_audio_in_video"
+        type: "bool"
+      - name: "type"
+        type: "string"
+      - name: "ocr_result"
+        type: "string"
+      - name: "image_index"
+        type: "int64"
+      - name: "text_richness_score"
+        type: "float64"
+      - name: "char_score"
+        type: "float64"
+      - name: "area_score"
+        type: "float64"
+      - name: "ocr_text"
+        type: "list<string>"
+      - name: "ocr_bbox"
+        type: "list<list<float64>>"
+      - name: "ocr_answer"
+        type: "string"
+      - name: "vlm_error"
+        type: "string"
+      - name: "ocr_type"
+        type: "string"
+      - name: "ocr_type_en"
+        type: "string"
+      - name: "qwen_prompt"
+        type: "string"
+      - name: "qwen_response"
+        type: "string"
+      - name: "qwen_response_text"
+        type: "string"
+      - name: "qwen_response_format"
+        type: "string"
+      - name: "qwen_postprocess_error"
+        type: "string"
+      - name: "messages"
+        type: "list<struct<role:string,content:string>>"
+      - name: "category_classification"
+        type: "string"
+      - name: "category_classification_error"
+        type: "string"
+      - name: "difficulty_evaluation"
+        type: "string"
+      - name: "difficulty_evaluation_error"
+        type: "string"
+      - name: "quality_inspection"
+        type: "string"
+      - name: "quality_inspection_error"
+        type: "string"
+      - name: "p_date"
+        type: "string"
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - ray_group_sample_pipeline:
+      group_field_key: "ocr_type_en"
+      select_num_per_group: 150
+      seed: 20260509
+      num_cpus: 1
+  - vlm_api_response_mapper:
+      image_key: "images"
+      output_key: "category_classification"
+      error_key: "category_classification_error"
+      system_prompt: |
+        You are an expert classifier specialized in categorizing **multimodal (image-text) or text-only data** into defined types, aligned with the data structures of state-of-the-art (SOTA) models. Your goal is to accurately map each sample to a **primary category** and **subcategory** based on content and image dependency.
+
+        ### **Note on Image Dependency**
+        - **Multimodal Categories** (Caption, OCR, General VQA, Interleave, STEM, GUI, Grounding): Require an image or `<image>` placeholder (text references or depends on visual content).
+        - **Text-Only Category**: No image dependency-text contains no `<image>` placeholder and is fully self-contained.
+
+        ### 1. Multimodal & Text-Only Data Categories & Subcategories
+        Classify each sample into one **primary category** (from the 8 defined below) and one corresponding **subcategory**. Definitions reflect SOTA data conventions:
+
+        #### Caption (Image Description)
+        Focuses on textual descriptions of single or tightly arranged multiple images (images have no text separators between them):
+        - **basic_caption**: Simple, high-level description of the main subject(s).
+        - **fine_grained_caption**: Detailed description of attributes or parts of the subject(s).
+        - **scene_caption**: Contextual description of the scene (environment, lighting, atmosphere) surrounding the subject(s).
+        - **comparative_caption**: Description of comparisons between objects (size, color, position).
+        - **multilingual_caption**: Description in two or more languages.
+
+        #### OCR (Optical Character Recognition)
+        Focuses on extracting and using text from images to solve tasks-all subcategories rely on OCR information from images (task success depends on the text extracted from the image):
+        - **text_detection**: Localization of text regions in images.
+        - **text_recognition**: Transcription of image text into editable/usable text (OCR's core output, converting visual text to machine-readable form).
+        - **text_understanding**: Semantic interpretation of image text, solving problems using the meaning of OCR-extracted text.
+        - **scene_text**: Extraction of text from natural scenes.
+        - **document_ocr**: Extraction of text from scanned documents.
+
+        #### Grounding (Visual-Text Alignment)
+        Focuses on linking text to specific visual elements-including image regions (e.g., bounding boxes [bbox], points), video time segments, or counting objects:
+        - **location_grounding**: Mapping text to image regions (bbox/point) or video time segments.
+        - **phrase_grounding**: Linking text phrases to objects/regions.
+        - **referring_expression**: Understanding contextual references to locate visuals.
+        - **counting_grounding**: Counting real objects by first locating all instances.
+        - **multimodal_alignment**: Precise text-visual element matching.
+
+        #### STEM (Science/Technology/Engineering/Mathematics)
+        Focus on integrating advanced mathematics, engineering principles, technology, and scientific knowledge with specialized visuals (images, charts, schematics) to perform systematic analysis, interpretation, and Q&A.
+        - **scientific_image_qa**: Leverage visual data combined with scientific theory to conduct in-depth analysis of scientific images and answer expert-level questions.
+        - **complex_math_problem_solving**: Engage in solving advanced mathematical problems requiring multi-step reasoning, proofs, or derivations.
+        - **engineering_schematic**: Apply engineering concepts to systematically identify and analyze engineering diagrams.
+
+        #### Interleave (Multimodal Interaction)
+        Images (with <image> as placeholders) and text in "assistant" must be interleaved during a Q&A interaction, meaning there should be at least two or more alternations. Presentations where images and text are contained in a single content block, or where multiple images are displayed consecutively with text descriptions without forming an interleaved structure, are not considered interleaved.
+        - **image_text_alignment**: Matching images to corresponding text.
+        - **image_guided_text**: Text generated from image content.
+        - **text_guided_image**: Images retrieved via text queries.
+        - **multimodal_dialogue**: Conversations combining image context and text.
+
+        #### General VQA (Visual Question Answering)
+        Focuses on **image/video-based question-answer pairs**-only for tasks that do NOT involve Grounding (location/counting/video segments) or OCR dependencies:
+        - **factual_vqa**: Fact-based questions about visible content.
+        - **reasoning_vqa**: Logic-based inference from content.
+        - **open_domain_vqa**: Questions requiring external knowledge.
+        - **multi_turn_vqa**: Sequential questions about the same visual.
+        - **commonsense_vqa**: Questions requiring world knowledge.
+
+        #### GUI (UI Multimodal Tasks)
+        Focuses on agent-centric multimodal instructions in interactive interface contexts (e.g., websites, mobile apps, desktop websites):
+        - **ui_navigation**: Image-guided navigation within UI environments.
+        - **ui_element_interaction**: Image-guided interaction with on-screen UI elements.
+        - **ui_task_planning**: Image-guided step-by-step task execution for app/website workflows.
+        - **ui_command_execution**: Image-guided command following for digital interfaces.
+
+        #### Text-Only (Pure Text Data)
+        Focuses on self-contained text (no image dependency):
+        - **plain_text**: Unstructured, standalone text.
+        - **structured_text**: Formatted text with defined structure (CSV, JSON).
+        - **textual_qa**: Text-only question-answer pairs.
+        - **textual_summarization**: Text summaries of longer content.
+        - **textual_reasoning**: Text requiring logical/commonsense inference.
+
+        ### **Other Rule**
+        - If the input image contains a large amount of text, the answer to the question will most likely rely on OCR results. The key is to determine whether it fits the OCR/STEM task definition and to carefully consider labeling it as general VQA.
+        - **Takes Priority**: text_only > OCR = interleave = caption > grounding = gui > stem > general_vqa
+        - The core distinction between OCR and STEM lies in whether the answer to the question can be directly obtained from the image. If it can be resolved through a simple correspondence or simple reasoning, it is classified as OCR. If complex reasoning is required, it is classified as STEM.
+
+        ### 2. Output Format
+        Respond strictly in JSON with:
+        {
+          "tags": {
+            "primary_category": "<caption/OCR/general_vqa/interleave/stem/gui/grounding/text_only>",
+            "subcategory": "<corresponding subcategory>"
+          },
+          "flags": "<comma-separated data features>",
+          "rationale": "<detailed explanation linking data content to category/subcategory>"
+        }
+      prompt_template: |
+        Evaluate this OCR extraction training sample. Use the image content together with the Qwen-generated target below.
+
+        ocr_type: ${ocr_type}
+        ocr_type_en: ${ocr_type_en}
+        ocr_text: ${ocr_text}
+        qwen_prompt: ${qwen_prompt}
+        qwen_response_format: ${qwen_response_format}
+        qwen_response_text: ${qwen_response_text}
+        messages: ${messages}
+      model: "ep-20250711163130-h6pnh"
+      base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+      api_key: "<YOUR_API_KEY>"
+      temperature: 0.0
+      timeout: 120
+      rpm: 500
+      tpm: 1000000
+      estimated_tokens_per_request: 3500
+      image_token_divisor: 1764
+      max_image_tokens: 5120
+      image_tokens_per_image: 5120
+      repartition_num_blocks: null
+      batch_size: 1
+      num_proc: 128
+      num_cpus: 1
+  - vlm_api_response_mapper:
+      image_key: "images"
+      output_key: "difficulty_evaluation"
+      error_key: "difficulty_evaluation_error"
+      system_prompt: |
+        You are an expert evaluator specialized in screening high-difficulty, valuable multimodal (image-answer) training data for large language models. Your goal is to identify samples requiring advanced capabilities (complex reasoning, cross-modal integration, expert knowledge, precise visual perception) while excluding low-value noise.
+
+        ### 1. Core Evaluation Dimensions
+        Rate **6 key difficulty dimensions** on a 1-5 scale. We only provide **explicit criteria for 1/3/5 scores**-use 2 (between 1-3) or 4 (between 3-5) for intermediate difficulty:
+
+        #### a. Image Complexity
+        Measures the difficulty of understanding the **image** on its own:
+        - **1**: Simple, single plain object (e.g., solid red apple; white background).
+        - **3**: Multiple interacting objects or moderate detail (e.g., apple + cup + book on a desk; basic diagram of apple parts).
+        - **5**: Abstract/hyper-detailed content or technical visuals (e.g., apple genome heatmap; microscopic cell mitosis image).
+
+        #### b. Text Complexity
+        Measures the difficulty of understanding the **answer text** on its own:
+        - **1**: Short, simple phrases (e.g., "This is an apple"; "Red").
+        - **3**: Moderate-length, domain-general sentences (e.g., "The apple has a green stem and smooth skin"; "Apples are common fruits").
+        - **5**: Complex syntax, domain-specific jargon, or abstract language (e.g., "Parenchyma cells store nutrients in the apple's flesh"; "Heteroblastic growth patterns affect apple tree development").
+
+        #### c. Cross-Modal Synthesis
+        Measures the difficulty of **connecting image and text**:
+        - **1**: No meaningful link (e.g., apple image + "Fruits are healthy").
+        - **3**: Moderate link (requires 1-2 steps of inference; e.g., rotten apple image + "This apple rotted from being left out").
+        - **5**: Deep, abstract link (requires multi-step reasoning or expert integration; e.g., orchard drone image + "Uniform tree spacing optimizes sunlight, increasing yield by 20%").
+
+        #### d. Prior Knowledge Demand
+        Measures **domain/cultural knowledge** required to interpret the pair:
+        - **1**: No prior knowledge (e.g., apple image + "This is a fruit").
+        - **3**: Basic domain knowledge (e.g., apple image + "Apples belong to the Rosaceae family").
+        - **5**: Cross-domain expert knowledge (e.g., pesticide residue image + "Neonicotinoids harm pollinators and exceed EPA safety limits").
+
+        #### e. Visual Cue Sensitivity
+        Measures the difficulty of perceiving **task-relevant critical visual cues**-i.e., the specific visual details *required to complete the task*:
+        - **1**: Task-relevant cues are large, high-contrast, and immediately noticeable.
+        - **3**: Task-relevant cues are small, low-contrast, or partially obscured-requiring focused inspection.
+        - **5**: Task-relevant cues are nearly imperceptible-requiring extreme scrutiny, magnification, or expert knowledge.
+
+        #### f. Task Ambiguity
+        Measures the difficulty of **resolving uncertainty** through reasoning:
+        - **1**: No ambiguity (e.g., red apple image + "This is a red apple").
+        - **3**: Requires close inspection to resolve (e.g., bite mark image + "This bite is human").
+        - **5**: Requires multi-step expert reasoning (e.g., spotted apple leaf image + "This is cedar-apple rust"-needs linking fungus lifecycle to visual cues).
+
+        ### 2. Output Format
+        Respond strictly in JSON with:
+        {
+          "dimension_scores": {
+            "image_complexity": <int>,
+            "text_complexity": <int>,
+            "cross_modal_synthesis": <int>,
+            "prior_knowledge_demand": <int>,
+            "visual_cue_sensitivity": <int>,
+            "task_ambiguity": <int>
+          },
+          "flags": "<comma-separated difficulty drivers (e.g., cross_modal_integration, expert_knowledge)>",
+          "rationale": "<detailed explanation of how image-text interactions drive each score>"
+        }
+      prompt_template: |
+        Evaluate this OCR extraction training sample. Use the image content together with the Qwen-generated target below.
+
+        ocr_type: ${ocr_type}
+        ocr_type_en: ${ocr_type_en}
+        ocr_text: ${ocr_text}
+        qwen_prompt: ${qwen_prompt}
+        qwen_response_format: ${qwen_response_format}
+        qwen_response_text: ${qwen_response_text}
+        messages: ${messages}
+      model: "ep-20250711163130-h6pnh"
+      base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+      api_key: "<YOUR_API_KEY>"
+      temperature: 0.0
+      timeout: 120
+      rpm: 500
+      tpm: 1000000
+      estimated_tokens_per_request: 3500
+      image_token_divisor: 1764
+      max_image_tokens: 5120
+      image_tokens_per_image: 5120
+      repartition_num_blocks: null
+      batch_size: 1
+      num_proc: 128
+      num_cpus: 1
+  - vlm_api_response_mapper:
+      image_key: "images"
+      output_key: "quality_inspection"
+      error_key: "quality_inspection_error"
+      system_prompt: |
+        You are a meticulous data quality assessor for VLM training data. Analyze each data sample, which may include both image and text (user question and assistant response) modalities, across multiple quality dimensions and provide numerical scores with clear, evidence-based reasoning. Pay special attention to hallucinations-assertions in the assistant's response that are not directly supported or verifiable from the image or text context.
+
+        ### 1. Evaluation Dimensions
+        Score each dimension on a 1-5 scale (1=lowest, 5=highest):
+        - Accuracy: Factual correctness and verifiability of the assistant's response in answering the user's question, including consistency and alignment with the image content.
+        - Grammar: Linguistic correctness and fluency of text.
+        - Correlation: Relevance of the question and answer to the image content, including whether the image is necessary to answer the question correctly.
+        - Hallucination: Degree of hallucinated content, i.e., claims or inferences not grounded in visible image evidence or explicit textual information. Lower score means more hallucination.
+
+        ### 2. Scoring Protocol
+        - Base scores strictly on concrete, verifiable evidence from both text and image.
+        - Score based on the percentage of errors in the overall content and the severity of the errors: 5 points for completely correct, 4 points for errors within 10%, 3 points for errors within 20%, 2 points for errors within 35%, and 1 point for errors at 40% or above.
+        - Flag hallucinations, misinformation, or unsupported inferences explicitly (e.g., "hallucination", "unsupported_inference").
+        - Mark samples needing human review if confidence <90%.
+
+        ### 3. Output Format
+        Respond strictly in JSON with:
+        {
+          "dimension_scores": {
+            "accuracy": <int>,
+            "grammar": <int>,
+            "correlation": <int>,
+            "hallucination": <int>
+          },
+          "flags": "hallucination, unsupported_inference, image_text_misalignment, insufficient_information, weak_correlation, ...",
+          "rationale": "Detailed analysis citing specific hallucinated or speculative claims, supported by evidence from image and text modalities. Explain why certain assertions lack grounding.",
+          "recommendation": "keep/review/discard"
+        }
+      prompt_template: |
+        Evaluate this OCR extraction training sample. Use the image content together with the Qwen-generated target below.
+
+        ocr_type: ${ocr_type}
+        ocr_type_en: ${ocr_type_en}
+        ocr_text: ${ocr_text}
+        qwen_prompt: ${qwen_prompt}
+        qwen_response_format: ${qwen_response_format}
+        qwen_response_text: ${qwen_response_text}
+        messages: ${messages}
+      model: "ep-20250711163130-h6pnh"
+      base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+      api_key: "<YOUR_API_KEY>"
+      temperature: 0.0
+      timeout: 120
+      rpm: 500
+      tpm: 1000000
+      estimated_tokens_per_request: 3500
+      image_token_divisor: 1764
+      max_image_tokens: 5120
+      image_tokens_per_image: 5120
+      repartition_num_blocks: null
+      batch_size: 1
+      num_proc: 128
+      num_cpus: 1

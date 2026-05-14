@@ -1,0 +1,35 @@
+project_name: "magnus-lance-create-smoke"
+executor_type: "ray"
+ray_address: "auto"
+np: 1
+work_dir: "./outputs/magnus_lance_create_smoke"
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/bytedance/process_magnus/data/lance_create_smoke.jsonl
+
+export:
+  target: magnus
+  # Use a fresh table name for each real smoke run if the previous table was
+  # already created as parquet. Existing non-lance tables should fail validation.
+  table_name: "ai_data_forge.ccu.magnus_lance_create_smoke"
+  operation: "OVERWRITE"
+  schema:
+    fields:
+      - name: "id"
+        type: "int64"
+      - name: "text"
+        type: "string"
+      - name: "score"
+        type: "double"
+  magnus_conf:
+    concurrency: 1
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process: []

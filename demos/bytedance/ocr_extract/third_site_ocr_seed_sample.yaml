@@ -1,0 +1,91 @@
+project_name: "third-site-ocr-seed-sample-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: magnus
+      table_name: "ai_data_forge.ccu.third_site_ocr_seed_main"
+      magnus_conf: {}
+
+export:
+  target: "magnus"
+  table_name: "ai_data_forge.ccu.third_site_ocr_seed_sample"
+  operation: "OVERWRITE"
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: "lance"
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process:
+  - ray_group_sample_pipeline:
+      group_field_key: "ocr_type_en"
+      select_num_per_group: 150
+      seed: 20260507
+  - vlm_api_response_mapper:
+      image_key: "images"
+      output_key: "sample_ocr_answer"
+      system_prompt: |
+        """你将看到一张或多张图像，请根据图像内容判断：这些图像适用于下列哪些能力类别的评测或数据构建（可多选），并且针对其中部分类别生产问题。
+        类别定义：
+        1）版面结构解析：关注页面中区块/段落/表格/标题/页眉页脚等布局与层级结构，而不仅仅是逐行文字识别。
+        问题要求：不生产问题
+        2）数值计算与推理：图中包含价格、数量、金额、百分比、日期、度量单位等数值信息，针对数值构建需要数值计算、比较与推理来求解的问题
+        问题要求：问题中尽量不要泄露图像中具体的数值，而是通过指代引导，禁止提问中直接暴露解答需要的所有数值。
+        3）指令式区域定位与KIE：根据自然语言指令抽取指定关键信息（如发票抬头、收货地址、证件号码、菜单中某道菜的价格等）。
+        4）长文档理解：图像是多页文档的一部分，或单页中包含大段连贯文本，需要跨段落、跨页面综合理解和问答，而不仅是局部字段抽取。
+        5）图表语义理解：图片主体部分含有清晰的折线图、柱状图、饼图等可视化图表，需要理解坐标轴、图例、单位和数值关系，支持问答、比较、趋势推断等。
+        问题要求：
+        1）用多样的方式提问
+        2）问题关注图像中不同的信息，而不是单一信息
+        3）每个类型生产1-3个不同的问题，再问题合理并且有一定难度的情况下才生产多个问题。
+        4）提出的问题需要依赖图像内容才能解答
+
+        输出要求：
+        - 使用JSON格式输出一个对象，其中：
+          - "labels"：字符串数组，元素必须从 ["版面结构解析","数值计算与推理","指令式区域定位与KIE","长文档理解","图表语义理解"] 中选择，允许多选；
+          - "reason"：字符串，简要说明为什么选择这些类别，以及为什么其它类别不适用（如有）；
+          - "qa"：对象，其键为已选类别名，值为一个对象，包含：
+            - "question"：为该类别设计的、只能依赖图像内容作答的问题；
+            - "answer"：该问题在图像上的唯一标准答案，以字符串形式给出。
+
+        示例输出：
+        {
+          "labels": ["版面结构解析", "指令式区域定位与KIE"],
+          "reason": "页面包含多栏文字和一个带表头的表格，适合做版面结构解析；同时有清晰的收件人信息区域，可根据指令定位并抽取字段。",
+          "qa": {
+            "指令式区域定位与KIE": {
+              "question1": "收件人的姓名是什么？",
+              "answer1": "张三",
+              "question2": "请识别发件人的邮政编码",
+              "answer2": "331100",
+              "question3": "图中右下方显示的地址是？",
+              "answer3": "上海市松江区坡子街310号"
+            }
+          }
+        }"""
+      model: "ep-20260330154126-2rr4g"
+      base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+      api_key: "<YOUR_API_KEY>"
+      temperature: 0.0
+      timeout: 120
+      image_token_divisor: 1764
+      max_image_tokens: 5120
+      image_tokens_per_image: 5120
+      batch_size: 1
+      num_proc: 16
+      num_cpus: 1
+  - ocr_answer_category_mapper:
+      answer_key: "sample_ocr_answer"
+      type_key: "sample_ocr_type"
+      type_en_key: "sample_ocr_type_en"
+      messages_key: "sample_messages"
+      batch_size: 100
+      num_proc: 64
+      num_cpus: 1
