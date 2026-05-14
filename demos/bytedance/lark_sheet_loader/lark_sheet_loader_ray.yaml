@@ -1,0 +1,17 @@
+project_name: lark_sheet_loader_ray
+executor_type: ray
+ray_address: local
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: "https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>"
+      lark_app_id: "<lark_app_id>"
+      lark_app_secret: "<lark_app_secret>"
+      file_extension: csv
+
+process:
+  - text_length_filter:
+      min_len: 0
+
+export_path: ./outputs/lark_sheet_loader_ray.jsonl

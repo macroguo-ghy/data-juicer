@@ -58,6 +58,50 @@ dataset:
       url_limit: 2
 ```
 
+### Remote Lark Sheet Dataset
+
+The `remote/lark` dataset source loads one Lark Sheet by exporting it as CSV
+and then reusing the normal CSV loading path. The source sheet must contain a
+`text` column when used with the demo pipeline below. The configured app must
+have permission to export the target sheet.
+
+Only CSV export is supported. Specify the sheet id either in the `lark_path`
+query parameter `sheet` or in the explicit `sheet_id` field. If both are set,
+they must point to the same sheet.
+
+```yaml
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+```
+
+For multiple sheets, configure multiple dataset entries:
+
+```yaml
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      weight: 0.5
+      lark_path: https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id_1>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+    - type: remote
+      source: lark
+      weight: 0.5
+      lark_path: <spreadsheet_token>
+      sheet_id: <sheet_id_2>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+```
+
 ### Other Supported Dataset Formats
 
 Refer to [load_strategy.py](https://github.com/datajuicer/data-juicer/blob/main/data_juicer/core/data/load_strategy.py) for more details and supported dataset formats.

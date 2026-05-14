@@ -8,7 +8,9 @@ from data_juicer.core.data.load_strategy import (
     DataLoadStrategyRegistry, DataLoadStrategy, StrategyKey,
     DefaultLocalDataLoadStrategy,
     DefaultHuggingfaceDataLoadStrategy,
+    DefaultLarkDataLoadStrategy,
     RayLocalJsonDataLoadStrategy,
+    RayLarkDataLoadStrategy,
     DefaultS3DataLoadStrategy,
     RayS3DataLoadStrategy,
     RayHDFSDataLoadStrategy,
@@ -23,6 +25,7 @@ from data_juicer.core.data.config_validator import ConfigValidationError
 from data_juicer.core.io_utils import (
     _ensure_csv_field_size_limit,
     build_tqs_client_result_limited_query,
+    parse_lark_sheet_location,
     run_tqs_query_to_records,
 )
 from jsonargparse import Namespace
@@ -1159,6 +1162,131 @@ class TestRayS3DataLoadStrategy(DataJuicerTestCaseBase):
         self.assertEqual(strategy.ds_config["aws_session_token"], "test_token")
         self.assertEqual(strategy.ds_config["aws_region"], "us-east-1")
         self.assertEqual(strategy.ds_config["endpoint_url"], "https://s3.amazonaws.com")
+
+
+class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir = osp.join(WORK_DIR, f"tmp_lark_{uuid.uuid4().hex}")
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        self.cfg = get_default_cfg()
+        self.cfg.work_dir = self.tmp_dir
+        self.base_config = {
+            "type": "remote",
+            "source": "lark",
+            "lark_path": "https://bytedance.larkoffice.com/sheets/shtcn123?foo=1&sheet=abc",
+            "lark_app_id": "app_id",
+            "lark_app_secret": "app_secret",
+        }
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        super().tearDown()
+
+    def test_parse_lark_sheet_location_from_url_query(self):
+        token, sheet_id = parse_lark_sheet_location(
+            "https://bytedance.larkoffice.com/sheets/shtcn123?foo=1&sheet=abc"
+        )
+
+        self.assertEqual(token, "shtcn123")
+        self.assertEqual(sheet_id, "abc")
+
+    def test_parse_lark_sheet_location_from_token_and_sheet_id(self):
+        token, sheet_id = parse_lark_sheet_location("shtcn123", sheet_id="abc")
+
+        self.assertEqual(token, "shtcn123")
+        self.assertEqual(sheet_id, "abc")
+
+    def test_parse_lark_sheet_location_rejects_conflicting_sheet_ids(self):
+        with self.assertRaisesRegex(ValueError, "sheet_id.*conflict"):
+            parse_lark_sheet_location("https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc", sheet_id="def")
+
+    def test_parse_lark_sheet_location_requires_sheet_id(self):
+        with self.assertRaisesRegex(ValueError, "requires a sheet id"):
+            parse_lark_sheet_location("shtcn123")
+
+    def test_lark_config_rejects_non_csv_extension(self):
+        ds_config = dict(self.base_config, file_extension="xlsx")
+
+        with self.assertRaises(ConfigValidationError):
+            DefaultLarkDataLoadStrategy(ds_config, self.cfg)
+
+    def test_lark_config_rejects_missing_required_fields(self):
+        ds_config = dict(self.base_config)
+        del ds_config["lark_app_secret"]
+
+        with self.assertRaisesRegex(ConfigValidationError, "Missing required fields: lark_app_secret"):
+            DefaultLarkDataLoadStrategy(ds_config, self.cfg)
+
+    def test_lark_config_rejects_missing_sheet_id(self):
+        ds_config = dict(self.base_config, lark_path="shtcn123")
+
+        with self.assertRaisesRegex(ConfigValidationError, "requires a sheet id"):
+            DefaultLarkDataLoadStrategy(ds_config, self.cfg)
+
+    def test_lark_config_rejects_conflicting_sheet_id(self):
+        ds_config = dict(self.base_config, sheet_id="def")
+
+        with self.assertRaisesRegex(ConfigValidationError, "sheet_id.*conflict"):
+            DefaultLarkDataLoadStrategy(ds_config, self.cfg)
+
+    @patch("data_juicer.core.data.load_strategy.DefaultLocalDataLoadStrategy.load_data")
+    @patch("data_juicer.core.data.load_strategy.export_lark_sheet_to_local")
+    def test_default_lark_loader_exports_csv_then_loads_staged_local_dataset(
+        self,
+        mock_export_lark_sheet_to_local,
+        mock_default_load_data,
+    ):
+        local_dataset = MagicMock(name="local_dataset")
+        mock_default_load_data.return_value = local_dataset
+        mock_export_lark_sheet_to_local.side_effect = lambda **kwargs: kwargs["output_path"]
+
+        result = DefaultLarkDataLoadStrategy(self.base_config, self.cfg).load_data(num_proc=2)
+
+        self.assertEqual(result, local_dataset)
+        mock_export_lark_sheet_to_local.assert_called_once()
+        export_kwargs = mock_export_lark_sheet_to_local.call_args.kwargs
+        self.assertEqual(export_kwargs["file_extension"], "csv")
+        self.assertEqual(export_kwargs["sheet_id"], "abc")
+        self.assertTrue(export_kwargs["output_path"].endswith("dataset.csv"))
+        self.assertIn(osp.join(".io_cache", "load"), export_kwargs["output_path"])
+        mock_default_load_data.assert_called_once_with(num_proc=2)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.from_pandas")
+    @patch("data_juicer.core.data.load_strategy.RayLocalJsonDataLoadStrategy.load_data")
+    @patch("data_juicer.core.data.load_strategy.DefaultLocalDataLoadStrategy.load_data")
+    @patch("data_juicer.core.data.load_strategy.export_lark_sheet_to_local")
+    def test_ray_lark_loader_materializes_on_driver_before_building_ray_dataset(
+        self,
+        mock_export_lark_sheet_to_local,
+        mock_default_load_data,
+        mock_ray_local_load_data,
+        mock_ray_from_pandas,
+        mock_ray_dataset,
+    ):
+        local_dataset = MagicMock(name="local_dataset")
+        pandas_df = MagicMock(name="pandas_df")
+        ray_data = MagicMock(name="ray_data")
+        wrapped_dataset = MagicMock(name="wrapped_ray_dataset")
+        local_dataset.to_pandas.return_value = pandas_df
+        mock_default_load_data.return_value = local_dataset
+        mock_ray_from_pandas.return_value = ray_data
+        mock_ray_dataset.return_value = wrapped_dataset
+        mock_export_lark_sheet_to_local.side_effect = lambda **kwargs: kwargs["output_path"]
+
+        result = RayLarkDataLoadStrategy(self.base_config, self.cfg).load_data(num_proc=2)
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_ray_local_load_data.assert_not_called()
+        mock_default_load_data.assert_called_once_with(num_proc=2)
+        local_dataset.to_pandas.assert_called_once_with()
+        mock_ray_from_pandas.assert_called_once_with(pandas_df)
+        mock_ray_dataset.assert_called_once()
+        self.assertEqual(mock_ray_dataset.call_args.args, (ray_data,))
+        ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs
+        self.assertTrue(ray_dataset_kwargs["dataset_path"].endswith("dataset.csv"))
+        self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
 
 
 class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
