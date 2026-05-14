@@ -1347,6 +1347,15 @@ def _normalize_magnus_failure_policy(policy):
     return policy
 
 
+def _normalize_magnus_write_operation(operation):
+    operation = "APPEND" if operation is None else str(operation).upper()
+    if operation == "OVERWRITE_PARTITION":
+        return "OVERWRITE"
+    if operation not in {"APPEND", "OVERWRITE"}:
+        raise ValueError(f"Unsupported Magnus write operation: {operation!r}")
+    return operation
+
+
 def _apply_magnus_failure_policy_marker(magnus_conf, failure_policy):
     if failure_policy == MAGNUS_FAILURE_POLICY_ABORT:
         return magnus_conf
@@ -1432,9 +1441,7 @@ def write_ray_dataset_to_magnus(dataset, table_name: str, **kwargs):
     failure_policy = _normalize_magnus_failure_policy(kwargs.get("magnus_failure_policy"))
     magnus_conf = _normalize_magnus_conf(kwargs.get("magnus_conf", {}) or {})
     operation = kwargs.get("operation", magnus_conf.pop("operation", "APPEND")) or "APPEND"
-    operation = str(operation).upper()
-    if operation not in {"APPEND", "OVERWRITE"}:
-        raise ValueError(f"Unsupported Magnus write operation: {operation!r}")
+    operation = _normalize_magnus_write_operation(operation)
     is_partition_overwrite = operation == "OVERWRITE" and partition_values is not None
     magnus_conf = _apply_magnus_write_defaults(
         magnus_conf,
