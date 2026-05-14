@@ -3,7 +3,10 @@ from unittest.mock import patch
 
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
-from data_juicer.ops.mapper import AdAiDataCenterHttpMapper
+from data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper import (
+    CONFIG_PAGE_KEY,
+    AdAiDataCenterHttpMapper,
+)
 
 
 class FakeHttpClient:
@@ -27,6 +30,29 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
+
+    def test_declares_custom_config_page_key(self):
+        self.assertEqual(CONFIG_PAGE_KEY, "adAiDataCenterHttp")
+
+    def test_dimension_and_metric_curl_sends_real_http_request_without_cookie(self):
+        op = AdAiDataCenterHttpMapper(
+            endpoint=(
+                "https://bpboost.bytedance.net/api/query-site/openapi/"
+                "dimension-and-metric?datasourceGroupId=11308"
+            ),
+            method="GET",
+            headers={
+                "Project-Identifier": "ai_data_center",
+            },
+            input_fields=["datasourceGroupId"],
+            output_field="dimension_and_metric",
+            auto_op_parallelism=False,
+        )
+        dataset = Dataset.from_list([{"datasourceGroupId": "11308"}])
+
+        result = op.run(dataset).to_list()
+
+        self.assertIsInstance(result[0]["dimension_and_metric"], dict)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_writes_http_response_to_output_field(self, mock_client_cls):

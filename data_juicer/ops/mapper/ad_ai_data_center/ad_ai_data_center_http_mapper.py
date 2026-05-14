@@ -2,6 +2,7 @@ from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.http_utils import HttpClient
 
 OP_NAME = "ad_ai_data_center_http_mapper"
+CONFIG_PAGE_KEY = "adAiDataCenterHttp"
 
 
 @OPERATORS.register_module(OP_NAME)

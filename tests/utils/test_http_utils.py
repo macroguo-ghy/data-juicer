@@ -1,4 +1,3 @@
-import os
 import unittest
 from unittest.mock import Mock, patch
 
@@ -42,18 +41,13 @@ class HttpClientTest(unittest.TestCase):
             "error": None,
         })
 
-    def test_get_dimension_and_metric_sends_real_http_request(self):
-        headers = {
-            "Project-Identifier": "ai_data_center",
-        }
-        cookie = os.environ.get("BPBOOST_COOKIE")
-        if cookie:
-            headers["Cookie"] = cookie
-
+    def test_dimension_and_metric_curl_sends_real_http_request_without_cookie(self):
         client = HttpClient(
             endpoint="https://bpboost.bytedance.net/api/query-site/openapi/dimension-and-metric",
             method="GET",
-            headers=headers,
+            headers={
+                "Project-Identifier": "ai_data_center",
+            },
         )
         result = client.request(params={"datasourceGroupId": "11308"})
 
