@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from jsonargparse import Namespace, namespace_to_dict
 from loguru import logger
@@ -203,7 +203,103 @@ def import_from_path(import_path: str):
     return getattr(module, attr_name)
 
 
-def export_lark_sheet_to_local(
+def parse_lark_sheet_location(lark_path: str, sheet_id: str | None = None) -> Tuple[str, str]:
+    if not isinstance(lark_path, str) or not lark_path.strip():
+        raise ValueError("Lark loader requires a non-empty `lark_path`.")
+
+    lark_path = lark_path.strip()
+    parsed = urlparse(lark_path)
+    if parsed.scheme or parsed.netloc:
+        spreadsheet_token = posixpath.basename(parsed.path.rstrip("/"))
+        query_sheet_ids = parse_qs(parsed.query).get("sheet", [])
+        url_sheet_id = query_sheet_ids[0] if query_sheet_ids else None
+    else:
+        spreadsheet_token = lark_path.rstrip("/")
+        url_sheet_id = None
+
+    if not spreadsheet_token:
+        raise ValueError("Unable to parse Lark spreadsheet token from `lark_path`.")
+
+    if sheet_id is not None:
+        if not isinstance(sheet_id, str) or not sheet_id.strip():
+            raise ValueError("`sheet_id` must be a non-empty string when configured.")
+        sheet_id = sheet_id.strip()
+
+    if url_sheet_id is not None and sheet_id is not None and url_sheet_id != sheet_id:
+        raise ValueError(
+            f"Lark `sheet_id` conflict: URL query has `{url_sheet_id}`, "
+            f"but config has `{sheet_id}`."
+        )
+
+    resolved_sheet_id = sheet_id or url_sheet_id
+    if not resolved_sheet_id:
+        raise ValueError("Lark loader requires a sheet id in `lark_path` query `sheet` or in `sheet_id`.")
+
+    return spreadsheet_token, resolved_sheet_id
+
+
+def _is_lark_export_permission_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "lark export task creation failed" in message and ("code=1069902" in message or "no permission" in message)
+
+
+def _normalize_lark_csv_cell(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return ""
+    return value
+
+
+def _write_lark_sheet_values_to_csv(values: list[list[Any]], output_path: str) -> str:
+    ensure_parent(output_path)
+    with open(output_path, "w", encoding="utf-8", newline="") as wf:
+        writer = csv.writer(wf)
+        for row in values:
+            writer.writerow([_normalize_lark_csv_cell(cell) for cell in row])
+    return output_path
+
+
+def read_lark_sheet_to_csv(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    sheet_id: str | None = None,
+    value_render_option: str = "ToString",
+) -> str:
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    encoded_range = quote(sheet_id, safe="")
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.GET)
+        .uri(
+            f"/open-apis/sheets/v2/spreadsheets/{token}/values/{encoded_range}"
+            f"?valueRenderOption={value_render_option}"
+        )
+        .token_types({lark.AccessTokenType.TENANT})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet read failed: code={response.code}, msg={response.msg}")
+
+    content = getattr(getattr(response, "raw", None), "content", None)
+    if content is None:
+        raise RuntimeError("Lark sheet read failed: empty response content")
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    values = payload.get("data", {}).get("valueRange", {}).get("values", [])
+    if not values:
+        raise RuntimeError("Lark sheet read returned no values")
+    return _write_lark_sheet_values_to_csv(values, output_path)
+
+
+def _export_lark_sheet_with_drive(
     lark_path: str,
     lark_app_id: str,
     lark_app_secret: str,
@@ -213,15 +309,13 @@ def export_lark_sheet_to_local(
     sheet_id: str | None = None,
     wait_export_time_seconds: int = 60,
 ) -> str:
-    lark = import_optional_dependency("lark_oapi", extra_name="internal_io")
-    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1", extra_name="internal_io")
+    lark = import_optional_dependency("lark_oapi")
+    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
 
     client = (
         lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
     )
-    token = lark_path.split("/")[-1].split("?")[0]
-    if sheet_id is None and "?" in lark_path:
-        sheet_id = lark_path.split("?")[1].split("=")[1]
 
     request = (
         drive_v1.CreateExportTaskRequest.builder()
@@ -250,7 +344,8 @@ def export_lark_sheet_to_local(
             break
         time.sleep(1)
     if ticket_response is None or ticket_response.data.result.job_status != 0:
-        raise RuntimeError("Lark export task did not finish successfully")
+        job_status = None if ticket_response is None else ticket_response.data.result.job_status
+        raise RuntimeError(f"Lark export task did not finish successfully, job_status={job_status}")
 
     download_request = (
         drive_v1.DownloadExportTaskRequest.builder().file_token(ticket_response.data.result.file_token).build()
@@ -265,6 +360,42 @@ def export_lark_sheet_to_local(
     return output_path
 
 
+def export_lark_sheet_to_local(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    file_extension: str = "csv",
+    document_type: str = "sheet",
+    sheet_id: str | None = None,
+    wait_export_time_seconds: int = 60,
+) -> str:
+    try:
+        return _export_lark_sheet_with_drive(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            file_extension=file_extension,
+            document_type=document_type,
+            sheet_id=sheet_id,
+            wait_export_time_seconds=wait_export_time_seconds,
+        )
+    except RuntimeError as exc:
+        if not _is_lark_export_permission_error(exc):
+            raise
+        if file_extension != "csv" or document_type != "sheet":
+            raise
+        logger.warning("Lark export is not permitted; falling back to sheet values read.")
+        return read_lark_sheet_to_csv(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            sheet_id=sheet_id,
+        )
+
+
 def upload_file_to_lark_sheet(
     local_path: str,
     lark_path: str,
@@ -272,8 +403,8 @@ def upload_file_to_lark_sheet(
     lark_app_secret: str,
     cell_range: str,
 ) -> None:
-    lark = import_optional_dependency("lark_oapi", extra_name="internal_io")
-    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1", extra_name="internal_io")
+    lark = import_optional_dependency("lark_oapi")
+    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1")
 
     client = (
         lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()

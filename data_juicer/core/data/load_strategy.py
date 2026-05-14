@@ -11,7 +11,7 @@ from jsonargparse import Namespace
 from loguru import logger
 
 from data_juicer.core.data import DJDataset
-from data_juicer.core.data.config_validator import ConfigValidator
+from data_juicer.core.data.config_validator import ConfigValidationError, ConfigValidator
 from data_juicer.core.io_utils import (
     copy_uri_to_local,
     export_lark_sheet_to_local,
@@ -19,6 +19,7 @@ from data_juicer.core.io_utils import (
     infer_local_name_from_uri,
     make_staging_dir,
     materialize_duckdb_query,
+    parse_lark_sheet_location,
     read_magnus_to_pandas,
     read_magnus_to_ray,
     run_tqs_query,
@@ -1219,48 +1220,89 @@ class RayDuckDBDataLoadStrategy(RayStagedRemoteLoadStrategy):
         return self._load_staged_local_dataset(staged_path, **kwargs)
 
 
-@DataLoadStrategyRegistry.register("default", "remote", "lark")
-class DefaultLarkDataLoadStrategy(DefaultStagedRemoteLoadStrategy):
+def _validate_lark_csv_extension(file_extension: str | None):
+    if file_extension is None:
+        return
+    if file_extension != "csv":
+        raise ValueError("Lark loader currently supports only csv export because Excel loading is not supported.")
+
+
+def _validate_lark_document_type(document_type: str | None):
+    if document_type is None:
+        return
+    if document_type != "sheet":
+        raise ValueError("Lark loader currently supports only `document_type: sheet`.")
+
+
+class LarkDataLoadMixin:
     CONFIG_VALIDATION_RULES = {
         "required_fields": ["lark_path", "lark_app_id", "lark_app_secret"],
-        "field_types": {"lark_path": str},
-        "custom_validators": {},
+        "field_types": {
+            "lark_path": str,
+            "lark_app_id": str,
+            "lark_app_secret": str,
+            "sheet_id": str,
+            "file_extension": str,
+            "document_type": str,
+        },
+        "custom_validators": {
+            "file_extension": _validate_lark_csv_extension,
+            "document_type": _validate_lark_document_type,
+        },
     }
 
-    def load_data(self, **kwargs):
-        kwargs = self.get_load_kwargs(**kwargs)
-        output_path = self._make_stage_path(f"lark:{self.ds_config['lark_path']}", default_name="dataset.csv")
-        staged_path = export_lark_sheet_to_local(
+    def validate_config(self, ds_config: Dict) -> None:
+        super().validate_config(ds_config)
+        try:
+            parse_lark_sheet_location(ds_config["lark_path"], sheet_id=ds_config.get("sheet_id"))
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+
+    def _get_lark_csv_stage_path(self) -> str:
+        file_extension = self.ds_config.get("file_extension", "csv")
+        token, sheet_id = parse_lark_sheet_location(self.ds_config["lark_path"], sheet_id=self.ds_config.get("sheet_id"))
+        return self._make_stage_path(
+            f"lark:{token}:{sheet_id}:{file_extension}",
+            default_name=f"dataset.{file_extension}",
+        )
+
+    def _export_lark_csv(self) -> str:
+        file_extension = self.ds_config.get("file_extension", "csv")
+        _, sheet_id = parse_lark_sheet_location(self.ds_config["lark_path"], sheet_id=self.ds_config.get("sheet_id"))
+        return export_lark_sheet_to_local(
             lark_path=self.ds_config["lark_path"],
             lark_app_id=self.ds_config["lark_app_id"],
             lark_app_secret=self.ds_config["lark_app_secret"],
-            output_path=output_path,
-            file_extension=self.ds_config.get("file_extension", "csv"),
+            output_path=self._get_lark_csv_stage_path(),
+            file_extension=file_extension,
             document_type=self.ds_config.get("document_type", "sheet"),
-            sheet_id=self.ds_config.get("sheet_id"),
+            sheet_id=sheet_id,
             wait_export_time_seconds=self.ds_config.get("wait_export_time_seconds", 60),
         )
+
+
+@DataLoadStrategyRegistry.register("default", "remote", "lark")
+class DefaultLarkDataLoadStrategy(LarkDataLoadMixin, DefaultStagedRemoteLoadStrategy):
+    def load_data(self, **kwargs):
+        kwargs = self.get_load_kwargs(**kwargs)
+        staged_path = self._export_lark_csv()
         return self._load_staged_local_dataset(staged_path, **kwargs)
 
 
 @DataLoadStrategyRegistry.register("ray", "remote", "lark")
-class RayLarkDataLoadStrategy(RayStagedRemoteLoadStrategy):
-    CONFIG_VALIDATION_RULES = DefaultLarkDataLoadStrategy.CONFIG_VALIDATION_RULES
-
+class RayLarkDataLoadStrategy(LarkDataLoadMixin, StagedLocalLoadMixin, RayDataLoadStrategy):
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
-        output_path = self._make_stage_path(f"lark:{self.ds_config['lark_path']}", default_name="dataset.csv")
-        staged_path = export_lark_sheet_to_local(
-            lark_path=self.ds_config["lark_path"],
-            lark_app_id=self.ds_config["lark_app_id"],
-            lark_app_secret=self.ds_config["lark_app_secret"],
-            output_path=output_path,
-            file_extension=self.ds_config.get("file_extension", "csv"),
-            document_type=self.ds_config.get("document_type", "sheet"),
-            sheet_id=self.ds_config.get("sheet_id"),
-            wait_export_time_seconds=self.ds_config.get("wait_export_time_seconds", 60),
-        )
-        return self._load_staged_local_dataset(staged_path, **kwargs)
+        staged_path = self._export_lark_csv()
+        local_ds_config = dict(self.ds_config)
+        local_ds_config["type"] = "local"
+        local_ds_config["path"] = staged_path
+        local_dataset = DefaultLocalDataLoadStrategy(local_ds_config, self.cfg).load_data(**kwargs)
+
+        import ray
+        from data_juicer.core.data.ray_dataset import RayDataset
+
+        return RayDataset(ray.data.from_arrow(local_dataset.data.table), dataset_path=staged_path, cfg=self.cfg)
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "magnus")
