@@ -28,7 +28,10 @@
 
 ## Contract-First Testing
 
-- For clear bug fixes and behavior changes, use contract-first TDD: define the observable contract, write the smallest failing test for the production failure or intended behavior, then implement the minimal fix. For config switches, IO adapters, exporters, SDK boundaries, and distributed runtime paths, check this matrix before choosing test scope:
+- For clear bug fixes and behavior changes, use contract-first TDD: tests define observable behavior through the public interface, not private methods, internal call order, or imagined implementation shape. A good test should read like a small specification of what the system does and should survive internal refactors that preserve behavior.
+- Use vertical red-green-refactor slices, not horizontal "write all tests, then all code" batches. Write one failing test for one behavior, implement the minimal production change to make it pass, then repeat with the next learned behavior. Do not add speculative code or test structure for future cases before the current slice is green.
+- Refactor only after the relevant tests are green. During refactor, keep tests pointed at the same public contract and rerun the focused suite after each meaningful change.
+- For config switches, IO adapters, exporters, SDK boundaries, and distributed runtime paths, check this matrix before choosing test scope:
 
 ```text
 resource state: missing / already exists
