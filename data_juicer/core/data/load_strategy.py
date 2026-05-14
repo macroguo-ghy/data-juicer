@@ -1302,7 +1302,7 @@ class RayLarkDataLoadStrategy(LarkDataLoadMixin, StagedLocalLoadMixin, RayDataLo
         import ray
         from data_juicer.core.data.ray_dataset import RayDataset
 
-        return RayDataset(ray.data.from_pandas(local_dataset.to_pandas()), dataset_path=staged_path, cfg=self.cfg)
+        return RayDataset(ray.data.from_arrow(local_dataset.data.table), dataset_path=staged_path, cfg=self.cfg)
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "magnus")

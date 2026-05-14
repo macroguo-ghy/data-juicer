@@ -1,7 +1,9 @@
 # Lark Sheet Loader Demo
 
 This demo shows how to load one Lark Sheet as a Data-Juicer dataset. The loader
-exports the sheet as CSV and then uses the normal CSV loading path.
+exports the sheet as CSV and then uses the normal CSV loading path. If Drive
+export is not permitted but sheet values can be read, it falls back to reading
+cells and writing the staged CSV.
 
 Before running, replace every placeholder in the YAML files:
 

@@ -24,7 +24,9 @@ from data_juicer.core.data.load_strategy import (
 from data_juicer.core.data.config_validator import ConfigValidationError
 from data_juicer.core.io_utils import (
     _ensure_csv_field_size_limit,
+    _write_lark_sheet_values_to_csv,
     build_tqs_client_result_limited_query,
+    export_lark_sheet_to_local,
     parse_lark_sheet_location,
     run_tqs_query_to_records,
 )
@@ -1205,6 +1207,77 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(ValueError, "requires a sheet id"):
             parse_lark_sheet_location("shtcn123")
 
+    def test_write_lark_sheet_values_to_csv_serializes_complex_cells(self):
+        output_path = osp.join(self.tmp_dir, "values.csv")
+
+        result = _write_lark_sheet_values_to_csv(
+            [
+                ["text", "meta", "empty"],
+                ["hello", {"score": 0.5}, None],
+                ["world", ["a", "b"], ""],
+            ],
+            output_path,
+        )
+
+        self.assertEqual(result, output_path)
+        with open(output_path, encoding="utf-8", newline="") as rf:
+            rows = list(csv.reader(rf))
+        self.assertEqual(rows[0], ["text", "meta", "empty"])
+        self.assertEqual(rows[1], ["hello", '{"score": 0.5}', ""])
+        self.assertEqual(rows[2], ["world", '["a", "b"]', ""])
+
+    @patch("data_juicer.core.io_utils.read_lark_sheet_to_csv")
+    @patch("data_juicer.core.io_utils._export_lark_sheet_with_drive")
+    def test_export_lark_sheet_to_local_falls_back_to_read_on_export_permission_error(
+        self,
+        mock_export_lark_sheet_with_drive,
+        mock_read_lark_sheet_to_csv,
+    ):
+        output_path = osp.join(self.tmp_dir, "fallback.csv")
+        mock_export_lark_sheet_with_drive.side_effect = RuntimeError(
+            "Lark export task creation failed: code=1069902, msg=no permission"
+        )
+        mock_read_lark_sheet_to_csv.return_value = output_path
+
+        result = export_lark_sheet_to_local(
+            lark_path=self.base_config["lark_path"],
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            output_path=output_path,
+            sheet_id="abc",
+        )
+
+        self.assertEqual(result, output_path)
+        mock_read_lark_sheet_to_csv.assert_called_once_with(
+            lark_path=self.base_config["lark_path"],
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            output_path=output_path,
+            sheet_id="abc",
+        )
+
+    @patch("data_juicer.core.io_utils.read_lark_sheet_to_csv")
+    @patch("data_juicer.core.io_utils._export_lark_sheet_with_drive")
+    def test_export_lark_sheet_to_local_keeps_non_permission_export_errors(
+        self,
+        mock_export_lark_sheet_with_drive,
+        mock_read_lark_sheet_to_csv,
+    ):
+        output_path = osp.join(self.tmp_dir, "fallback.csv")
+        mock_export_lark_sheet_with_drive.side_effect = RuntimeError(
+            "Lark export task polling failed: code=999, msg=internal error"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "polling failed"):
+            export_lark_sheet_to_local(
+                lark_path=self.base_config["lark_path"],
+                lark_app_id="app_id",
+                lark_app_secret="app_secret",
+                output_path=output_path,
+                sheet_id="abc",
+            )
+        mock_read_lark_sheet_to_csv.assert_not_called()
+
     def test_lark_config_rejects_non_csv_extension(self):
         ds_config = dict(self.base_config, file_extension="xlsx")
 
@@ -1253,7 +1326,7 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         mock_default_load_data.assert_called_once_with(num_proc=2)
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
-    @patch("ray.data.from_pandas")
+    @patch("ray.data.from_arrow")
     @patch("data_juicer.core.data.load_strategy.RayLocalJsonDataLoadStrategy.load_data")
     @patch("data_juicer.core.data.load_strategy.DefaultLocalDataLoadStrategy.load_data")
     @patch("data_juicer.core.data.load_strategy.export_lark_sheet_to_local")
@@ -1262,16 +1335,16 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         mock_export_lark_sheet_to_local,
         mock_default_load_data,
         mock_ray_local_load_data,
-        mock_ray_from_pandas,
+        mock_ray_from_arrow,
         mock_ray_dataset,
     ):
         local_dataset = MagicMock(name="local_dataset")
-        pandas_df = MagicMock(name="pandas_df")
+        arrow_table = MagicMock(name="arrow_table")
         ray_data = MagicMock(name="ray_data")
         wrapped_dataset = MagicMock(name="wrapped_ray_dataset")
-        local_dataset.to_pandas.return_value = pandas_df
+        local_dataset.data.table = arrow_table
         mock_default_load_data.return_value = local_dataset
-        mock_ray_from_pandas.return_value = ray_data
+        mock_ray_from_arrow.return_value = ray_data
         mock_ray_dataset.return_value = wrapped_dataset
         mock_export_lark_sheet_to_local.side_effect = lambda **kwargs: kwargs["output_path"]
 
@@ -1280,8 +1353,8 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         self.assertEqual(result, wrapped_dataset)
         mock_ray_local_load_data.assert_not_called()
         mock_default_load_data.assert_called_once_with(num_proc=2)
-        local_dataset.to_pandas.assert_called_once_with()
-        mock_ray_from_pandas.assert_called_once_with(pandas_df)
+        local_dataset.to_pandas.assert_not_called()
+        mock_ray_from_arrow.assert_called_once_with(arrow_table)
         mock_ray_dataset.assert_called_once()
         self.assertEqual(mock_ray_dataset.call_args.args, (ray_data,))
         ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs

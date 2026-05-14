@@ -61,9 +61,10 @@ dataset:
 ### 远程 Lark Sheet 数据集
 
 `remote/lark` 数据源会将一个 Lark Sheet 导出为 CSV，然后复用普通 CSV
-加载链路。配合下面 demo pipeline 使用时，源表需要包含 `text` 列。配置的应用需要具备导出目标表格的权限。
+加载链路。如果配置的应用可以读取表格、但无法创建 Drive 导出任务，loader
+会自动降级为读取表格单元格并写入暂存 CSV。配合下面 demo pipeline 使用时，源表需要包含 `text` 列。
 
-当前只支持 CSV 导出。sheet id 可以写在 `lark_path` 的 query 参数 `sheet`
+当前只支持 CSV 加载。sheet id 可以写在 `lark_path` 的 query 参数 `sheet`
 中，也可以通过显式 `sheet_id` 字段指定。如果两边都配置，必须指向同一个 sheet。
 
 ```yaml

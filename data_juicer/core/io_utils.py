@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from jsonargparse import Namespace, namespace_to_dict
 from loguru import logger
@@ -238,7 +238,68 @@ def parse_lark_sheet_location(lark_path: str, sheet_id: str | None = None) -> Tu
     return spreadsheet_token, resolved_sheet_id
 
 
-def export_lark_sheet_to_local(
+def _is_lark_export_permission_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "lark export task creation failed" in message and ("code=1069902" in message or "no permission" in message)
+
+
+def _normalize_lark_csv_cell(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return ""
+    return value
+
+
+def _write_lark_sheet_values_to_csv(values: list[list[Any]], output_path: str) -> str:
+    ensure_parent(output_path)
+    with open(output_path, "w", encoding="utf-8", newline="") as wf:
+        writer = csv.writer(wf)
+        for row in values:
+            writer.writerow([_normalize_lark_csv_cell(cell) for cell in row])
+    return output_path
+
+
+def read_lark_sheet_to_csv(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    sheet_id: str | None = None,
+    value_render_option: str = "ToString",
+) -> str:
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    encoded_range = quote(sheet_id, safe="")
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.GET)
+        .uri(
+            f"/open-apis/sheets/v2/spreadsheets/{token}/values/{encoded_range}"
+            f"?valueRenderOption={value_render_option}"
+        )
+        .token_types({lark.AccessTokenType.TENANT})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet read failed: code={response.code}, msg={response.msg}")
+
+    content = getattr(getattr(response, "raw", None), "content", None)
+    if content is None:
+        raise RuntimeError("Lark sheet read failed: empty response content")
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    values = payload.get("data", {}).get("valueRange", {}).get("values", [])
+    if not values:
+        raise RuntimeError("Lark sheet read returned no values")
+    return _write_lark_sheet_values_to_csv(values, output_path)
+
+
+def _export_lark_sheet_with_drive(
     lark_path: str,
     lark_app_id: str,
     lark_app_secret: str,
@@ -297,6 +358,42 @@ def export_lark_sheet_to_local(
     with open(output_path, "wb") as wf:
         wf.write(download_response.file.read())
     return output_path
+
+
+def export_lark_sheet_to_local(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    file_extension: str = "csv",
+    document_type: str = "sheet",
+    sheet_id: str | None = None,
+    wait_export_time_seconds: int = 60,
+) -> str:
+    try:
+        return _export_lark_sheet_with_drive(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            file_extension=file_extension,
+            document_type=document_type,
+            sheet_id=sheet_id,
+            wait_export_time_seconds=wait_export_time_seconds,
+        )
+    except RuntimeError as exc:
+        if not _is_lark_export_permission_error(exc):
+            raise
+        if file_extension != "csv" or document_type != "sheet":
+            raise
+        logger.warning("Lark export is not permitted; falling back to sheet values read.")
+        return read_lark_sheet_to_csv(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            sheet_id=sheet_id,
+        )
 
 
 def upload_file_to_lark_sheet(

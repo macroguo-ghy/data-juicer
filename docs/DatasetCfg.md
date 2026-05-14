@@ -61,11 +61,12 @@ dataset:
 ### Remote Lark Sheet Dataset
 
 The `remote/lark` dataset source loads one Lark Sheet by exporting it as CSV
-and then reusing the normal CSV loading path. The source sheet must contain a
-`text` column when used with the demo pipeline below. The configured app must
-have permission to export the target sheet.
+and then reusing the normal CSV loading path. If the configured app can read the
+sheet but cannot create a Drive export task, the loader falls back to reading
+sheet cell values and writing them to the staged CSV. The source sheet must
+contain a `text` column when used with the demo pipeline below.
 
-Only CSV export is supported. Specify the sheet id either in the `lark_path`
+Only CSV loading is supported. Specify the sheet id either in the `lark_path`
 query parameter `sheet` or in the explicit `sheet_id` field. If both are set,
 they must point to the same sheet.
 
