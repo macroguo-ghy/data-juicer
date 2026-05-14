@@ -6,7 +6,7 @@ import tempfile
 import shutil
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_extract_frames_mapper import \
+from data_juicer.ops.mapper.video.video_extract_frames_mapper import \
     VideoExtractFramesMapper
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.mm_utils import SpecialTokens
@@ -31,7 +31,7 @@ class VideoExtractFramesMapperTest(DataJuicerTestCaseBase):
             shutil.rmtree(osp.dirname(default_frame_dir_prefix))
 
     def _get_default_frame_dir_prefix(self):
-        from data_juicer.ops.mapper.video_extract_frames_mapper import OP_NAME
+        from data_juicer.ops.mapper.video.video_extract_frames_mapper import OP_NAME
         default_frame_dir_prefix = osp.abspath(osp.join(self.data_path, 
             f'{Fields.multimodal_data_output_dir}/{OP_NAME}/'))
         return default_frame_dir_prefix

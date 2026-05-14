@@ -1,5 +1,5 @@
 import unittest
-from data_juicer.ops.mapper.mllm_mapper import MllmMapper
+from data_juicer.ops.mapper.text.mllm_mapper import MllmMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 import os
 

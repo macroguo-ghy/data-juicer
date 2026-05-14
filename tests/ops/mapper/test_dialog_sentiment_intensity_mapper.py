@@ -3,7 +3,7 @@ import unittest
 from loguru import logger
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.dialog_sentiment_intensity_mapper import DialogSentimentIntensityMapper
+from data_juicer.ops.mapper.text.dialog_sentiment_intensity_mapper import DialogSentimentIntensityMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, FROM_FORK
 from data_juicer.utils.constant import Fields, MetaKeys
 

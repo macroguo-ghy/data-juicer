@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import ast
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
@@ -51,6 +53,25 @@ _LAZY_ATTRS = {
 }
 
 
+def _op_module_index_keys(module_path: Path, module_name: str) -> list[str]:
+    keys = [module_name]
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return keys
+
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "OP_NAME" for target in node.targets):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            keys.append(node.value.value)
+    return keys
+
+
 def _import_module(import_path: str) -> None:
     if import_path in _LOADED_IMPORT_PATHS:
         return
@@ -70,7 +91,9 @@ def _op_module_index() -> dict[str, list[str]]:
             module_name = module_info.name.rsplit(".", 1)[-1]
             if module_name.startswith("_"):
                 continue
-            index.setdefault(module_name, []).append(module_info.name)
+            module_path = Path(module_info.module_finder.path) / f"{module_name}.py"
+            for key in _op_module_index_keys(module_path, module_name):
+                index.setdefault(key, []).append(module_info.name)
     return index
 
 

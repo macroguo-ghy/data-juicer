@@ -3,10 +3,38 @@ from functools import partial
 
 from loguru import logger
 
+from data_juicer.core.io_utils import _is_ray_data_checkpoint_enabled
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.file_utils import Sizes, byte_size_to_size_str
 from data_juicer.utils.model_utils import filter_arguments
 from data_juicer.utils.webdataset_utils import reconstruct_custom_webdataset_format
+
+
+def _dataset_columns_no_fetch(dataset):
+    try:
+        columns = dataset.columns(fetch_if_missing=False)
+        if columns is not None:
+            return columns
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    try:
+        schema = dataset.schema(fetch_if_missing=False)
+    except TypeError:
+        try:
+            schema = dataset.schema()
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+    base_schema = getattr(schema, "base_schema", schema)
+    names = getattr(base_schema, "names", None)
+    if names is not None:
+        return list(names)
+    return None
 
 
 class RayExporter:
@@ -131,19 +159,31 @@ class RayExporter:
         :param columns: the columns to export.
         :return:
         """
-        # Handle empty dataset case - Ray returns None for columns() on empty datasets
-        # Check if dataset is empty by calling columns() regardless of columns parameter
-        cols = dataset.columns()
+        # Handle empty dataset case - Ray returns None for columns() on empty datasets.
+        # In Ray Data checkpoint mode, avoid columns(fetch_if_missing=True) because
+        # it can execute a Limit[1] action before the sink write.
+        checkpoint_enabled = _is_ray_data_checkpoint_enabled()
+        if checkpoint_enabled:
+            cols = columns if columns is not None else _dataset_columns_no_fetch(dataset)
+        else:
+            cols = dataset.columns()
         if cols is None:
-            # Empty dataset with unknown schema - create an empty file
-            logger.warning(f"Dataset is empty, creating empty export file at {export_path}")
-            os.makedirs(os.path.dirname(export_path) or ".", exist_ok=True)
-            with open(export_path, "w"):
-                pass  # Create empty file
-            return
+            if checkpoint_enabled:
+                logger.warning(
+                    "Dataset schema is unknown while Ray Data checkpointing is enabled; "
+                    "exporting without eager column pruning."
+                )
+                cols = []
+            else:
+                # Empty dataset with unknown schema - create an empty file
+                logger.warning(f"Dataset is empty, creating empty export file at {export_path}")
+                os.makedirs(os.path.dirname(export_path) or ".", exist_ok=True)
+                with open(export_path, "w"):
+                    pass  # Create empty file
+                return
 
         # Use provided columns or infer from dataset
-        feature_fields = columns if columns else cols
+        feature_fields = columns if columns is not None else cols
         removed_fields = []
         if not self.keep_stats_in_res_ds:
             extra_fields = {Fields.stats, Fields.meta}

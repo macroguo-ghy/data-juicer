@@ -29,6 +29,7 @@ from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
 from data_juicer.ops.op_fusion import FUSION_STRATEGIES
 from data_juicer.utils.constant import RAY_JOB_ENV_VAR
+from data_juicer.utils.metrics_utils import set_metrics_context
 from data_juicer.utils.logger_utils import setup_logger
 from data_juicer.utils.mm_utils import SpecialTokens
 from data_juicer.utils.ray_utils import is_ray_mode
@@ -417,6 +418,30 @@ def build_base_parser() -> ArgumentParser:
         "checkpoint are changed, all ops will be rerun from the "
         "beginning.",
     )
+    parser.add_argument(
+        "--ray_data_checkpoint.enabled",
+        type=bool,
+        default=False,
+        help="Ray Data source-to-sink checkpointing is temporarily unavailable; true values are ignored.",
+    )
+    parser.add_argument(
+        "--ray_data_checkpoint.dir",
+        type=str,
+        default=None,
+        help="Ray Data checkpoint directory. Supports {work_dir} and {job_id} placeholders.",
+    )
+    parser.add_argument(
+        "--ray_data_checkpoint.delete_no_checkpoint_files",
+        type=bool,
+        default=False,
+        help="Whether Ray Data should delete sink files that are not recorded in checkpoint metadata.",
+    )
+    parser.add_argument(
+        "--ray_data_checkpoint.write_interval",
+        type=int,
+        default=None,
+        help="Optional Ray Data checkpoint metadata write interval. Leave unset to use Ray's default.",
+    )
     # Enhanced checkpoint configuration for PartitionedRayExecutor
     parser.add_argument(
         "--checkpoint.enabled",
@@ -620,6 +645,22 @@ def build_base_parser() -> ArgumentParser:
         help="Whether to save all stats to only one file. Only used in " "Analysis.",
     )
     parser.add_argument("--ray_address", type=str, default="auto", help="The address of the Ray cluster.")
+    parser.add_argument(
+        "--ray_collect_real_metrics",
+        type=bool,
+        default=False,
+        help="Whether RayExecutor should eagerly materialize and count the processed "
+        "Ray Dataset to collect real output metrics before export. Disabled by "
+        "default to preserve Ray Data lazy streaming execution for large datasets.",
+    )
+    parser.add_argument(
+        "--ray_dry_run_plan",
+        type=bool,
+        default=False,
+        help="Whether RayExecutor should only build and print the Ray Data logical/physical "
+        "plan, then skip materialization and export. Use this to inspect a local demo "
+        "pipeline without running the full Ray Data job.",
+    )
 
     # Partitioning configuration for PartitionedRayExecutor
     # Support both flat and nested partition configuration
@@ -958,6 +999,10 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
     # Call resolve_job_directories to finalize all job-related paths
     cfg = resolve_job_id(cfg)
     cfg = resolve_job_directories(cfg)
+    set_metrics_context(
+        job_id=getattr(cfg, "job_id", None),
+        ray_address=getattr(cfg, "ray_address", None),
+    )
     if getattr(cfg, "export", None):
         export_cfg = _plain_cfg_value(cfg.export)
         placeholders = {"work_dir": cfg.work_dir, "job_id": getattr(cfg, "job_id", "")}
@@ -1004,7 +1049,12 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
     from data_juicer.utils.resource_utils import cpu_count
 
     sys_cpu_count = cpu_count(cfg)
-    if cfg.get("np", None) and cfg.np > sys_cpu_count:
+    if cfg.get("np", None) and (sys_cpu_count is None or sys_cpu_count <= 0):
+        logger.warning(
+            f"Skip adjusting number of processes `np` because the detected "
+            f"cpu count [{sys_cpu_count}] is not positive."
+        )
+    elif cfg.get("np", None) and cfg.np > sys_cpu_count:
         logger.warning(
             f"Number of processes `np` is set as [{cfg.np}], which "
             f"is larger than the cpu count [{sys_cpu_count}]. Due "
@@ -1882,6 +1932,13 @@ def resolve_job_directories(cfg):
                 if new_val != val:
                     setattr(cfg, key, new_val)
                     changed = True
+        ray_data_checkpoint = getattr(cfg, "ray_data_checkpoint", None)
+        val = getattr(ray_data_checkpoint, "dir", None)
+        if isinstance(val, str):
+            new_val = val.format(**placeholder_map)
+            if new_val != val:
+                ray_data_checkpoint.dir = new_val
+                changed = True
         # update placeholder_map in case work_dir or job_id changed
         placeholder_map = {"work_dir": cfg.work_dir, "job_id": getattr(cfg, "job_id", "")}
         if not changed:

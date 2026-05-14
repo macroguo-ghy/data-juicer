@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.whitespace_normalization_mapper import \
+from data_juicer.ops.mapper.text.whitespace_normalization_mapper import \
     WhitespaceNormalizationMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

@@ -38,6 +38,7 @@ __all__ = [
     "PhraseGroundingRecallFilter",
     "SpecialCharactersFilter",
     "SpecifiedFieldFilter",
+    "SpecifiedFieldNonEmptyFilter",
     "SpecifiedNumericFieldFilter",
     "StopWordsFilter",
     "SuffixFilter",
@@ -66,6 +67,7 @@ __all__ = [
 
 NON_STATS_FILTERS = [
     "suffix_filter",
+    "specified_field_non_empty_filter",
     "video_tagging_from_frames_filter",
 ]
 

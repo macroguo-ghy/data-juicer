@@ -3,7 +3,7 @@ import unittest
 
 from loguru import logger
 
-from data_juicer.ops.mapper.generate_qa_from_examples_mapper import \
+from data_juicer.ops.mapper.qa.generate_qa_from_examples_mapper import \
     GenerateQAFromExamplesMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

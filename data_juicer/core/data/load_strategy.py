@@ -2,9 +2,11 @@ import fnmatch
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
+from typing import Any, Dict, Optional, Type
+from urllib.parse import urlparse
 
 import datasets
+import pyarrow as pa
 from jsonargparse import Namespace
 from loguru import logger
 
@@ -13,12 +15,14 @@ from data_juicer.core.data.config_validator import ConfigValidator
 from data_juicer.core.io_utils import (
     copy_uri_to_local,
     export_lark_sheet_to_local,
+    get_pyarrow_filesystem,
     infer_local_name_from_uri,
     make_staging_dir,
     materialize_duckdb_query,
     read_magnus_to_pandas,
     read_magnus_to_ray,
     run_tqs_query,
+    run_tqs_query_to_records,
 )
 from data_juicer.download.downloader import validate_snapshot_format
 from data_juicer.format.formatter import unify_format
@@ -28,6 +32,95 @@ from data_juicer.utils.s3_utils import create_pyarrow_s3_filesystem, validate_s3
 # based on executor type and data source type, use different
 # data load strategy to product corresponding datasets
 # DJDataset, RayDataset, DaskDataset, etc
+
+_RAY_PARQUET_READ_KWARGS = {
+    "columns",
+    "parallelism",
+    "num_cpus",
+    "num_gpus",
+    "memory",
+    "ray_remote_args",
+    "tensor_column_schema",
+    "partition_filter",
+    "partitioning",
+    "shuffle",
+    "include_paths",
+    "file_extensions",
+    "concurrency",
+    "override_num_blocks",
+}
+
+
+def _get_webhdfs_pyarrow_filesystem(uri: str, webhdfs_config: Dict[str, Any] | None = None):
+    import fsspec
+    import pyarrow.fs as pa_fs
+
+    webhdfs_config = webhdfs_config or {}
+    parsed = urlparse(uri)
+    fs_path = parsed.path or "/"
+
+    filesystem_kwargs = {
+        "host": webhdfs_config.get("host") or parsed.hostname or "localhost",
+        "port": webhdfs_config.get("port", 9870),
+    }
+    if webhdfs_config.get("user") is not None:
+        filesystem_kwargs["user"] = webhdfs_config["user"]
+
+    for key, value in webhdfs_config.items():
+        if key not in {"host", "port", "user"}:
+            filesystem_kwargs[key] = value
+
+    webhdfs_fs = fsspec.filesystem("webhdfs", **filesystem_kwargs)
+    return pa_fs.PyFileSystem(pa_fs.FSSpecHandler(webhdfs_fs)), fs_path
+
+
+def _validate_ray_hdfs_filesystem(filesystem_type: str) -> None:
+    if filesystem_type not in {"pyarrow", "webhdfs"}:
+        raise ValueError(
+            f"Unsupported Ray HDFS filesystem [{filesystem_type}]. "
+            "Expected `pyarrow` or `webhdfs`."
+        )
+
+
+def _validate_hdfs_uri(uri: str) -> None:
+    if not uri.startswith("hdfs://"):
+        raise ValueError(f"Expected an HDFS URI starting with `hdfs://`, got [{uri}].")
+
+
+def _is_countable_parquet_metadata_file(path: str) -> bool:
+    name = os.path.basename(path)
+    if not name or name.startswith(("_", ".")):
+        return False
+    return True
+
+
+def _count_parquet_rows_from_filesystem(filesystem, path: str) -> int | None:
+    try:
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        file_info = filesystem.get_file_info(path)
+        if file_info.type == pa_fs.FileType.NotFound:
+            return None
+        if file_info.type == pa_fs.FileType.File:
+            paths = [path] if _is_countable_parquet_metadata_file(path) else []
+        elif file_info.type == pa_fs.FileType.Directory:
+            selector = pa_fs.FileSelector(path, recursive=True)
+            paths = [
+                info.path
+                for info in filesystem.get_file_info(selector)
+                if info.type == pa_fs.FileType.File and _is_countable_parquet_metadata_file(info.path)
+            ]
+        else:
+            return None
+
+        row_count = 0
+        for parquet_path in paths:
+            row_count += pq.read_metadata(parquet_path, filesystem=filesystem).num_rows
+        return row_count
+    except Exception as exc:
+        logger.debug("Failed to count parquet rows from metadata for {}: {}", path, exc)
+        return None
 
 
 @dataclass(frozen=True)
@@ -72,6 +165,21 @@ class DataLoadStrategy(ABC, ConfigValidator):
         merged = dict(kwargs)
         merged.update(self.ds_config.get("load_kwargs", {}))
         return merged
+
+    def get_ray_parquet_read_kwargs(self, load_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        read_kwargs = {
+            key: load_kwargs[key]
+            for key in _RAY_PARQUET_READ_KWARGS
+            if key in load_kwargs
+        }
+        read_kwargs.update(
+            {
+                key: self.ds_config[key]
+                for key in _RAY_PARQUET_READ_KWARGS
+                if key in self.ds_config
+            }
+        )
+        return read_kwargs
 
     @abstractmethod
     def load_data(self, **kwargs) -> DJDataset:
@@ -172,6 +280,76 @@ class DataLoadStrategyRegistry:
             return strategy_class
 
         return decorator
+
+
+def _reject_hive_legacy_field(field: str):
+    def validator(_value):
+        raise ValueError(
+            f"`{field}` is not supported by the Ray Hive loader. "
+            "Use `table_name` with optional `columns`, `filter`, "
+            "`concurrency`, `override_num_blocks`, `ray_remote_args`, "
+            "and `arrow_parquet_args`. To cast Hive columns, configure "
+            "`columns` as a mapping from column name to Hive type."
+        )
+
+    return validator
+
+
+def _normalize_hive_columns_config(columns_config):
+    if columns_config is None:
+        return None, {}
+    if isinstance(columns_config, list):
+        if not columns_config:
+            raise ValueError("`columns` must not be empty when configured.")
+        for column in columns_config:
+            if not isinstance(column, str):
+                raise ValueError("`columns` list entries must be column-name strings.")
+        return columns_config, {}
+    if isinstance(columns_config, dict):
+        if not columns_config:
+            raise ValueError("`columns` must not be empty when configured.")
+        columns = []
+        cast_columns = {}
+        for column, hive_type in columns_config.items():
+            if not isinstance(column, str):
+                raise ValueError("`columns` mapping keys must be column-name strings.")
+            columns.append(column)
+            if hive_type is None:
+                continue
+            if not isinstance(hive_type, str):
+                raise ValueError("`columns` mapping values must be Hive type strings or null.")
+            cast_columns[column] = hive_type
+        return columns, cast_columns
+    raise ValueError(
+        "`columns` must be either a list of column names or a mapping of column names to Hive types."
+    )
+
+
+def _validate_hive_columns_config(columns_config):
+    _normalize_hive_columns_config(columns_config)
+
+
+def _get_ray_hive_catalog():
+    hive_catalog_cls = _load_ray_hive_catalog_cls()
+    return _start_ray_hive_catalog(hive_catalog_cls())
+
+
+def _load_ray_hive_catalog_cls():
+    try:
+        from ray.data.datasource.hive import HiveCatalog
+    except ImportError as exc:
+        raise ImportError(
+            "Hive loading requires bytedray Hive support. "
+            "Install `bytedray[default,data,serve,bytedance,hive]>=2.10.0.47`."
+        ) from exc
+    return HiveCatalog
+
+
+def _start_ray_hive_catalog(catalog):
+    start = getattr(catalog, "start", None)
+    if callable(start):
+        start()
+    return catalog
 
 
 class RayDataLoadStrategy(DataLoadStrategy):
@@ -723,24 +901,88 @@ class DefaultHDFSDataLoadStrategy(DefaultStagedRemoteLoadStrategy):
 
 
 @DataLoadStrategyRegistry.register("ray", "remote", "hdfs")
-class RayHDFSDataLoadStrategy(RayStagedRemoteLoadStrategy):
-    CONFIG_VALIDATION_RULES = DefaultHDFSDataLoadStrategy.CONFIG_VALIDATION_RULES
+class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["path"],
+        "field_types": {
+            "path": str,
+            "format": str,
+            "filesystem": str,
+            "webhdfs": dict,
+            "load_kwargs": dict,
+        },
+        "custom_validators": {
+            "path": _validate_hdfs_uri,
+            "filesystem": _validate_ray_hdfs_filesystem,
+        },
+    }
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
-        remote_path = self.ds_config["path"]
-        local_path = self._make_stage_path(f"hdfs:{remote_path}", remote_path=remote_path)
-        staged_path = copy_uri_to_local(remote_path, local_path)
-        return self._load_staged_local_dataset(staged_path, **kwargs)
+        from data_juicer.core.data.ray_dataset import RayDataset
+
+        import ray.data
+
+        hdfs_uri = self.ds_config["path"]
+        data_format = self.ds_config.get("format", "parquet")
+        if data_format not in {"parquet", ".parquet"}:
+            raise ValueError(
+                f"Unsupported HDFS data format for Ray direct loading: {data_format}. "
+                "Ray HDFS loading currently supports parquet only. "
+                "Use the default executor or stage the data locally for other formats."
+            )
+
+        read_kwargs = self.get_ray_parquet_read_kwargs(kwargs)
+        logger.info(f"Loading parquet dataset from HDFS with Ray: {hdfs_uri}")
+
+        try:
+            filesystem_type = self.ds_config.get("filesystem", "pyarrow")
+            if filesystem_type == "webhdfs":
+                filesystem, fs_path = _get_webhdfs_pyarrow_filesystem(
+                    hdfs_uri,
+                    self.ds_config.get("webhdfs"),
+                )
+            else:
+                filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
+            dataset = ray.data.read_parquet(fs_path, filesystem=filesystem, **read_kwargs)
+            return RayDataset(
+                dataset,
+                dataset_path=hdfs_uri,
+                cfg=self.cfg,
+                row_count_getter=lambda: _count_parquet_rows_from_filesystem(filesystem, fs_path),
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load parquet data from HDFS path {hdfs_uri}. "
+                "Ensure Hadoop client libraries, libjvm, and HDFS credentials are available "
+                "on the Ray driver and workers, or use `filesystem: webhdfs` with a reachable "
+                "WebHDFS endpoint. "
+                f"Error: {str(e)}"
+            )
 
 
 class TQSQueryLoadMixin(StagedLocalLoadMixin):
     query_field = "query"
+    MATERIALIZED_READ_MODE = "materialized"
+    CLIENT_RESULT_READ_MODE = "client_result"
 
-    def _materialize_query_output(self) -> str:
+    def _get_query(self) -> str:
         query = self.ds_config.get(self.query_field)
         if not query:
             raise ValueError(f"`{self.query_field}` is required")
+        return query
+
+    def _get_read_mode(self) -> str:
+        read_mode = self.ds_config.get("read_mode", self.MATERIALIZED_READ_MODE)
+        if read_mode not in {self.MATERIALIZED_READ_MODE, self.CLIENT_RESULT_READ_MODE}:
+            raise ValueError(
+                f"Unsupported TQS/Hive read_mode [{read_mode}]. "
+                f"Supported modes: {self.MATERIALIZED_READ_MODE}, {self.CLIENT_RESULT_READ_MODE}"
+            )
+        return read_mode
+
+    def _materialize_query_output(self) -> str:
+        query = self._get_query()
         output_uri = self.ds_config.get("output_uri") or self.ds_config.get("tqs_output_uri")
         if not output_uri:
             raise ValueError("TQS/Hive loading requires `output_uri` or `tqs_output_uri`")
@@ -758,18 +1000,42 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
         local_dir = self._make_stage_dir(f"tqs:{output_uri}")
         return copy_uri_to_local(output_uri, local_dir)
 
+    def _load_client_result_records(self) -> list[dict]:
+        return run_tqs_query_to_records(
+            query=self._get_query(),
+            tqs_app_id=self.ds_config["tqs_app_id"],
+            tqs_app_key=self.ds_config["tqs_app_key"],
+            user_name=self.ds_config["user_name"],
+            tqs_cluster=self.ds_config.get("tqs_cluster", "cn"),
+            tqs_enable_domain=self.ds_config.get("tqs_enable_domain"),
+            tqs_timeout=self.ds_config.get("tqs_timeout", 120),
+            max_result_rows=self.ds_config.get("max_result_rows", 10000),
+        )
+
 
 @DataLoadStrategyRegistry.register("default", "remote", "tqs")
 class DefaultTQSDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrategy):
     CONFIG_VALIDATION_RULES = {
         "required_fields": ["query", "tqs_app_id", "tqs_app_key", "user_name"],
-        "optional_fields": ["output_uri", "tqs_output_uri"],
+        "optional_fields": [
+            "output_uri",
+            "tqs_output_uri",
+            "read_mode",
+            "max_result_rows",
+            "tqs_cluster",
+            "tqs_enable_domain",
+            "tqs_timeout",
+        ],
         "field_types": {"query": str},
         "custom_validators": {},
     }
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
+        if self._get_read_mode() == self.CLIENT_RESULT_READ_MODE:
+            from data_juicer.core.data import NestedDataset
+
+            return NestedDataset.from_list(self._load_client_result_records())
         staged_path = self._materialize_query_output()
         return self._load_staged_local_dataset(staged_path, **kwargs)
 
@@ -780,45 +1046,142 @@ class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
+        if self._get_read_mode() == self.CLIENT_RESULT_READ_MODE:
+            import ray
+
+            from data_juicer.core.data.ray_dataset import RayDataset
+
+            return RayDataset(ray.data.from_items(self._load_client_result_records()), cfg=self.cfg)
         staged_path = self._materialize_query_output()
         return self._load_staged_local_dataset(staged_path, **kwargs)
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "hive")
-class DefaultHiveDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrategy):
+class DefaultHiveDataLoadStrategy(DefaultDataLoadStrategy):
     CONFIG_VALIDATION_RULES = {
-        "required_fields": ["tqs_app_id", "tqs_app_key", "user_name"],
-        "optional_fields": ["sql", "table", "output_uri", "tqs_output_uri"],
+        "required_fields": [],
+        "optional_fields": [],
         "field_types": {},
         "custom_validators": {},
     }
-    query_field = "sql"
 
     def load_data(self, **kwargs):
-        kwargs = self.get_load_kwargs(**kwargs)
-        if "sql" not in self.ds_config:
-            table = self.ds_config.get("table")
-            if not table:
-                raise ValueError("Hive loading requires `sql` or `table`")
-            self.ds_config["sql"] = f"select * from {table}"
-        staged_path = self._materialize_query_output()
-        return self._load_staged_local_dataset(staged_path, **kwargs)
+        raise RuntimeError(
+            "Hive loading requires `executor_type: ray` and internal bytedray Hive support. "
+            "Install `bytedray[default,data,serve,bytedance,hive]>=2.10.0.47`."
+        )
+
+
+_HIVE_CAST_ARROW_TYPES = {
+    "STRING": pa.string(),
+    "BIGINT": pa.int64(),
+}
+
+
+def _cast_hive_batch_columns(batch, cast_columns):
+    for column, hive_type in cast_columns.items():
+        if column not in batch.column_names:
+            continue
+        arrow_type = _HIVE_CAST_ARROW_TYPES.get(hive_type.upper())
+        if arrow_type is None:
+            raise ValueError(f"Unsupported Hive cast type [{hive_type}] for column [{column}].")
+        column_index = batch.schema.get_field_index(column)
+        casted_column = batch.column(column).cast(arrow_type)
+        batch = batch.set_column(column_index, column, casted_column)
+    return batch
+
+
+def _build_hive_cast_block_udf(cast_columns, existing_block_udf=None):
+    def _block_udf(batch):
+        if existing_block_udf is not None:
+            batch = existing_block_udf(batch)
+        return _cast_hive_batch_columns(batch, cast_columns)
+
+    return _block_udf
 
 
 @DataLoadStrategyRegistry.register("ray", "remote", "hive")
-class RayHiveDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
-    CONFIG_VALIDATION_RULES = DefaultHiveDataLoadStrategy.CONFIG_VALIDATION_RULES
-    query_field = "sql"
+class RayHiveDataLoadStrategy(RayDataLoadStrategy):
+    CONFIG_VALIDATION_RULES = {
+        "required_fields": ["table_name"],
+        "optional_fields": [
+            "columns",
+            "filter",
+            "concurrency",
+            "override_num_blocks",
+            "ray_remote_args",
+            "arrow_parquet_args",
+        ],
+        "field_types": {
+            "table_name": str,
+            "filter": str,
+            "concurrency": int,
+            "override_num_blocks": int,
+            "ray_remote_args": dict,
+            "arrow_parquet_args": dict,
+        },
+        "custom_validators": {
+            "columns": _validate_hive_columns_config,
+            **{
+                field: _reject_hive_legacy_field(field)
+                for field in [
+                    "sql",
+                    "table",
+                    "output_uri",
+                    "tqs_output_uri",
+                    "read_mode",
+                    "max_result_rows",
+                    "tqs_app_id",
+                    "tqs_app_key",
+                    "user_name",
+                    "tqs_cluster",
+                    "tqs_enable_domain",
+                    "tqs_timeout",
+                    "catalog",
+                    "cast_columns",
+                ]
+            },
+        },
+    }
 
     def load_data(self, **kwargs):
-        kwargs = self.get_load_kwargs(**kwargs)
-        if "sql" not in self.ds_config:
-            table = self.ds_config.get("table")
-            if not table:
-                raise ValueError("Hive loading requires `sql` or `table`")
-            self.ds_config["sql"] = f"select * from {table}"
-        staged_path = self._materialize_query_output()
-        return self._load_staged_local_dataset(staged_path, **kwargs)
+        import ray
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+
+        read_hive_table = getattr(ray.data, "read_hive_table", None)
+        if read_hive_table is None:
+            raise ImportError(
+                "Ray Hive loading requires internal bytedray Hive support. "
+                "Install `bytedray[default,data,serve,bytedance,hive]>=2.10.0.47`; "
+                "open-source Ray does not provide `ray.data.read_hive_table`."
+            )
+
+        # Do not forward executor-level load kwargs such as `num_proc` into
+        # read_hive_table. byted-ray may pass unknown kwargs down to DataFusion /
+        # PyArrow readers, where they can fail as unsupported parquet arguments.
+        read_kwargs = {}
+        read_kwargs.update(self.ds_config.get("load_kwargs", {}))
+        columns, cast_columns = _normalize_hive_columns_config(self.ds_config.get("columns"))
+        if columns is not None:
+            read_kwargs["columns"] = columns
+
+        for field in ["filter", "concurrency", "override_num_blocks", "ray_remote_args"]:
+            if field in self.ds_config:
+                read_kwargs[field] = self.ds_config[field]
+        read_kwargs.update(self.ds_config.get("arrow_parquet_args", {}))
+        if cast_columns:
+            read_kwargs["_block_udf"] = _build_hive_cast_block_udf(
+                cast_columns,
+                read_kwargs.get("_block_udf"),
+            )
+
+        catalog = _get_ray_hive_catalog()
+        if catalog is not None:
+            read_kwargs["catalog"] = catalog
+
+        dataset = read_hive_table(table_name=self.ds_config["table_name"], **read_kwargs)
+        return RayDataset(dataset, cfg=self.cfg)
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "duckdb")

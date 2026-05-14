@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.expand_macro_mapper import ExpandMacroMapper
+from data_juicer.ops.mapper.text.expand_macro_mapper import ExpandMacroMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

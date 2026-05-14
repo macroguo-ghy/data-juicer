@@ -46,16 +46,17 @@ class Backend(ABC):
 class ActorBackend(Backend):
     """
     Ray actor backend for deduplicator.
-    Uses lazy initialization to defer actor creation until first use,
-    allowing the cluster to autoscale before actors consume resources.
+    Uses lazy initialization as a fallback, while Ray Data paths should
+    prepare actors on the driver before task serialization so all tasks share
+    the same deduplication state.
     """
 
     def __init__(self, dedup_set_num: Union[int, str], RemoteDedupSet=None):
-        # Store config but don't create actors yet
-        # dedup_set_num can be int or "auto"
+        # Store config but don't create actors yet.
+        # dedup_set_num can be int or "auto".
         self._dedup_set_num_config = dedup_set_num
         self._RemoteDedupSet = RemoteDedupSet
-        self._dedup_sets = None  # Lazy - created on first use
+        self._dedup_sets = None  # Lazy fallback for direct backend use.
         self._actual_dedup_set_num = None
 
     @property
@@ -69,10 +70,14 @@ class ActorBackend(Backend):
         return self._actual_dedup_set_num
 
     def _ensure_actors(self):
-        """Create actors on first use when cluster has scaled."""
+        """Create actors once and keep the shared actor handles on this backend."""
         if self._dedup_sets is None:
             RemoteDedupSet = self._RemoteDedupSet or get_remote_dedup_set()
             self._dedup_sets = [RemoteDedupSet.remote() for _ in range(self.dedup_set_num)]
+
+    def prepare_for_ray_tasks(self):
+        """Create actor handles before this backend is serialized to Ray tasks."""
+        self._ensure_actors()
 
     def is_unique(self, md5_value: str):
         self._ensure_actors()
@@ -132,6 +137,11 @@ class RayBasicDeduplicator(Filter):
             self.backend = RedisBackend(redis_address)
         else:
             raise ValueError(f"Unknown backend: {backend}")
+
+    def prepare_backend_for_ray_tasks(self):
+        """Prepare shared state before Ray Data serializes this operator to tasks."""
+        if isinstance(self.backend, ActorBackend):
+            self.backend.prepare_for_ray_tasks()
 
     def calculate_hash(self, sample, context=False):
         """Calculate hash value for the sample."""

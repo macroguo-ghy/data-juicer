@@ -2,7 +2,7 @@ import os
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_detection_yolo_mapper import ImageDetectionYoloMapper
+from data_juicer.ops.mapper.image.image_detection_yolo_mapper import ImageDetectionYoloMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 from data_juicer.utils.constant import Fields, MetaKeys
 

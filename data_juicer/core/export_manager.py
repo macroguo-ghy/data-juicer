@@ -9,7 +9,6 @@ from data_juicer.core.exporter import Exporter
 from data_juicer.core.io_utils import (
     copy_local_to_uri,
     ensure_parent,
-    execute_tqs_sql,
     infer_storage_target_from_path,
     make_staging_dir,
     merge_dicts,
@@ -18,6 +17,7 @@ from data_juicer.core.io_utils import (
     upload_file_to_tos,
     write_hf_dataset_to_magnus,
     write_ray_dataset_to_magnus,
+    _ray_dataset_columns,
 )
 from data_juicer.core.ray_exporter import RayExporter
 from data_juicer.utils.constant import Fields, HashKeys
@@ -52,7 +52,7 @@ class ExportManager:
         if self.target == "tos":
             return self._export_to_tos(dataset, columns=columns)
         if self.target == "magnus":
-            return self._export_to_magnus(dataset)
+            return self._export_to_magnus(dataset, columns=columns)
         raise NotImplementedError(f"Unsupported export target [{self.target}]")
 
     def export_compute_stats(self, dataset, export_path):
@@ -98,8 +98,12 @@ class ExportManager:
 
     def _export_via_staging(self, dataset, columns=None, *, filename: str | None = None) -> str:
         stage_dir = make_staging_dir(self.cfg.work_dir, "export", f"{self.target}:{self.path}")
-        export_type = self.export_cfg.get("type") or "jsonl"
-        filename = filename or f"dataset.{export_type}"
+        export_type = self._infer_staging_export_type(filename)
+        if filename is None:
+            target_name = self._basename_with_supported_suffix(self.export_cfg.get("object_key"))
+            if target_name is None:
+                target_name = self._basename_with_supported_suffix(self.path)
+            filename = target_name or f"dataset.{export_type}"
         stage_path = os.path.join(stage_dir, filename)
         dataset, columns = self._prepare_dataset_for_export(dataset, columns=columns)
 
@@ -140,29 +144,54 @@ class ExportManager:
         copy_local_to_uri(stage_path, self.path)
 
     def _export_to_hive(self, dataset, columns=None):
-        staging_path = self.export_cfg.get("path")
-        if not staging_path or not staging_path.startswith("hdfs://"):
-            raise ValueError("Hive export requires an HDFS `path` staging location")
+        if self.executor_type != "ray":
+            raise RuntimeError(
+                "Hive export requires `executor_type: ray` and internal bytedray Hive support. "
+                "Install `bytedray[default,data,serve,bytedance,hive]>=2.10.0.47`."
+            )
+        if not self.export_cfg.get("table_name"):
+            raise ValueError("Hive export requires `table_name`")
 
-        self._export_to_hdfs(dataset, columns=columns)
-        partition = self.export_cfg.get("partition")
-        if not self.export_cfg.get("hive_table"):
-            raise ValueError("Hive export requires `hive_table`")
+        if hasattr(dataset, "data") and not callable(getattr(dataset, "write_hive_table", None)):
+            ray_dataset = dataset.data
+        else:
+            ray_dataset = dataset
+        ray_dataset, columns = self._prepare_dataset_for_export(ray_dataset, columns=columns)
+        if columns:
+            ray_dataset = ray_dataset.select_columns(columns)
 
-        query = f"alter table {self.export_cfg['hive_table']} add if not exists"
-        if partition:
-            query += f" partition ({self._format_partition_spec(partition)})"
-        query += f" location '{staging_path}'"
+        write_hive_table = getattr(ray_dataset, "write_hive_table", None)
+        if write_hive_table is None:
+            raise ImportError(
+                "Ray Hive export requires internal bytedray Hive support. "
+                "Install `bytedray[default,data,serve,bytedance,hive]>=2.10.0.47`; "
+                "open-source Ray does not provide `ray.data.Dataset.write_hive_table`."
+            )
 
-        execute_tqs_sql(
-            query,
-            tqs_app_id=self.export_cfg["tqs_app_id"],
-            tqs_app_key=self.export_cfg["tqs_app_key"],
-            user_name=self.export_cfg["user_name"],
+        write_kwargs = {}
+        for field in [
+            "partition",
+            "mode",
+            "auto_cast_schema",
+            "concurrency",
+            "ray_remote_args",
+            "arrow_parquet_args",
+        ]:
+            if field in self.export_cfg:
+                write_kwargs[field] = self.export_cfg[field]
+
+        return write_hive_table(
+            table_name=self.export_cfg["table_name"],
+            **write_kwargs,
         )
 
     def _export_to_lark(self, dataset, columns=None):
-        stage_path = self._export_via_staging(dataset, columns=columns, filename="dataset.csv")
+        export_type = self.export_cfg.get("type") or "csv"
+        stage_path = self._export_via_staging(
+            dataset,
+            columns=columns,
+            filename=f"dataset.{export_type}",
+        )
         upload_file_to_lark_sheet(
             local_path=stage_path,
             lark_path=self.export_cfg["lark_path"],
@@ -186,14 +215,19 @@ class ExportManager:
             session_token=self.export_cfg.get("session_token"),
         )
 
-    def _export_to_magnus(self, dataset):
-        dataset, _ = self._prepare_dataset_for_export(dataset)
+    def _export_to_magnus(self, dataset, columns=None):
+        dataset, _ = self._prepare_dataset_for_export(dataset, columns=columns)
         if hasattr(dataset, "column_names"):
             return write_hf_dataset_to_magnus(
                 dataset,
                 self.export_cfg["table_name"],
                 partition_columns=self.export_cfg.get("partition_columns"),
+                partition_values=self.export_cfg.get("partition_values"),
+                schema=self.export_cfg.get("schema"),
                 magnus_conf=self.export_cfg.get("magnus_conf", {}),
+                create_table_if_not_exists=self.export_cfg.get("create_table_if_not_exists", False),
+                infer_schema_on_create=self.export_cfg.get("infer_schema_on_create", False),
+                magnus_failure_policy=self.export_cfg.get("magnus_failure_policy", "abort"),
                 batch_size=self.export_cfg.get("batch_size", 2000),
             )
         if hasattr(dataset, "columns"):
@@ -201,18 +235,60 @@ class ExportManager:
                 dataset,
                 self.export_cfg["table_name"],
                 partition_columns=self.export_cfg.get("partition_columns"),
+                partition_values=self.export_cfg.get("partition_values"),
+                schema=self.export_cfg.get("schema"),
                 magnus_conf=self.export_cfg.get("magnus_conf", {}),
+                create_table_if_not_exists=self.export_cfg.get("create_table_if_not_exists", False),
+                infer_schema_on_create=self.export_cfg.get("infer_schema_on_create", False),
+                magnus_failure_policy=self.export_cfg.get("magnus_failure_policy", "abort"),
                 operation=self.export_cfg.get("operation", "APPEND"),
+                validate_overwrite_partition_before_write=self.export_cfg.get(
+                    "validate_overwrite_partition_before_write",
+                    False,
+                ),
             )
         if hasattr(dataset, "data") and hasattr(dataset.data, "columns"):
             return write_ray_dataset_to_magnus(
                 dataset.data,
                 self.export_cfg["table_name"],
                 partition_columns=self.export_cfg.get("partition_columns"),
+                partition_values=self.export_cfg.get("partition_values"),
+                schema=self.export_cfg.get("schema"),
                 magnus_conf=self.export_cfg.get("magnus_conf", {}),
+                create_table_if_not_exists=self.export_cfg.get("create_table_if_not_exists", False),
+                infer_schema_on_create=self.export_cfg.get("infer_schema_on_create", False),
+                magnus_failure_policy=self.export_cfg.get("magnus_failure_policy", "abort"),
                 operation=self.export_cfg.get("operation", "APPEND"),
+                validate_overwrite_partition_before_write=self.export_cfg.get(
+                    "validate_overwrite_partition_before_write",
+                    False,
+                ),
             )
         raise ImportError("Magnus export requires `pyiceberg` support for the current dataset type")
+
+    @staticmethod
+    def _suffix_from_path(path: str | None) -> str | None:
+        if not path:
+            return None
+        basename = path.rstrip("/").split("/")[-1]
+        if "." not in basename:
+            return None
+        return basename.rsplit(".", 1)[-1].lower()
+
+    @classmethod
+    def _basename_with_supported_suffix(cls, path: str | None) -> str | None:
+        if not cls._suffix_from_path(path):
+            return None
+        return path.rstrip("/").split("/")[-1] or None
+
+    def _infer_staging_export_type(self, filename: str | None = None) -> str:
+        return (
+            self.export_cfg.get("type")
+            or self._suffix_from_path(filename)
+            or self._suffix_from_path(self.export_cfg.get("object_key"))
+            or self._suffix_from_path(self.path)
+            or "jsonl"
+        )
 
     @staticmethod
     def _normalize_export_cfg(cfg) -> Dict[str, Any]:
@@ -288,7 +364,17 @@ class ExportManager:
             return dataset, columns
 
         if hasattr(dataset, "columns"):
-            existing_columns = dataset.columns() or []
+            existing_columns = self._merge_known_columns(
+                columns,
+                self._schema_columns(self.export_cfg.get("schema")),
+                _ray_dataset_columns(
+                    dataset,
+                    schema_config=self.export_cfg.get("schema"),
+                    fetch_if_missing=False,
+                ),
+            )
+            if existing_columns is None:
+                return dataset, columns
             removable = [field for field in removed_fields if field in existing_columns]
             if removable:
                 dataset = dataset.drop_columns(removable)
@@ -297,3 +383,33 @@ class ExportManager:
             return dataset, columns
 
         return dataset, columns
+
+    @staticmethod
+    def _merge_known_columns(*column_groups):
+        merged = []
+        seen = set()
+        for column_group in column_groups:
+            if column_group is None:
+                continue
+            for column in column_group:
+                if column not in seen:
+                    merged.append(column)
+                    seen.add(column)
+        if not merged:
+            return None
+        return merged
+
+    @staticmethod
+    def _schema_columns(schema_config):
+        schema_config = namespace_to_plain_dict(schema_config)
+        if schema_config is None:
+            return None
+        fields = schema_config.get("fields") if isinstance(schema_config, dict) else schema_config
+        if not isinstance(fields, list):
+            return None
+        columns = []
+        for field in fields:
+            field = namespace_to_plain_dict(field)
+            if isinstance(field, dict) and field.get("name"):
+                columns.append(field["name"])
+        return columns or None

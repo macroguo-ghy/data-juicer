@@ -1,6 +1,7 @@
 import unittest
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
@@ -364,6 +365,38 @@ class OPEnvManagerTest(DataJuicerTestCaseBase):
         self.assertEqual(manager.get_op_env_spec("python_lambda_mapper").pip_pkgs, ["opencc"])
         self.assertEqual(manager.get_op_env_spec("chinese_convert_mapper").pip_pkgs, ["opencc"])
         self.assertEqual(len(manager.hash2specs), 1)
+
+    def test_chinese_convert_mapper_loads_without_driver_side_opencc(self):
+        from data_juicer.ops.load import load_ops
+
+        manager = self.OPEnvManager(min_common_dep_num_to_combine=0)
+        process = [
+            {"python_lambda_mapper": {"lambda_str": 'lambda sample: sample'}},
+            {"chinese_convert_mapper": {"text_key": "processed_by", "mode": "s2t"}},
+        ]
+
+        with patch("data_juicer.ops.mapper.text.chinese_convert_mapper.prepare_converter") as mock_prepare:
+            ops = load_ops(process, manager)
+
+        mock_prepare.assert_not_called()
+        self.assertEqual([op._name for op in ops], ["python_lambda_mapper", "chinese_convert_mapper"])
+        self.assertEqual(manager.get_op_env_spec("python_lambda_mapper").pip_pkgs, ["opencc"])
+        self.assertEqual(manager.get_op_env_spec("chinese_convert_mapper").pip_pkgs, ["opencc"])
+
+    def test_audio_filters_load_with_lazy_librosa_requirement(self):
+        from data_juicer.ops.load import load_ops
+
+        manager = self.OPEnvManager(min_common_dep_num_to_combine=0)
+        process = [
+            {"audio_duration_filter": {}},
+            {"audio_nmf_snr_filter": {}},
+        ]
+
+        ops = load_ops(process, manager)
+
+        self.assertEqual([op._name for op in ops], ["audio_duration_filter", "audio_nmf_snr_filter"])
+        self.assertEqual(manager.get_op_env_spec("audio_duration_filter").pip_pkgs, ["librosa>=0.10"])
+        self.assertEqual(manager.get_op_env_spec("audio_nmf_snr_filter").pip_pkgs, ["librosa>=0.10"])
 
     def test_merge_op_env_specs_combine_general(self):
         manager = self.OPEnvManager(min_common_dep_num_to_combine=1)

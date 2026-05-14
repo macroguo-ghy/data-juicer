@@ -1,17 +1,17 @@
 import sys
 
-import librosa
 import numpy as np
-from librosa.decompose import decompose
 from pydantic import PositiveInt
 
 from data_juicer.utils.constant import Fields, StatsKeys
+from data_juicer.utils.lazy_loader import LazyLoader
 from data_juicer.utils.mm_utils import load_audio, load_data_with_context
 
 from ..base_op import OPERATORS, Filter
 from ..op_fusion import LOADED_AUDIOS
 
 OP_NAME = "audio_nmf_snr_filter"
+librosa = LazyLoader("librosa")
 
 
 # run NMF to decompose the signal and noise from the input audio
@@ -20,7 +20,7 @@ def separate_signal_noise(audio, n_components=2, nmf_iter=500):
     S = np.abs(librosa.stft(audio))
 
     # run NMF to decompose the audio
-    W, H = decompose(S, n_components=n_components, init="random", random_state=0, max_iter=nmf_iter)
+    W, H = librosa.decompose.decompose(S, n_components=n_components, init="random", random_state=0, max_iter=nmf_iter)
 
     # get signal and noise
     signal = np.dot(W[:, 0:1], H[0:1, :])
@@ -65,6 +65,8 @@ class AudioNMFSNRFilter(Filter):
     meet the criteria for the sample to be kept. The NMF computation uses a specified number
     of iterations. If no audio is present in the sample, the SNR is recorded as an empty
     array. The key metric is stored in the 'audio_nmf_snr' field."""
+
+    _requirements = ["librosa>=0.10"]
 
     def __init__(
         self,

@@ -3,11 +3,37 @@ import os
 import os.path as osp
 import shutil
 import unittest
+from unittest.mock import MagicMock, patch
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
 from data_juicer.core.ray_exporter import RayExporter
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.mm_utils import load_images_byte
+
+
+class TestRayExporterCheckpoint(unittest.TestCase):
+    def test_checkpoint_export_uses_supplied_columns_without_fetch(self):
+        class StrictRayDataset:
+            def __init__(self):
+                self.drop_columns = MagicMock(return_value=self)
+
+            def columns(self):
+                raise AssertionError("checkpoint mode must not fetch columns before export")
+
+        dataset = StrictRayDataset()
+        exporter = RayExporter(
+            "/tmp/checkpoint_export.json",
+            keep_stats_in_res_ds=False,
+            keep_hashes_in_res_ds=False,
+        )
+        export_method = MagicMock()
+
+        with patch("data_juicer.core.ray_exporter._is_ray_data_checkpoint_enabled", return_value=True):
+            with patch.object(RayExporter, "_router", return_value={"json": export_method}):
+                exporter.export(dataset, columns=["id", Fields.stats, HashKeys.hash])
+
+        dataset.drop_columns.assert_called_once_with([Fields.stats, HashKeys.hash])
+        export_method.assert_called_once()
 
 
 class TestRayExporter(DataJuicerTestCaseBase):

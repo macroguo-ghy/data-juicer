@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.fix_unicode_mapper import FixUnicodeMapper
+from data_juicer.ops.mapper.text.fix_unicode_mapper import FixUnicodeMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

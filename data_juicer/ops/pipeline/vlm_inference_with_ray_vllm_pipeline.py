@@ -1,6 +1,8 @@
 from functools import partial
 from typing import Dict, Optional
 
+import pyarrow as pa
+
 from data_juicer.ops.base_op import OPERATORS
 from data_juicer.utils.lazy_loader import LazyLoader
 from data_juicer.utils.mm_utils import load_image
@@ -32,6 +34,9 @@ class VLMRayVLLMEnginePipeline(RayVLLMEnginePipeline):
         accelerator_type: Optional[str] = None,
         sampling_params: Optional[Dict] = None,
         engine_kwargs: Optional[Dict] = None,
+        keep_columns: Optional[list[str]] = None,
+        tokenize: bool = False,
+        detokenize: bool = False,
         **kwargs,
     ):
         """
@@ -53,8 +58,12 @@ class VLMRayVLLMEnginePipeline(RayVLLMEnginePipeline):
         if not self.is_hf_model:
             raise NotImplementedError("Only huggingface model is supported for now.")
 
+        self.api_or_hf_model = api_or_hf_model
         self.system_prompt = system_prompt
         self.sampling_params = sampling_params or {}
+        self.keep_columns = list(keep_columns) if keep_columns is not None else None
+        self.tokenize = tokenize
+        self.detokenize = detokenize
 
         _default_engine_kwargs = dict(
             enable_chunked_prefill=True,
@@ -68,20 +77,8 @@ class VLMRayVLLMEnginePipeline(RayVLLMEnginePipeline):
         if engine_kwargs:
             _default_engine_kwargs.update(engine_kwargs)
 
-        from ray.data.llm import vLLMEngineProcessorConfig
-
-        self.config = vLLMEngineProcessorConfig(
-            model_source=api_or_hf_model,
-            engine_kwargs=_default_engine_kwargs,
-            concurrency=self.num_proc,
-            batch_size=self.batch_size,
-            apply_chat_template=True,
-            chat_template=None,
-            tokenize=True,
-            detokenize=True,
-            has_image=True,
-            accelerator_type=self.accelerator_type,
-        )
+        self.engine_kwargs = _default_engine_kwargs
+        self.config = None
 
     @staticmethod
     def vision_preprocess(
@@ -121,7 +118,7 @@ class VLMRayVLLMEnginePipeline(RayVLLMEnginePipeline):
 
     def run(self, dataset, *, exporter=None, tracer=None, reduce=True):
         # keep original columns, for filter useless columns generated in the middle stages
-        ori_columns = dataset.columns()
+        ori_columns = self._resolve_keep_columns(dataset)
         if self.response_key not in ori_columns:
             ori_columns.append(self.response_key)
 
@@ -142,9 +139,55 @@ class VLMRayVLLMEnginePipeline(RayVLLMEnginePipeline):
         from ray.data.llm import build_llm_processor
 
         processor = build_llm_processor(
-            self.config,
+            self._build_processor_config(),
             preprocess=vision_preprocess,
             postprocess=postprocess_fn,
         )
 
         return processor(dataset)
+
+    def run_plan_only(self, dataset):
+        return dataset.map_batches(
+            self._dry_run_batch,
+            batch_format="pyarrow",
+            batch_size=self.batch_size,
+            fn_kwargs={"response_key": self.response_key},
+        )
+
+    @staticmethod
+    def _dry_run_batch(table: pa.Table, *, response_key: str) -> pa.Table:
+        if table.schema.get_field_index(response_key) >= 0:
+            return table
+        return table.append_column(response_key, pa.array([None] * table.num_rows, type=pa.string()))
+
+    def _build_processor_config(self):
+        from ray.data.llm import vLLMEngineProcessorConfig
+
+        self.config = vLLMEngineProcessorConfig(
+            model_source=self.api_or_hf_model,
+            engine_kwargs=self.engine_kwargs,
+            concurrency=self.num_proc,
+            batch_size=self.batch_size,
+            apply_chat_template=True,
+            chat_template=None,
+            # Multimodal vLLM requests use the prompt text directly when images
+            # are present, and the engine already returns generated_text.
+            tokenize=self.tokenize,
+            detokenize=self.detokenize,
+            has_image=True,
+            accelerator_type=self.accelerator_type,
+        )
+        return self.config
+
+    def _resolve_keep_columns(self, dataset) -> list[str]:
+        if self.keep_columns is not None:
+            return list(self.keep_columns)
+        try:
+            columns = dataset.columns(fetch_if_missing=False)
+            if columns is not None:
+                return list(columns)
+        except TypeError:
+            pass
+        except Exception:
+            pass
+        return list(dataset.columns())

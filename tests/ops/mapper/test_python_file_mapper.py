@@ -1,7 +1,7 @@
 import unittest
 import tempfile
 
-from data_juicer.ops.mapper.python_file_mapper import PythonFileMapper
+from data_juicer.ops.mapper.io.python_file_mapper import PythonFileMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 class TestPythonFileMapper(DataJuicerTestCaseBase):

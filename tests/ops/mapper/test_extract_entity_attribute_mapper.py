@@ -3,7 +3,7 @@ import unittest
 from loguru import logger
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.extract_entity_attribute_mapper import ExtractEntityAttributeMapper
+from data_juicer.ops.mapper.text.extract_entity_attribute_mapper import ExtractEntityAttributeMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, FROM_FORK
 from data_juicer.utils.constant import Fields, MetaKeys
 

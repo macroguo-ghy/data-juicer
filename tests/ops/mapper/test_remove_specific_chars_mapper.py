@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.remove_specific_chars_mapper import \
+from data_juicer.ops.mapper.text.remove_specific_chars_mapper import \
     RemoveSpecificCharsMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

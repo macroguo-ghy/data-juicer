@@ -1,7 +1,7 @@
 import os
 import unittest
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.video_tagging_from_audio_mapper import \
+from data_juicer.ops.mapper.video.video_tagging_from_audio_mapper import \
     VideoTaggingFromAudioMapper
 from data_juicer.utils.constant import Fields, MetaKeys
 from data_juicer.utils.mm_utils import SpecialTokens

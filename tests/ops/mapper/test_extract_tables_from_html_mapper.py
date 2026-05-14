@@ -1,6 +1,6 @@
 import unittest
 
-from data_juicer.ops.mapper.extract_tables_from_html_mapper import ExtractTablesFromHtmlMapper
+from data_juicer.ops.mapper.text.extract_tables_from_html_mapper import ExtractTablesFromHtmlMapper
 from data_juicer.utils.constant import Fields, MetaKeys
 
 from data_juicer.core.data import NestedDataset as Dataset

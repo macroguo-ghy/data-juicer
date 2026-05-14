@@ -1,18 +1,29 @@
 import argparse
 import base64
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 from loguru import logger
 
-from data_juicer.tools.process_data import run
-
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 def decode_base64_config(encoded_config: str) -> str:
     normalized = "".join(encoded_config.split())
     padding = (-len(normalized)) % 4
     normalized = normalized + ("=" * padding)
     return base64.b64decode(normalized, validate=True).decode("utf-8")
+
+
+def get_process_data_run():
+    try:
+        from tools.process_data import run
+    except ImportError:
+        from data_juicer.tools.process_data import run
+    return run
 
 
 @logger.catch(reraise=True)
@@ -38,6 +49,7 @@ def main():
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=True) as config_file:
         config_file.write(config_content)
         config_file.flush()
+        run = get_process_data_run()
         run(["--config", config_file.name] + dj_args)
 
 

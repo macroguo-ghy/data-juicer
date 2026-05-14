@@ -4,7 +4,7 @@ import unittest
 
 from data_juicer.utils.resource_utils import cuda_device_count
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_diffusion_mapper import ImageDiffusionMapper
+from data_juicer.ops.mapper.image.image_diffusion_mapper import ImageDiffusionMapper
 from data_juicer.utils.mm_utils import SpecialTokens
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

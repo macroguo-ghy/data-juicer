@@ -1,6 +1,6 @@
 import unittest
 from copy import deepcopy
-from data_juicer.ops.mapper.sentence_augmentation_mapper import SentenceAugmentationMapper
+from data_juicer.ops.mapper.text.sentence_augmentation_mapper import SentenceAugmentationMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

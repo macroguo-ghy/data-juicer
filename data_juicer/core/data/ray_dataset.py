@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from functools import partial
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import pyarrow
 import ray
@@ -20,7 +20,189 @@ from data_juicer.utils.file_utils import is_remote_path
 from data_juicer.utils.webdataset_utils import _custom_default_decoder
 
 
+def _cfg_get(config, key, default=None):
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    getter = getattr(config, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except TypeError:
+            try:
+                return getter(key)
+            except (KeyError, AttributeError):
+                return default
+    return getattr(config, key, default)
+
+
+def _schema_field_names_from_config(schema_config):
+    schema_config = _cfg_get(schema_config, "fields", schema_config)
+    if not isinstance(schema_config, list):
+        return None
+    names = []
+    for field_config in schema_config:
+        name = _cfg_get(field_config, "name")
+        if name:
+            names.append(name)
+    return names or None
+
+
+def _column_names_from_configured_columns(configured_columns):
+    if isinstance(configured_columns, dict):
+        return list(configured_columns)
+    if isinstance(configured_columns, list):
+        return configured_columns
+    return []
+
+
+def get_configured_ray_columns(cfg):
+    dataset_cfg = _cfg_get(cfg, "dataset")
+    configs = _cfg_get(dataset_cfg, "configs", None)
+    if configs is None and dataset_cfg:
+        configs = [dataset_cfg]
+
+    columns = []
+    for ds_config in configs or []:
+        configured_columns = _cfg_get(ds_config, "columns")
+        for column in _column_names_from_configured_columns(configured_columns):
+            if column not in columns:
+                columns.append(column)
+    if columns:
+        return columns
+
+    export_cfg = _cfg_get(cfg, "export")
+    return _schema_field_names_from_config(_cfg_get(export_cfg, "schema"))
+
+
+def _get_ray_data_context():
+    try:
+        return ray.data.DataContext.get_current()
+    except Exception:
+        return None
+
+
+def _is_ray_data_checkpoint_enabled():
+    context = _get_ray_data_context()
+    return bool(getattr(context, "data_checkpoint_dir", ""))
+
+
+def _dataset_columns_no_fetch(dataset):
+    try:
+        columns = dataset.columns(fetch_if_missing=False)
+        if columns is not None:
+            return columns
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    try:
+        schema = dataset.schema(fetch_if_missing=False)
+    except TypeError:
+        try:
+            schema = dataset.schema()
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+    base_schema = getattr(schema, "base_schema", schema)
+    names = getattr(base_schema, "names", None)
+    if names is not None:
+        return list(names)
+    return None
+
+
+def _dataset_arrow_schema(dataset, *, fetch_if_missing=True):
+    try:
+        schema = dataset.schema(fetch_if_missing=fetch_if_missing)
+    except TypeError:
+        try:
+            schema = dataset.schema()
+        except Exception:
+            return None
+    except Exception:
+        return None
+    return getattr(schema, "base_schema", schema)
+
+
+def _is_path_like_arrow_type(field_type):
+    if pyarrow.types.is_string(field_type) or pyarrow.types.is_large_string(field_type):
+        return True
+    if pyarrow.types.is_list(field_type) or pyarrow.types.is_large_list(field_type):
+        value_type = field_type.value_type
+        return pyarrow.types.is_string(value_type) or pyarrow.types.is_large_string(value_type)
+    return False
+
+
+def _configured_media_field_type(cfg, key):
+    export_cfg = _cfg_get(cfg, "export")
+    schema_config = _cfg_get(export_cfg, "schema")
+    fields_config = _cfg_get(schema_config, "fields", schema_config)
+    if not isinstance(fields_config, list):
+        return None
+    for field_config in fields_config:
+        if _cfg_get(field_config, "name") == key:
+            field_type = _cfg_get(field_config, "type")
+            return str(field_type).strip().lower() if field_type is not None else None
+    return None
+
+
+def _is_configured_path_like_type(field_type):
+    if field_type in {"string", "str", "large_string"}:
+        return True
+    if field_type in {"binary", "bytes", "large_binary"}:
+        return False
+    if field_type.startswith("list<") and field_type.endswith(">"):
+        return _is_configured_path_like_type(field_type[len("list<") : -1].strip())
+    return None
+
+
+def _path_keys_from_media_columns(dataset, columns, cfg):
+    schema = None
+    schema_loaded = False
+    path_keys = []
+    for key in [
+        cfg.get("video_key", "videos"),
+        cfg.get("image_key", "images"),
+        cfg.get("audio_key", "audios"),
+    ]:
+        if key not in columns:
+            continue
+        configured_type = _configured_media_field_type(cfg, key)
+        configured_path_like = _is_configured_path_like_type(configured_type) if configured_type else None
+        if configured_path_like is True:
+            path_keys.append(key)
+            continue
+        if configured_path_like is False:
+            logger.debug(
+                "Skip absolute-path conversion for non-path media column {} from configured type {}",
+                key,
+                configured_type,
+            )
+            continue
+        if not schema_loaded:
+            schema = _dataset_arrow_schema(dataset, fetch_if_missing=not _is_ray_data_checkpoint_enabled())
+            schema_loaded = True
+        if schema is None:
+            path_keys.append(key)
+            continue
+        field_index = schema.get_field_index(key)
+        if field_index < 0:
+            continue
+        field_type = schema.field(field_index).type
+        if _is_path_like_arrow_type(field_type):
+            path_keys.append(key)
+        else:
+            logger.debug("Skip absolute-path conversion for non-path media column {} with type {}", key, field_type)
+    return path_keys
+
+
 def get_abs_path(path, dataset_dir):
+    if not isinstance(path, str):
+        return path
     if is_remote_path(path):
         return path
     path = os.path.join(dataset_dir, path)
@@ -58,15 +240,17 @@ def set_dataset_to_absolute_path(dataset, dataset_path, cfg):
     Set all the path in input data to absolute path.
     Checks dataset_dir and project_dir for valid paths.
     """
-    path_keys = []
-    columns = dataset.columns()
-    for key in [
-        cfg.get("video_key", "videos"),
-        cfg.get("image_key", "images"),
-        cfg.get("audio_key", "audios"),
-    ]:
-        if key in columns:
-            path_keys.append(key)
+    if bool(_cfg_get(cfg, "ray_dry_run_plan", False)):
+        columns = get_configured_ray_columns(cfg) or _dataset_columns_no_fetch(dataset)
+    elif _is_ray_data_checkpoint_enabled():
+        columns = get_configured_ray_columns(cfg) or _dataset_columns_no_fetch(dataset)
+    else:
+        columns = get_configured_ray_columns(cfg) or _dataset_columns_no_fetch(dataset)
+        if columns is None:
+            columns = dataset.columns()
+    if columns is None:
+        return dataset
+    path_keys = _path_keys_from_media_columns(dataset, columns, cfg)
     if len(path_keys) > 0:
         dataset_dir = os.path.dirname(dataset_path)
         logger.info(f"dataset_dir: {dataset_dir}")
@@ -90,6 +274,49 @@ def filter_batch(batch, filter_func):
     return batch.filter(mask)
 
 
+def _dict_batch_to_arrow_table_preserving_schema(batch, input_schema):
+    arrays = []
+    fields = []
+    for key, values in batch.items():
+        field = None
+        if input_schema is not None:
+            field_index = input_schema.get_field_index(key)
+            if field_index >= 0:
+                field = input_schema.field(field_index)
+        if field is not None and pyarrow.types.is_struct(field.type):
+            struct_field_names = {child.name for child in field.type}
+            if any(
+                isinstance(value, dict) and any(child_key not in struct_field_names for child_key in value)
+                for value in values
+            ):
+                field = None
+        try:
+            array = pyarrow.array(values, type=field.type if field is not None else None)
+        except (pyarrow.ArrowInvalid, pyarrow.ArrowTypeError, TypeError, ValueError):
+            array = pyarrow.array(values)
+            field = None
+        arrays.append(array)
+        fields.append(field if field is not None else pyarrow.field(key, array.type))
+    return pyarrow.Table.from_arrays(arrays, schema=pyarrow.schema(fields))
+
+
+def process_mapper_batch_preserving_schema(batch, process_func):
+    input_schema = batch.schema if isinstance(batch, pyarrow.Table) else None
+    output = process_func(batch)
+    if input_schema is None or isinstance(output, pyarrow.Table) or not isinstance(output, dict):
+        return output
+    return _dict_batch_to_arrow_table_preserving_schema(output, input_schema)
+
+
+def make_named_mapper_batch_fn(op_name, process_func):
+    def mapper_batch_fn(batch):
+        return process_mapper_batch_preserving_schema(batch, process_func=process_func)
+
+    mapper_batch_fn.__name__ = op_name
+    mapper_batch_fn.__qualname__ = op_name
+    return mapper_batch_fn
+
+
 class RayDataset(DJDataset):
     def __init__(
         self,
@@ -97,8 +324,13 @@ class RayDataset(DJDataset):
         dataset_path: str = None,
         cfg: Optional[Namespace] = None,
         auto_op_parallelism=True,
+        row_count: int | None = None,
+        row_count_getter: Callable[[], int | None] | None = None,
     ) -> None:
+        self.cfg = cfg
         self.data = preprocess_dataset(dataset, dataset_path, cfg)
+        self._cached_row_count = row_count
+        self._row_count_getter = row_count_getter
 
         # if auto_op_parallelism is set in both args and cfg, cfg takes precedence
         if cfg and cfg.get("auto_op_parallelism") is not None:
@@ -125,7 +357,7 @@ class RayDataset(DJDataset):
         if k == 0:
             return []
 
-        k = min(k, self.data.count())
+        k = min(k, self.count())
         return list(self.data.limit(k).take())
 
     def get_column(self, column: str, k: Optional[int] = None) -> List[Any]:
@@ -150,49 +382,55 @@ class RayDataset(DJDataset):
                 raise ValueError(f"k must be non-negative, got {k}")
             if k == 0:
                 return []
-            k = min(k, self.data.count())
+            k = min(k, self.count())
             return [row[column] for row in self.data.limit(k).take()]
 
         return [row[column] for row in self.data.take()]
 
-    def process(self, operators, *, exporter=None, checkpointer=None, tracer=None) -> DJDataset:
+    def process(self, operators, *, exporter=None, checkpointer=None, tracer=None, plan_only: bool = False) -> DJDataset:
         if operators is None:
             return self
         if not isinstance(operators, list):
             operators = [operators]
+        if operators:
+            self._cached_row_count = None
+            self._row_count_getter = None
 
         from data_juicer.utils.process_utils import calculate_ray_np
 
         if self._auto_proc:
             calculate_ray_np(operators)
 
-        # Check if dataset is empty - Ray returns None for columns() on empty datasets
-        # with unknown schema. If empty, skip processing as there's nothing to process.
-        try:
-            row_count = self.data.count()
-        except Exception:
-            row_count = 0
+        checkpoint_enabled = _is_ray_data_checkpoint_enabled()
 
-        if row_count == 0:
-            from loguru import logger
-
-            logger.warning("Dataset is empty (0 rows), skipping operator processing")
-            return self
-
-        # Cache columns once at start to avoid breaking pipeline with repeated columns() calls
-        # Ray's columns() internally does limit(1) which forces execution and breaks streaming
-        columns_result = self.data.columns()
+        # Cache columns once at start to avoid breaking pipeline with repeated columns() calls.
+        # Ray's count() and columns(fetch_if_missing=True) can force execution of lazy reads,
+        # so prefer configured schema or no-fetch Ray schema before falling back.
+        if plan_only:
+            columns_result = get_configured_ray_columns(self.cfg) or _dataset_columns_no_fetch(self.data) or []
+        elif checkpoint_enabled:
+            columns_result = get_configured_ray_columns(self.cfg) or _dataset_columns_no_fetch(self.data)
+        else:
+            columns_result = get_configured_ray_columns(self.cfg) or _dataset_columns_no_fetch(self.data)
+            if columns_result is None:
+                columns_result = self.data.columns()
         # Handle empty dataset case where columns() returns None
         if columns_result is None:
-            from loguru import logger
+            if checkpoint_enabled:
+                logger.warning(
+                    "Dataset schema is unknown while Ray Data checkpointing is enabled; "
+                    "continuing without eager schema fetch."
+                )
+                columns_result = []
+            else:
+                logger.warning("Dataset has unknown schema (likely empty), skipping operator processing")
+                return self
 
-            logger.warning("Dataset has unknown schema (likely empty), skipping operator processing")
-            return self
         cached_columns = set(columns_result)
 
         for op in operators:
             try:
-                cached_columns = self._run_single_op(op, cached_columns, tracer=tracer)
+                cached_columns = self._run_single_op(op, cached_columns, tracer=tracer, plan_only=plan_only)
             except Exception as e:
                 logger.error(f"Error processing operator {op}: {e}.")
                 if op.runtime_env is not None:
@@ -200,14 +438,14 @@ class RayDataset(DJDataset):
                     original_runtime_env = op.runtime_env
                     try:
                         op.runtime_env = None
-                        cached_columns = self._run_single_op(op, cached_columns, tracer=tracer)
+                        cached_columns = self._run_single_op(op, cached_columns, tracer=tracer, plan_only=plan_only)
                     finally:
                         op.runtime_env = original_runtime_env
                 else:
                     raise e
         return self
 
-    def _run_single_op(self, op, cached_columns=None, tracer=None):
+    def _run_single_op(self, op, cached_columns=None, tracer=None, plan_only: bool = False):
         # Use cached columns to avoid calling self.data.columns() which breaks pipeline
         if cached_columns is None:
             cached_columns = set(self.data.columns())
@@ -252,9 +490,10 @@ class RayDataset(DJDataset):
                             runtime_env=op.runtime_env,
                         )
                     else:
-                        compute = get_compute_strategy(op.process, concurrency=op.num_proc)
+                        process_func = make_named_mapper_batch_fn(op._name, op.process)
+                        compute = get_compute_strategy(process_func, concurrency=op.num_proc)
                         self.data = self.data.map_batches(
-                            op.process,
+                            process_func,
                             batch_size=batch_size,
                             batch_format="pyarrow",
                             num_cpus=op.num_cpus,
@@ -295,9 +534,13 @@ class RayDataset(DJDataset):
                         runtime_env=op.runtime_env,
                     )
                 else:
-                    compute = get_compute_strategy(op.compute_stats, concurrency=op.num_proc)
+                    prepare_for_ray_tasks = getattr(op, "prepare_backend_for_ray_tasks", None)
+                    if callable(prepare_for_ray_tasks):
+                        prepare_for_ray_tasks()
+                    compute_stats_func = partial(process_mapper_batch_preserving_schema, process_func=op.compute_stats)
+                    compute = get_compute_strategy(compute_stats_func, concurrency=op.num_proc)
                     self.data = self.data.map_batches(
-                        op.compute_stats,
+                        compute_stats_func,
                         batch_size=batch_size,
                         batch_format="pyarrow",
                         num_cpus=op.num_cpus,
@@ -337,7 +580,11 @@ class RayDataset(DJDataset):
                     if tracer and should_trace_op(tracer, op._name) and original_process:
                         op.process = original_process
             elif isinstance(op, (Deduplicator, Pipeline)):
-                self.data = op.run(self.data)
+                run_plan_only = getattr(op, "run_plan_only", None)
+                if plan_only and callable(run_plan_only):
+                    self.data = run_plan_only(self.data)
+                else:
+                    self.data = op.run(self.data)
             else:
                 logger.error("Ray executor only support Filter, Mapper, Deduplicator and Pipeline OPs for now")
                 raise NotImplementedError
@@ -351,6 +598,16 @@ class RayDataset(DJDataset):
         return cached_columns
 
     def count(self) -> int:
+        cached_row_count = getattr(self, "_cached_row_count", None)
+        if cached_row_count is not None:
+            return cached_row_count
+        row_count_getter = getattr(self, "_row_count_getter", None)
+        if row_count_getter is not None:
+            self._row_count_getter = None
+            row_count = row_count_getter()
+            if row_count is not None:
+                self._cached_row_count = row_count
+                return row_count
         return self.data.count()
 
     @classmethod
@@ -393,11 +650,9 @@ class RayDataset(DJDataset):
         return self.data.to_pandas().to_dict(orient="records")
 
 
-_JSON_DATASOURCE_BASE = getattr(
-    ray.data.read_api,
-    "ArrowJSONDatasource",
-    ray.data.read_api.JSONDatasource,
-)
+_JSON_DATASOURCE_BASE = getattr(ray.data.read_api, "ArrowJSONDatasource", None)
+if _JSON_DATASOURCE_BASE is None:
+    _JSON_DATASOURCE_BASE = ray.data.read_api.JSONDatasource
 
 
 class JSONStreamDatasource(_JSON_DATASOURCE_BASE):

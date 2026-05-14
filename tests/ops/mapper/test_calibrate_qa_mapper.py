@@ -1,7 +1,7 @@
 import unittest
 from loguru import logger
 
-from data_juicer.ops.mapper.calibrate_qa_mapper import CalibrateQAMapper
+from data_juicer.ops.mapper.qa.calibrate_qa_mapper import CalibrateQAMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

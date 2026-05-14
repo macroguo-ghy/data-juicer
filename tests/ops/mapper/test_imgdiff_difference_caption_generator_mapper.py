@@ -1,7 +1,7 @@
 import unittest
 import os
 
-from data_juicer.ops.mapper.imgdiff_difference_caption_generator_mapper import Difference_Caption_Generator_Mapper
+from data_juicer.ops.mapper.image.imgdiff_difference_caption_generator_mapper import Difference_Caption_Generator_Mapper
 from data_juicer.core import NestedDataset
 from data_juicer.ops.base_op import OP
 from data_juicer.ops.load import load_ops

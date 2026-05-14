@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.punctuation_normalization_mapper import \
+from data_juicer.ops.mapper.text.punctuation_normalization_mapper import \
     PunctuationNormalizationMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 

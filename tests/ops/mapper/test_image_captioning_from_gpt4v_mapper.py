@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_captioning_from_gpt4v_mapper import (
+from data_juicer.ops.mapper.image.image_captioning_from_gpt4v_mapper import (
     ImageCaptioningFromGPT4VMapper,
 )
 from data_juicer.utils.mm_utils import SpecialTokens
@@ -125,7 +125,7 @@ class ImageCaptioningFromGPT4VMapperTest(DataJuicerTestCaseBase):
             op = ImageCaptioningFromGPT4VMapper(mode="error")
 
     def _call_gpt_vision_api(self):
-        from data_juicer.ops.mapper.image_captioning_from_gpt4v_mapper import call_gpt_vision_api
+        from data_juicer.ops.mapper.image.image_captioning_from_gpt4v_mapper import call_gpt_vision_api
 
         return call_gpt_vision_api(
             "test_key",

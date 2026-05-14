@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
+import pyarrow as pa
 from datasets import Dataset
 from jsonargparse import Namespace
 
@@ -12,6 +13,7 @@ from data_juicer.config import init_configs
 from data_juicer.core.data.dataset_builder import (
     DatasetBuilder,
     _align_nested_datasets,
+    _align_ray_datasets,
     parse_cli_datapath,
     rewrite_cli_datapath,
 )
@@ -178,6 +180,43 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
 
         with self.assertRaises(ConfigValidationError):
             _align_nested_datasets([ds1, ds2])
+
+    def test_align_ray_datasets_fill_missing_columns_with_arrow_types(self):
+        class RayDatasetStub:
+            def __init__(self, table):
+                self.table = table
+
+            def schema(self):
+                return self.table.schema
+
+            def columns(self):
+                return self.table.column_names
+
+            def add_column(self, column_name, fn, batch_format="pyarrow"):
+                if batch_format != "pyarrow":
+                    raise AssertionError(batch_format)
+                return RayDatasetStub(self.table.append_column(column_name, fn(self.table)))
+
+            def select_columns(self, columns):
+                return RayDatasetStub(self.table.select(columns))
+
+        ds1 = RayDatasetStub(pa.table({"text": pa.array(["a"], type=pa.string())}))
+        ds2 = RayDatasetStub(
+            pa.table(
+                {
+                    "text": pa.array(["b"], type=pa.string()),
+                    "lang": pa.array(["en"], type=pa.string()),
+                    "score": pa.array([1], type=pa.int64()),
+                }
+            )
+        )
+
+        aligned = _align_ray_datasets([ds1, ds2])
+
+        self.assertEqual(aligned[0].schema().field("lang").type, pa.string())
+        self.assertEqual(aligned[0].schema().field("score").type, pa.int64())
+        self.assertEqual(aligned[0].table["lang"].to_pylist(), [None])
+        self.assertEqual(aligned[0].table["score"].to_pylist(), [None])
 
     def test_parse_cli_datapath(self):
         dataset_path = "1.0 ds1.jsonl 2.0 ds2_dir 3.0 ds3.jsonl"

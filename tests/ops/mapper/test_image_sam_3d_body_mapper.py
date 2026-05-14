@@ -5,7 +5,7 @@ import tempfile
 import shutil
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_sam_3d_body_mapper import \
+from data_juicer.ops.mapper.image.image_sam_3d_body_mapper import \
     ImageSAM3DBodyMapper
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase

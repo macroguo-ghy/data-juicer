@@ -6,13 +6,18 @@ import tempfile
 import yaml
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
+from unittest.mock import patch
 
 from jsonargparse import Namespace, namespace_to_dict
 
 from data_juicer.config import init_configs, get_default_cfg, validate_work_dir_config, resolve_job_id, resolve_job_directories, update_op_attr, export_config, merge_config, prepare_side_configs
 from data_juicer.ops import load_ops
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, TEST_TAG
-from data_juicer.utils.constant import RAY_JOB_ENV_VAR
+from data_juicer.utils.constant import (
+    METRICS_JOB_ID_ENV_VAR,
+    METRICS_RAY_ADDRESS_ENV_VAR,
+    RAY_JOB_ENV_VAR,
+)
 
 
 test_yaml_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
@@ -44,6 +49,8 @@ class ConfigTest(DataJuicerTestCaseBase):
             os.system(f'rm -rf {self.tmp_dir}')
 
         os.environ[RAY_JOB_ENV_VAR] = "0"
+        os.environ.pop(METRICS_JOB_ID_ENV_VAR, None)
+        os.environ.pop(METRICS_RAY_ADDRESS_ENV_VAR, None)
 
     def test_help_info(self):
         out = StringIO()
@@ -68,6 +75,8 @@ class ConfigTest(DataJuicerTestCaseBase):
 
             # work_dir now includes job_id suffix due to resolve_job_directories
             expected_work_dir = cfg.work_dir
+            self.assertEqual(os.environ[METRICS_JOB_ID_ENV_VAR], cfg.job_id)
+            self.assertEqual(os.environ[METRICS_RAY_ADDRESS_ENV_VAR], cfg.ray_address)
             self.assertDictEqual(
                 cfg.process[0], {
                     'whitespace_normalization_mapper': {
@@ -420,6 +429,8 @@ class ConfigTest(DataJuicerTestCaseBase):
         # Test essential defaults
         self.assertEqual(cfg.executor_type, 'default')
         self.assertEqual(cfg.ray_address, 'auto')
+        self.assertEqual(cfg.ray_collect_real_metrics, False)
+        self.assertEqual(cfg.ray_dry_run_plan, False)
         self.assertEqual(cfg.text_keys, 'text')
         self.assertEqual(cfg.add_suffix, False)
         self.assertEqual(cfg.export_path, './outputs/')
@@ -427,6 +438,8 @@ class ConfigTest(DataJuicerTestCaseBase):
         
         # Test default values are of correct type
         self.assertIsInstance(cfg.executor_type, str)
+        self.assertIsInstance(cfg.ray_collect_real_metrics, bool)
+        self.assertIsInstance(cfg.ray_dry_run_plan, bool)
         self.assertIsInstance(cfg.add_suffix, bool)
         self.assertIsInstance(cfg.export_path, str)
 
@@ -562,6 +575,15 @@ class ConfigTest(DataJuicerTestCaseBase):
                 '--np', f'{os.cpu_count() + 100}',
             ])
             self.assertEqual(cfg.np, os.cpu_count())
+
+    def test_np_kept_when_cpu_count_is_zero(self):
+        out = StringIO()
+        with redirect_stdout(out), patch("data_juicer.utils.resource_utils.cpu_count", return_value=0):
+            cfg = init_configs(args=[
+                '--config', test_yaml_path,
+                '--np', '4',
+            ])
+            self.assertEqual(cfg.np, 4)
 
     def test_op_fusion(self):
         out = StringIO()
@@ -927,6 +949,7 @@ from . import new_op4
         cfg.event_log_dir = '{work_dir}/logs'
         cfg.checkpoint_dir = '{work_dir}/checkpoints'
         cfg.partition_dir = '{work_dir}/partitions'
+        cfg.ray_data_checkpoint = Namespace(dir='{work_dir}/ray-data/{job_id}')
         cfg.job_id = '20250804_143022_abc123'
         
         cfg = resolve_job_directories(cfg)
@@ -938,6 +961,10 @@ from . import new_op4
         self.assertEqual(cfg.event_log_dir, './outputs/20250804_143022_abc123/logs')
         self.assertEqual(cfg.checkpoint_dir, './outputs/20250804_143022_abc123/checkpoints')
         self.assertEqual(cfg.partition_dir, './outputs/20250804_143022_abc123/partitions')
+        self.assertEqual(
+            cfg.ray_data_checkpoint.dir,
+            './outputs/20250804_143022_abc123/ray-data/20250804_143022_abc123',
+        )
         self.assertEqual(cfg.metadata_dir, './outputs/20250804_143022_abc123/metadata')
         self.assertEqual(cfg.results_dir, './outputs/20250804_143022_abc123/results')
         self.assertEqual(cfg.event_log_file, './outputs/20250804_143022_abc123/events.jsonl')
@@ -972,6 +999,12 @@ from . import new_op4
             'dataset_path': './demos/data/demo-dataset.jsonl',
             'work_dir': './outputs/test_project/{job_id}',
             'export_path': '{work_dir}/results.jsonl',
+            'ray_data_checkpoint': {
+                'enabled': True,
+                'dir': 'hdfs://checkpoint/{job_id}',
+                'delete_no_checkpoint_files': True,
+                'write_interval': 9,
+            },
             'process': [
                 {'whitespace_normalization_mapper': {'text_key': 'text'}}
             ]
@@ -997,6 +1030,10 @@ from . import new_op4
                 # Verify export_path was substituted
                 self.assertIn(cfg.job_id, cfg.export_path)
                 self.assertNotIn('{work_dir}', cfg.export_path)
+                self.assertTrue(cfg.ray_data_checkpoint.enabled)
+                self.assertEqual(cfg.ray_data_checkpoint.dir, f'hdfs://checkpoint/{cfg.job_id}')
+                self.assertTrue(cfg.ray_data_checkpoint.delete_no_checkpoint_files)
+                self.assertEqual(cfg.ray_data_checkpoint.write_interval, 9)
                 
         finally:
             os.unlink(temp_config_path)

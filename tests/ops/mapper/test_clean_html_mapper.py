@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.clean_html_mapper import CleanHtmlMapper
+from data_juicer.ops.mapper.text.clean_html_mapper import CleanHtmlMapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 

@@ -2,7 +2,7 @@ import os
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.mapper.image_captioning_mapper import \
+from data_juicer.ops.mapper.image.image_captioning_mapper import \
     ImageCaptioningMapper
 from data_juicer.utils.mm_utils import SpecialTokens
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase

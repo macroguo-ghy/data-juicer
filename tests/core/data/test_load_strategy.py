@@ -1,12 +1,29 @@
+import csv
 import unittest
 from unittest.mock import patch, MagicMock
+
+import pyarrow as pa
+
 from data_juicer.core.data.load_strategy import (
     DataLoadStrategyRegistry, DataLoadStrategy, StrategyKey,
     DefaultLocalDataLoadStrategy,
     DefaultHuggingfaceDataLoadStrategy,
     RayLocalJsonDataLoadStrategy,
     DefaultS3DataLoadStrategy,
-    RayS3DataLoadStrategy
+    RayS3DataLoadStrategy,
+    RayHDFSDataLoadStrategy,
+    DefaultHiveDataLoadStrategy,
+    RayHiveDataLoadStrategy,
+    DefaultTQSDataLoadStrategy,
+    _build_hive_cast_block_udf,
+    _count_parquet_rows_from_filesystem,
+    _cast_hive_batch_columns,
+)
+from data_juicer.core.data.config_validator import ConfigValidationError
+from data_juicer.core.io_utils import (
+    _ensure_csv_field_size_limit,
+    build_tqs_client_result_limited_query,
+    run_tqs_query_to_records,
 )
 from jsonargparse import Namespace
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase, TEST_TAG
@@ -193,6 +210,490 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
         assert getattr(strategy.cfg, 'text_keys', ['text']) == ['text']
         assert getattr(strategy.cfg, 'suffixes', None) is None
         assert getattr(strategy.cfg, 'add_suffix', False) is False
+
+    def test_default_hive_loader_requires_ray_executor(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hive",
+            "table_name": "db.table",
+        }
+
+        strategy = DefaultHiveDataLoadStrategy(ds_config, Namespace(work_dir=WORK_DIR))
+
+        with self.assertRaisesRegex(RuntimeError, "executor_type: ray"):
+            strategy.load_data()
+
+    @patch("data_juicer.core.data.load_strategy._load_ray_hive_catalog_cls")
+    @patch("ray.data.read_hive_table", create=True)
+    def test_ray_hive_loader_uses_read_hive_table(self, mock_read_hive_table, mock_load_hive_catalog_cls):
+        catalog = MagicMock()
+        mock_hive_catalog_cls = MagicMock(return_value=catalog)
+        mock_load_hive_catalog_cls.return_value = mock_hive_catalog_cls
+        ray_dataset = MagicMock()
+        mock_read_hive_table.return_value = ray_dataset
+        ds_config = {
+            "type": "remote",
+            "source": "hive",
+            "table_name": "db.table",
+            "columns": {"col_a": "STRING", "col_b": "BIGINT"},
+            "filter": "date='20260426'",
+            "concurrency": 100,
+            "override_num_blocks": 200,
+            "ray_remote_args": {"num_cpus": 2},
+            "arrow_parquet_args": {"coerce_int96_timestamp_unit": "ms"},
+        }
+
+        dataset = RayHiveDataLoadStrategy(
+            ds_config,
+            Namespace(work_dir=WORK_DIR, auto_op_parallelism=None),
+        ).load_data()
+
+        self.assertIs(dataset.data, ray_dataset)
+        mock_load_hive_catalog_cls.assert_called_once_with()
+        mock_hive_catalog_cls.assert_called_once_with()
+        catalog.start.assert_called_once_with()
+        mock_read_hive_table.assert_called_once()
+        read_kwargs = mock_read_hive_table.call_args.kwargs
+        self.assertEqual(
+            {
+                key: value
+                for key, value in read_kwargs.items()
+                if key != "_block_udf"
+            },
+            {
+                "table_name": "db.table",
+                "columns": ["col_a", "col_b"],
+                "filter": "date='20260426'",
+                "concurrency": 100,
+                "override_num_blocks": 200,
+                "ray_remote_args": {"num_cpus": 2},
+                "coerce_int96_timestamp_unit": "ms",
+                "catalog": catalog,
+            },
+        )
+        block_udf = read_kwargs["_block_udf"]
+        casted_table = block_udf(
+            pa.table(
+                {
+                    "col_a": pa.array([1], type=pa.int64()),
+                    "col_b": pa.array(["2"], type=pa.string()),
+                }
+            )
+        )
+        self.assertEqual(casted_table.schema.field("col_a").type, pa.string())
+        self.assertEqual(casted_table.schema.field("col_b").type, pa.int64())
+        ray_dataset.map_batches.assert_not_called()
+
+    def test_cast_hive_batch_columns_casts_null_and_mixed_columns(self):
+        table = pa.table(
+            {
+                "string_col": pa.array([None, "1"], type=pa.string()),
+                "int_col": pa.array([None, 2], type=pa.int64()),
+                "null_col": pa.array([None, None], type=pa.null()),
+            }
+        )
+
+        result = _cast_hive_batch_columns(
+            table,
+            {
+                "string_col": "STRING",
+                "int_col": "BIGINT",
+                "null_col": "BIGINT",
+                "missing_col": "STRING",
+            },
+        )
+
+        self.assertEqual(result.schema.field("string_col").type, pa.string())
+        self.assertEqual(result.schema.field("int_col").type, pa.int64())
+        self.assertEqual(result.schema.field("null_col").type, pa.int64())
+        self.assertEqual(result.column("null_col").to_pylist(), [None, None])
+
+    def test_hive_cast_block_udf_preserves_existing_block_udf_order(self):
+        def existing_block_udf(table):
+            return table.append_column("added", pa.array(["3"], type=pa.string()))
+
+        block_udf = _build_hive_cast_block_udf(
+            {"value": "BIGINT", "added": "BIGINT"},
+            existing_block_udf,
+        )
+
+        result = block_udf(pa.table({"value": pa.array(["2"], type=pa.string())}))
+
+        self.assertEqual(result.schema.field("value").type, pa.int64())
+        self.assertEqual(result.schema.field("added").type, pa.int64())
+        self.assertEqual(result.to_pydict(), {"value": [2], "added": [3]})
+
+    @patch("data_juicer.core.data.load_strategy._load_ray_hive_catalog_cls")
+    @patch("ray.data.read_hive_table", create=True)
+    def test_ray_hive_loader_does_not_forward_executor_load_kwargs(
+        self, mock_read_hive_table, mock_load_hive_catalog_cls
+    ):
+        catalog = MagicMock()
+        mock_hive_catalog_cls = MagicMock(return_value=catalog)
+        mock_load_hive_catalog_cls.return_value = mock_hive_catalog_cls
+        ray_dataset = MagicMock()
+        mock_read_hive_table.return_value = ray_dataset
+        ds_config = {
+            "type": "remote",
+            "source": "hive",
+            "table_name": "db.table",
+            "columns": ["col_a", "col_b"],
+            "load_kwargs": {"custom_read_option": "kept"},
+        }
+
+        dataset = RayHiveDataLoadStrategy(
+            ds_config,
+            Namespace(work_dir=WORK_DIR, auto_op_parallelism=None),
+        ).load_data(num_proc=16, features={"unexpected": "ignored"})
+
+        self.assertIs(dataset.data, ray_dataset)
+        mock_read_hive_table.assert_called_once_with(
+            table_name="db.table",
+            columns=["col_a", "col_b"],
+            custom_read_option="kept",
+            catalog=catalog,
+        )
+
+    def test_ray_hive_loader_rejects_catalog_config(self):
+        with self.assertRaisesRegex(ConfigValidationError, "`catalog` is not supported"):
+            RayHiveDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "hive",
+                    "table_name": "db.table",
+                    "catalog": {"type": "hive", "metastore_uri": "thrift://metastore:9083"},
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
+
+    def test_ray_hive_loader_requires_table_name(self):
+        with self.assertRaisesRegex(ConfigValidationError, "Missing required fields: table_name"):
+            RayHiveDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "hive",
+                    "columns": ["col_a"],
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
+
+    def test_ray_hive_loader_rejects_legacy_fields(self):
+        for field, value in {
+            "sql": "select * from db.table",
+            "table": "db.table",
+            "cast_columns": {"col_a": "STRING"},
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ConfigValidationError, f"`{field}` is not supported"):
+                    RayHiveDataLoadStrategy(
+                        {
+                            "type": "remote",
+                            "source": "hive",
+                            "table_name": "db.table",
+                            field: value,
+                        },
+                        Namespace(work_dir=WORK_DIR),
+                    )
+
+    def test_ray_hive_loader_validates_columns_config(self):
+        invalid_columns_configs = [
+            [],
+            {},
+            ["col_a", 1],
+            {"col_a": 1},
+        ]
+        for columns in invalid_columns_configs:
+            with self.subTest(columns=columns):
+                with self.assertRaisesRegex(ConfigValidationError, "columns"):
+                    RayHiveDataLoadStrategy(
+                        {
+                            "type": "remote",
+                            "source": "hive",
+                            "table_name": "db.table",
+                            "columns": columns,
+                        },
+                        Namespace(work_dir=WORK_DIR),
+                    )
+
+    @patch("ray.data.read_hive_table", new=None, create=True)
+    def test_ray_hive_loader_requires_bytedray_hive_api(self):
+        strategy = RayHiveDataLoadStrategy(
+            {
+                "type": "remote",
+                "source": "hive",
+                "table_name": "db.table",
+            },
+            Namespace(work_dir=WORK_DIR),
+        )
+
+        with self.assertRaisesRegex(ImportError, "bytedray"):
+            strategy.load_data()
+
+    @patch("data_juicer.core.data.load_strategy.run_tqs_query_to_records")
+    def test_tqs_client_result_uses_query_field(self, mock_run_tqs_query_to_records):
+        mock_run_tqs_query_to_records.return_value = [{"id": 1}]
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "client_result",
+            "query": "select 1 as id",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+        }
+
+        dataset = DefaultTQSDataLoadStrategy(ds_config, Namespace(work_dir=WORK_DIR)).load_data()
+
+        self.assertEqual(dataset.to_list(), [{"id": 1}])
+        mock_run_tqs_query_to_records.assert_called_once_with(
+            query="select 1 as id",
+            tqs_app_id="app-id",
+            tqs_app_key="app-key",
+            user_name="user",
+            tqs_cluster="cn",
+            tqs_enable_domain=None,
+            tqs_timeout=120,
+            max_result_rows=10000,
+        )
+
+    def test_tqs_client_result_forwards_client_options(self):
+        captured_queries = []
+
+        class AnalysisResult:
+            error_message = ""
+
+            def is_failed(self):
+                return False
+
+        class Job:
+            result_schema = [["id", "BIGINT"]]
+
+            def is_success(self):
+                return True
+
+            def get_typed_result(self, return_header=False):
+                return [[1]]
+
+        class Client:
+            init_kwargs = None
+
+            def __init__(self, *args, **kwargs):
+                Client.init_kwargs = kwargs
+
+            def analyze_query(self, user_name, query):
+                captured_queries.append(("analyze", query))
+                return AnalysisResult()
+
+            def execute_query(self, user_name, query):
+                captured_queries.append(("execute", query))
+                return Job()
+
+        bytedtqs = MagicMock()
+        bytedtqs.TQSClient = Client
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=bytedtqs):
+            self.assertEqual(
+                run_tqs_query_to_records(
+                    "select id from db.table",
+                    tqs_app_id="app-id",
+                    tqs_app_key="app-key",
+                    user_name="user",
+                    tqs_cluster="cn",
+                    tqs_enable_domain=True,
+                    tqs_timeout=30,
+                    max_result_rows=1,
+                ),
+                [{"id": 1}],
+            )
+
+        expected_query = (
+            "SELECT *\n"
+            "FROM (\n"
+            "select id from db.table\n"
+            ") __dj_tqs_client_result_limit\n"
+            "LIMIT 1"
+        )
+        self.assertEqual(captured_queries, [("analyze", expected_query), ("execute", expected_query)])
+        self.assertEqual(
+            Client.init_kwargs,
+            {
+                "app_id": "app-id",
+                "app_key": "app-key",
+                "cluster": "cn",
+                "timeout": 30,
+                "enable_domain": True,
+            },
+        )
+
+    def test_tqs_client_result_limited_query_strips_trailing_semicolon(self):
+        self.assertEqual(
+            build_tqs_client_result_limited_query("select id from db.table;  ", 10),
+            (
+                "SELECT *\n"
+                "FROM (\n"
+                "select id from db.table\n"
+                ") __dj_tqs_client_result_limit\n"
+                "LIMIT 10"
+            ),
+        )
+
+    def test_tqs_client_result_rejects_too_many_rows(self):
+        class AnalysisResult:
+            error_message = ""
+
+            def is_failed(self):
+                return False
+
+        class Job:
+            results = [{"id": 1}, {"id": 2}]
+
+            def is_success(self):
+                return True
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze_query(self, user_name, query):
+                return AnalysisResult()
+
+            def execute_query(self, user_name, query):
+                return Job()
+
+        bytedtqs = MagicMock()
+        bytedtqs.TQSClient = Client
+        bytedtqs.Cluster.CN = "cn"
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=bytedtqs):
+            with self.assertRaisesRegex(RuntimeError, "exceeding max_result_rows=1"):
+                run_tqs_query_to_records(
+                    "select id from db.table",
+                    tqs_app_id="app-id",
+                    tqs_app_key="app-key",
+                    user_name="user",
+                    max_result_rows=1,
+                )
+
+    def test_tqs_client_result_supports_bytedtqs_query_result_entity_shape(self):
+        class AnalysisResult:
+            error_message = ""
+
+            def is_failed(self):
+                return False
+
+        class QueryResult:
+            with_header = True
+
+            def fetch_all_data(self):
+                return [["id", "name"], ["1", "alice"]]
+
+        class Job:
+            result_schema = [["id", "BIGINT"], ["name", "STRING"]]
+
+            def is_success(self):
+                return True
+
+            def get_typed_result(self, return_header=False):
+                raise NotImplementedError("get_typed_result callback is not set")
+
+            def get_result(self):
+                return QueryResult()
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze_query(self, user_name, query):
+                return AnalysisResult()
+
+            def execute_query(self, user_name, query):
+                return Job()
+
+        bytedtqs = MagicMock()
+        bytedtqs.TQSClient = Client
+        bytedtqs.Cluster.CN = "cn"
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=bytedtqs):
+            self.assertEqual(
+                run_tqs_query_to_records(
+                    "select id, name from db.table",
+                    tqs_app_id="app-id",
+                    tqs_app_key="app-key",
+                    user_name="user",
+                    max_result_rows=1,
+                ),
+                [{"id": "1", "name": "alice"}],
+            )
+
+    def test_tqs_client_result_raises_csv_field_limit_before_typed_result(self):
+        original_limit = csv.field_size_limit()
+        csv.field_size_limit(8)
+
+        class AnalysisResult:
+            error_message = ""
+
+            def is_failed(self):
+                return False
+
+        class Job:
+            result_schema = [["payload", "STRING"]]
+
+            def is_success(self):
+                return True
+
+            def get_typed_result(self, return_header=False):
+                row = next(csv.reader(["x" * 32]))
+                return [row]
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze_query(self, user_name, query):
+                return AnalysisResult()
+
+            def execute_query(self, user_name, query):
+                return Job()
+
+        bytedtqs = MagicMock()
+        bytedtqs.TQSClient = Client
+        bytedtqs.Cluster.CN = "cn"
+
+        try:
+            with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=bytedtqs):
+                self.assertEqual(
+                    run_tqs_query_to_records(
+                        "select payload from db.table",
+                        tqs_app_id="app-id",
+                        tqs_app_key="app-key",
+                        user_name="user",
+                        max_result_rows=1,
+                    ),
+                    [{"payload": "x" * 32}],
+                )
+        finally:
+            csv.field_size_limit(original_limit)
+
+    def test_tqs_client_result_csv_field_limit_noops_when_current_limit_is_enough(self):
+        with patch("data_juicer.core.io_utils.csv.field_size_limit", return_value=2**63):
+            _ensure_csv_field_size_limit()
+
+    def test_tqs_client_result_csv_field_limit_retries_after_overflow(self):
+        calls = []
+
+        def fake_field_size_limit(value=None):
+            if value is None:
+                return 8
+            calls.append(value)
+            if len(calls) == 1:
+                raise OverflowError
+            return value
+
+        with patch("data_juicer.core.io_utils.sys.maxsize", 1000):
+            with patch("data_juicer.core.io_utils.csv.field_size_limit", side_effect=fake_field_size_limit):
+                _ensure_csv_field_size_limit()
+
+        self.assertEqual(calls, [1000, 100])
 
     def test_load_strategy_full_config(self):
         """Test load strategy with full config"""
@@ -658,6 +1159,206 @@ class TestRayS3DataLoadStrategy(DataJuicerTestCaseBase):
         self.assertEqual(strategy.ds_config["aws_session_token"], "test_token")
         self.assertEqual(strategy.ds_config["aws_region"], "us-east-1")
         self.assertEqual(strategy.ds_config["endpoint_url"], "https://s3.amazonaws.com")
+
+
+class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
+    """Test cases for RayHDFSDataLoadStrategy"""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = get_default_cfg()
+        self.cfg.text_keys = ["text"]
+
+    def test_strategy_registration(self):
+        strategy_class = DataLoadStrategyRegistry.get_strategy_class(
+            executor_type="ray", data_type="remote", data_source="hdfs"
+        )
+        self.assertIsNotNone(strategy_class)
+        self.assertEqual(strategy_class, RayHDFSDataLoadStrategy)
+
+    def test_count_parquet_rows_from_filesystem_uses_metadata(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_count_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), osp.join(tmp_dir, "part-00000.parquet"))
+            pq.write_table(pa.table({"id": [3, 4, 5]}), osp.join(tmp_dir, "part-00001.parquet"))
+            open(osp.join(tmp_dir, "_SUCCESS"), "w").close()
+
+            self.assertEqual(_count_parquet_rows_from_filesystem(pa_fs.LocalFileSystem(), tmp_dir), 5)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._count_parquet_rows_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_defers_metadata_row_count_until_count(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_count_parquet_rows,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_count_parquet_rows.return_value = 123
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_ray_dataset.assert_called_once()
+        self.assertEqual(mock_ray_dataset.call_args.args, (fake_dataset,))
+        ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs
+        self.assertEqual(ray_dataset_kwargs["dataset_path"], "hdfs://haruna/user/demo/parts")
+        self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
+        mock_count_parquet_rows.assert_not_called()
+
+        row_count_getter = ray_dataset_kwargs["row_count_getter"]
+        self.assertEqual(row_count_getter(), 123)
+        mock_count_parquet_rows.assert_called_once_with(fake_filesystem, "/user/demo/parts")
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    @patch("pyarrow.fs.FSSpecHandler")
+    @patch("pyarrow.fs.PyFileSystem")
+    @patch("fsspec.filesystem")
+    def test_load_parquet_can_use_webhdfs_filesystem(
+        self,
+        mock_fsspec_filesystem,
+        mock_pyarrow_filesystem,
+        mock_fsspec_handler,
+        mock_get_pyarrow_filesystem,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        fake_webhdfs_fs = MagicMock(name="webhdfs_fs")
+        fake_handler = MagicMock(name="webhdfs_handler")
+        fake_pyarrow_fs = MagicMock(name="pyarrow_fs")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_fsspec_filesystem.return_value = fake_webhdfs_fs
+        mock_fsspec_handler.return_value = fake_handler
+        mock_pyarrow_filesystem.return_value = fake_pyarrow_fs
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://namenode:9000/datasets/demo",
+            "format": "parquet",
+            "filesystem": "webhdfs",
+            "webhdfs": {"host": "localhost", "port": 9870, "user": "bytedance"},
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_get_pyarrow_filesystem.assert_not_called()
+        mock_fsspec_filesystem.assert_called_once_with(
+            "webhdfs",
+            host="localhost",
+            port=9870,
+            user="bytedance",
+        )
+        mock_fsspec_handler.assert_called_once_with(fake_webhdfs_fs)
+        mock_pyarrow_filesystem.assert_called_once_with(fake_handler)
+        mock_read_parquet.assert_called_once_with(
+            "/datasets/demo",
+            filesystem=fake_pyarrow_fs,
+        )
+        mock_ray_dataset.assert_called_once()
+        self.assertEqual(mock_ray_dataset.call_args.args, (fake_dataset,))
+        ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs
+        self.assertEqual(ray_dataset_kwargs["dataset_path"], "hdfs://namenode:9000/datasets/demo")
+        self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
+        self.assertTrue(callable(ray_dataset_kwargs["row_count_getter"]))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy.copy_uri_to_local")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_reads_hdfs_directly(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_copy_uri_to_local,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "columns": ["id", "images"],
+            "override_num_blocks": 16,
+            "ray_remote_args": {"num_cpus": 1},
+            "load_kwargs": {"concurrency": 4},
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data(num_proc=8)
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_get_pyarrow_filesystem.assert_called_once_with("hdfs://haruna/user/demo/parts")
+        mock_copy_uri_to_local.assert_not_called()
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/parts",
+            filesystem=fake_filesystem,
+            columns=["id", "images"],
+            override_num_blocks=16,
+            ray_remote_args={"num_cpus": 1},
+            concurrency=4,
+        )
+        mock_ray_dataset.assert_called_once()
+        self.assertEqual(mock_ray_dataset.call_args.args, (fake_dataset,))
+        ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs
+        self.assertEqual(ray_dataset_kwargs["dataset_path"], "hdfs://haruna/user/demo/parts")
+        self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
+        self.assertTrue(callable(ray_dataset_kwargs["row_count_getter"]))
+
+    def test_load_rejects_non_parquet_format(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/data.jsonl",
+            "format": "jsonl",
+        }
+
+        with self.assertRaisesRegex(ValueError, "supports parquet only"):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+    def test_load_rejects_unknown_filesystem(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "filesystem": "file",
+        }
+
+        with self.assertRaises(ConfigValidationError):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg)
 
 
 if __name__ == '__main__':
