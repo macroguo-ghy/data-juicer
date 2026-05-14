@@ -1,8 +1,8 @@
-# Ad Test HttpClient 设计
+# Ad AI Data Center HttpClient 设计
 
 ## 1. 背景
 
-后续计划建设一系列 `ad_test` 算子，包括通用 HTTP 算子、LLM 算子和 Code 算子。这些算子的共同能力是：根据样本字段构造请求，调用外部 HTTP 服务，再把响应或错误写回样本。
+后续计划建设一系列 `ad_ai_data_center` 算子，包括通用 HTTP 算子、LLM 算子和 Code 算子。这些算子的共同能力是：根据样本字段构造请求，调用外部 HTTP 服务，再把响应或错误写回样本。
 
 为了避免每个算子各自实现 `requests.post(...)` 或 `httpx.request(...)`，先建设一个通用 HTTP 工具类：
 
@@ -23,17 +23,17 @@ HttpClient
 `HttpClient` 作为稳定复用层，供后续算子使用：
 
 ```text
-AdTestHttpMapper
+AdAiDataCenterHttpMapper
         |
         v
 HttpClient
 
-AdTestLlmMapper
+AdAiDataCenterLlmMapper
         |
         v
 HttpClient
 
-AdTestCodeMapper
+AdAiDataCenterCodeMapper
         |
         v
 HttpClient
@@ -207,7 +207,7 @@ httpx.request(
 
 ### 7.1 通用 HTTP 算子
 
-`ad_test_http_mapper` 只负责 sample 字段映射：
+`ad_ai_data_center_http_mapper` 只负责 sample 字段映射：
 
 ```python
 payload = {
@@ -285,7 +285,7 @@ tests/utils/test_http_utils.py
 
 ### 8.2 后续算子单测
 
-后续 `ad_test_http_mapper` 的测试只验证字段映射：
+后续 `ad_ai_data_center_http_mapper` 的测试只验证字段映射：
 
 - `input_fields` 是否进入 payload。
 - 成功响应是否写入 `output_field`。
@@ -305,8 +305,8 @@ tests/utils/test_http_utils.py
 后续再新增：
 
 ```text
-data_juicer/ops/mapper/ad_test/ad_test_http_mapper.py
-tests/ops/mapper/test_ad_test_http_mapper.py
+data_juicer/ops/mapper/ad_ai_data_center/ad_ai_data_center_http_mapper.py
+tests/ops/mapper/test_ad_ai_data_center_http_mapper.py
 ```
 
 LLM 和 Code 专用算子等协议稳定后再建设。

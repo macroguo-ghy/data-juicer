@@ -1,8 +1,8 @@
-# Ad Test HttpClient Implementation Plan
+# Ad AI Data Center HttpClient Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a lightweight project-level `HttpClient` wrapper that standardizes HTTP calls for future `ad_test` HTTP, LLM, and Code operators.
+**Goal:** Add a lightweight project-level `HttpClient` wrapper that standardizes HTTP calls for future `ad_ai_data_center` HTTP, LLM, and Code operators.
 
 **Architecture:** Implement `HttpClient` in `data_juicer/utils/http_utils.py` as a thin wrapper around `httpx.request`. It will validate HTTP methods, pass through headers/query params/JSON body/timeout, parse JSON responses when possible, fall back to text for non-JSON responses, and return a stable result dictionary.
 

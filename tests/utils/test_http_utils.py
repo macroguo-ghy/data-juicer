@@ -43,12 +43,17 @@ class HttpClientTest(unittest.TestCase):
         })
 
     def test_get_dimension_and_metric_sends_real_http_request(self):
+        headers = {
+            "Project-Identifier": "ai_data_center",
+        }
+        cookie = os.environ.get("BPBOOST_COOKIE")
+        if cookie:
+            headers["Cookie"] = cookie
+
         client = HttpClient(
             endpoint="https://bpboost.bytedance.net/api/query-site/openapi/dimension-and-metric",
             method="GET",
-            headers={
-                "Project-Identifier": "ai_data_center",
-            },
+            headers=headers,
         )
         result = client.request(params={"datasourceGroupId": "11308"})
 
