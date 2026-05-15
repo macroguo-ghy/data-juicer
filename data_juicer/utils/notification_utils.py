@@ -4,9 +4,7 @@ from typing import Any
 
 from data_juicer.utils.http_utils import HttpClient
 
-TEST_CARD_NOTIFICATION_ENDPOINT = (
-    "https://ai-data-center.bytedance.net/api/openapi/lark/message/template-card/send-to-user"
-)
+TEST_CARD_NOTIFICATION_PATH = "/openapi/lark/message/template-card/send-to-user"
 TEST_CARD_NOTIFICATION_HEADERS = {
     "Content-Type": "application/json",
 }
@@ -21,10 +19,11 @@ def send_test_card_notification(
     if not template_id:
         raise ValueError("template_id must be provided")
     user_email_or_account = _get_ctx_required_value(ctx, "userAccount")
+    endpoint = _build_openapi_url(ctx, TEST_CARD_NOTIFICATION_PATH)
     headers = _build_headers(ctx)
 
     client = HttpClient(
-        endpoint=TEST_CARD_NOTIFICATION_ENDPOINT,
+        endpoint=endpoint,
         method="POST",
         headers=headers,
         timeout=30.0,
@@ -47,6 +46,11 @@ def _build_headers(ctx: dict[str, Any]) -> dict[str, str]:
         if value:
             headers[key] = str(value)
     return headers
+
+
+def _build_openapi_url(ctx: dict[str, Any], path: str) -> str:
+    base_url = _get_ctx_required_value(ctx, "openapiBaseUrl")
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 def _get_ctx_required_value(ctx: dict[str, Any], key: str) -> str:

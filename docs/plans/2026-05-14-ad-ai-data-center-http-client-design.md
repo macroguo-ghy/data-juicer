@@ -203,9 +203,55 @@ httpx.request(
 
 `HttpClient` 本身不退出进程、不修改样本、不记录业务字段。
 
-## 7. 与后续算子的关系
+## 7. 平台上下文
 
-### 7.1 通用 HTTP 算子
+需要调用平台 OpenAPI 或透传执行用户/PPE 环境的算子声明：
+
+```python
+NEED_CTX = True
+```
+
+后端生成 YAML 时只给这类算子注入 `ctx` 参数。第一版 `ctx` 契约如下：
+
+```json
+{
+  "userAccount": "wangjianda.667",
+  "x-tt-env": "ppe_sirius2",
+  "x-use-ppe": "1",
+  "synthesisInstanceId": 10001,
+  "flowInstanceId": 20001,
+  "flowNodeId": "node_load_data",
+  "taskId": 30001,
+  "taskVersion": 1,
+  "operatorIndex": 0,
+  "operatorName": "load_external_dataset",
+  "operatorType": "business",
+  "openapiBaseUrl": "https://ai-data-center.bytedance.net/api"
+}
+```
+
+算子侧按需读取字段：
+
+- `userAccount`：调用平台 OpenAPI 或外部服务时透传为执行用户。
+- `x-tt-env` / `x-use-ppe`：调用 PPE 环境时透传到请求头。
+- `openapiBaseUrl`：拼接当前项目 OpenAPI 地址，避免算子写死环境 URL。
+- 任务、工作流、算子元信息先保留在 `ctx` 中，供状态上报和审计类算子使用。
+
+例如测试卡片通知使用：
+
+```python
+endpoint = ctx["openapiBaseUrl"].rstrip("/") + "/openapi/lark/message/template-card/send-to-user"
+```
+
+外部数据导入使用：
+
+```python
+endpoint = ctx["openapiBaseUrl"].rstrip("/") + "/openapi/cloud-doc/sheets/all-plain-values"
+```
+
+## 8. 与后续算子的关系
+
+### 8.1 通用 HTTP 算子
 
 `ad_ai_data_center_http_mapper` 只负责 sample 字段映射：
 
@@ -232,7 +278,7 @@ sample[self.output_field] = result["data"] if result["data"] is not None else re
 sample[self.error_field] = result
 ```
 
-### 7.2 LLM 算子
+### 8.2 LLM 算子
 
 LLM 算子只负责 LLM 语义字段：
 
@@ -246,7 +292,7 @@ payload = {
 
 HTTP 请求、超时、状态码、响应解析都复用 `HttpClient`。
 
-### 7.3 Code 算子
+### 8.3 Code 算子
 
 Code 算子只负责 Code 语义字段：
 
@@ -261,9 +307,9 @@ payload = {
 
 HTTP 请求逻辑同样复用 `HttpClient`。
 
-## 8. 测试方案
+## 9. 测试方案
 
-### 8.1 工具类单测
+### 9.1 工具类单测
 
 新增：
 
@@ -283,7 +329,7 @@ tests/utils/test_http_utils.py
 
 测试不请求真实外网，使用 `httpx.MockTransport` 或 patch `httpx.request`。
 
-### 8.2 后续算子单测
+### 9.2 后续算子单测
 
 后续 `ad_ai_data_center_http_mapper` 的测试只验证字段映射：
 
@@ -293,7 +339,17 @@ tests/utils/test_http_utils.py
 
 不重复测试 HTTP status、timeout、JSON 解析细节，这些属于 `HttpClient` 的职责。
 
-## 9. 文件范围
+真实外部接口调用用环境变量显式开启，避免默认单测依赖网络和内部服务稳定性：
+
+```bash
+RUN_REAL_AD_AI_DATA_CENTER_HTTP_TEST=1 ./.venv/bin/python -m unittest \
+  tests.ops.mapper.test_ad_ai_data_center_http_mapper.AdAiDataCenterHttpMapperTest.test_dimension_and_metric_curl_sends_real_http_request_without_cookie
+
+RUN_REAL_EXTERNAL_EVAL_DATA_IMPORT_TEST=1 ./.venv/bin/python -m unittest \
+  tests.ops.mapper.test_external_eval_data_import_mapper.ExternalEvalDataImportMapperTest.test_lark_wiki_doc_url_sends_real_request_and_processes_result
+```
+
+## 10. 文件范围
 
 第一阶段只需要新增：
 
@@ -311,7 +367,7 @@ tests/ops/mapper/test_ad_ai_data_center_http_mapper.py
 
 LLM 和 Code 专用算子等协议稳定后再建设。
 
-## 10. 设计结论
+## 11. 设计结论
 
 先建设通用 `HttpClient`，不把 HTTP 请求逻辑散落在各个算子中。
 

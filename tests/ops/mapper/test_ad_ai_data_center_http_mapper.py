@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import call, patch
@@ -10,6 +11,7 @@ from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper import (
     CONFIG_PAGE_KEY,
     AdAiDataCenterHttpMapper,
+    NEED_CTX,
 )
 
 
@@ -51,9 +53,31 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
     def tearDown(self):
         self.notification_patcher.stop()
 
+    @staticmethod
+    def _ctx():
+        return {
+            "userAccount": "tester@example.com",
+            "x-tt-env": "ppe_sirius2",
+            "x-use-ppe": "1",
+            "synthesisInstanceId": 10001,
+            "flowInstanceId": 20001,
+            "flowNodeId": "node_load_data",
+            "taskId": 30001,
+            "taskVersion": 1,
+            "operatorIndex": 0,
+            "operatorName": "ad_ai_data_center_http_mapper",
+            "operatorType": "business",
+            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+        }
+
     def test_declares_custom_config_page_key(self):
         self.assertEqual(CONFIG_PAGE_KEY, "adAiDataCenterHttp")
+        self.assertEqual(NEED_CTX, True)
 
+    @unittest.skipUnless(
+        os.getenv("RUN_REAL_AD_AI_DATA_CENTER_HTTP_TEST") == "1",
+        "Set RUN_REAL_AD_AI_DATA_CENTER_HTTP_TEST=1 to call the real bpboost API.",
+    )
     def test_dimension_and_metric_curl_sends_real_http_request_without_cookie(self):
         op = AdAiDataCenterHttpMapper(
             endpoint=(
@@ -66,15 +90,11 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
             },
             input_fields=["datasourceGroupId"],
             output_field="dimension_and_metric",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
         dataset = Dataset.from_list([{
             "datasourceGroupId": "11308",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         }])
 
         result = op.run(dataset).to_list()
@@ -98,6 +118,19 @@ process:
       method: "GET"
       headers:
         Project-Identifier: "ai_data_center"
+      ctx:
+        userAccount: "tester@example.com"
+        x-tt-env: "ppe_sirius2"
+        x-use-ppe: "1"
+        synthesisInstanceId: 10001
+        flowInstanceId: 20001
+        flowNodeId: "node_load_data"
+        taskId: 30001
+        taskVersion: 1
+        operatorIndex: 0
+        operatorName: "ad_ai_data_center_http_mapper"
+        operatorType: "business"
+        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
       input_fields:
         - "1"
 """,
@@ -113,6 +146,7 @@ process:
         self.assertIsInstance(ops[1], AdAiDataCenterHttpMapper)
         self.assertEqual(ops[1].output_field, "http_output")
         self.assertEqual(ops[1].error_field, "http_err")
+        self.assertEqual(ops[1].ctx["userAccount"], "tester@example.com")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_writes_http_response_to_output_field(self, mock_client_cls):
@@ -127,17 +161,13 @@ process:
         dataset = Dataset.from_list([{
             "prompt": "hi",
             "extra": "keep",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         }])
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
             headers={"X-Test": "1"},
             input_fields=["prompt"],
             output_field="http_result",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
 
@@ -175,16 +205,12 @@ process:
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
             output_field="http_result",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
 
         result = op.process_single({
             "prompt": "hi",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         })
 
         self.assertEqual(
@@ -195,35 +221,20 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "开始",
-                        "content": (
-                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com", '
-                            '"x-tt-env": "ppe_sirius2", "x-use-ppe": "1"}}'
-                        ),
+                        "content": '{"prompt": "hi"}',
                         "errMsg": "",
                     },
-                    ctx={
-                        "userAccount": "tester@example.com",
-                        "x-tt-env": "ppe_sirius2",
-                        "x-use-ppe": "1",
-                    },
+                    ctx=self._ctx(),
                 ),
                 call(
                     template_id="AAqt1lQ72dVxK",
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "结束",
-                        "content": (
-                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com", '
-                            '"x-tt-env": "ppe_sirius2", "x-use-ppe": "1"}, '
-                            '"http_result": "{\\"answer\\": \\"hello\\"}"}'
-                        ),
+                        "content": '{"prompt": "hi", "http_result": "{\\"answer\\": \\"hello\\"}"}',
                         "errMsg": "",
                     },
-                    ctx={
-                        "userAccount": "tester@example.com",
-                        "x-tt-env": "ppe_sirius2",
-                        "x-use-ppe": "1",
-                    },
+                    ctx=self._ctx(),
                 ),
             ],
         )
@@ -245,16 +256,12 @@ process:
             input_fields=["prompt"],
             output_field="http_result",
             error_field="http_error",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
 
         op.process_single({
             "prompt": "hi",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         })
 
         self.assertEqual(
@@ -276,16 +283,12 @@ process:
             endpoint="http://example.test/plain",
             input_fields=["query"],
             output_field="http_result",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
 
         result = op.run(Dataset.from_list([{
             "query": "ping",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         }])).to_list()
 
         self.assertEqual(result[0]["http_result"], "plain response")
@@ -306,16 +309,12 @@ process:
             input_fields=["prompt"],
             output_field="http_result",
             error_field="http_error",
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
 
         result = op.run(Dataset.from_list([{
             "prompt": "hi",
-            "ctx": {
-                "userAccount": "tester@example.com",
-                "x-tt-env": "ppe_sirius2",
-                "x-use-ppe": "1",
-            },
         }])).to_list()
 
         self.assertNotIn("http_result", result[0])

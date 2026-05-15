@@ -7,6 +7,7 @@ from data_juicer.utils.notification_utils import send_test_card_notification
 
 OP_NAME = "ad_ai_data_center_http_mapper"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
+NEED_CTX = True
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 
@@ -22,6 +23,7 @@ class AdAiDataCenterHttpMapper(Mapper):
         error_field: str = "http_error",
         method: str = "POST",
         headers: dict[str, str] | None = None,
+        ctx: dict | None = None,
         timeout: float = 30.0,
         *args,
         **kwargs,
@@ -35,6 +37,7 @@ class AdAiDataCenterHttpMapper(Mapper):
         :param error_field: field used to store failed HTTP result.
         :param method: HTTP method.
         :param headers: HTTP request headers.
+        :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
         :param args: extra args.
         :param kwargs: extra args.
@@ -55,10 +58,11 @@ class AdAiDataCenterHttpMapper(Mapper):
         self.endpoint = endpoint
         self.method = method
         self.headers = dict(headers or {})
+        self.ctx = ctx
         self.timeout = timeout
 
     def process_single(self, sample):
-        ctx = self._get_notification_ctx(sample)
+        ctx = self._get_notification_ctx()
         self._send_test_card_notification(
             stage="开始",
             content=copy.deepcopy(sample),
@@ -119,17 +123,16 @@ class AdAiDataCenterHttpMapper(Mapper):
             return json.dumps(value, ensure_ascii=False)
         return value
 
-    @staticmethod
-    def _get_notification_ctx(sample):
-        ctx = sample.get("ctx")
+    def _get_notification_ctx(self):
+        ctx = self.ctx
         if not isinstance(ctx, dict):
-            raise ValueError("sample.ctx must be provided")
+            raise ValueError("ctx must be provided")
         return ctx
 
     @staticmethod
     def _get_user_account(ctx):
         if not ctx.get("userAccount"):
-            raise ValueError("sample.ctx.userAccount must be provided")
+            raise ValueError("ctx.userAccount must be provided")
         return str(ctx["userAccount"])
 
     @staticmethod

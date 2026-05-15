@@ -8,7 +8,8 @@ from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.http_utils import HttpClient
 
 OP_NAME = "external_eval_data_import_mapper"
-DEFAULT_ENDPOINT = "https://ai-data-center.bytedance.net/api/openapi/cloud-doc/sheets/all-plain-values"
+NEED_CTX = True
+CLOUD_DOC_ALL_PLAIN_VALUES_PATH = "/openapi/cloud-doc/sheets/all-plain-values"
 OUTPUT_FIELD = "externalDataSet"
 SUPPORTED_DATA_TYPES = {"eval_data"}
 
@@ -22,6 +23,7 @@ class ExternalEvalDataImportMapper(Mapper):
         sheet_url: str | None = None,
         data_type: str | None = None,
         python_code: str | None = None,
+        ctx: dict | None = None,
         timeout: float = 30.0,
         *args,
         **kwargs,
@@ -32,6 +34,7 @@ class ExternalEvalDataImportMapper(Mapper):
         :param sheet_url: external sheet URL, wiki URL, or spreadsheet token.
         :param data_type: parser type. Currently only ``eval_data`` is supported.
         :param python_code: Python script defining ``process(data, context)``.
+        :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
         :param args: extra args.
         :param kwargs: extra args.
@@ -49,12 +52,15 @@ class ExternalEvalDataImportMapper(Mapper):
         self.sheet_url = sheet_url
         self.data_type = data_type
         self.output_field = OUTPUT_FIELD
+        self.ctx = ctx
         self.timeout = timeout
         self.process_func = self._compile_process_func(python_code)
 
     def process_single(self, sample):
-        user_account = self._get_user_account(sample)
-        sheets = self._load_sheets(user_account)
+        ctx = self._get_ctx()
+        user_account = self._get_ctx_required_value(ctx, "userAccount")
+        endpoint = self._build_openapi_url(ctx, CLOUD_DOC_ALL_PLAIN_VALUES_PATH)
+        sheets = self._load_sheets(endpoint, user_account)
         parsed_data = self._parse_eval_data(sheets)
         context = {
             "data_type": self.data_type,
@@ -66,9 +72,9 @@ class ExternalEvalDataImportMapper(Mapper):
         sample[self.output_field] = result
         return sample
 
-    def _load_sheets(self, user_account: str) -> list[dict[str, Any]]:
+    def _load_sheets(self, endpoint: str, user_account: str) -> list[dict[str, Any]]:
         client = HttpClient(
-            endpoint=DEFAULT_ENDPOINT,
+            endpoint=endpoint,
             method="POST",
             timeout=self.timeout,
             headers={
@@ -85,12 +91,24 @@ class ExternalEvalDataImportMapper(Mapper):
             raise ValueError("Sheet response must contain a sheets list")
         return data["sheets"]
 
+    def _get_ctx(self):
+        ctx = self.ctx
+        if not isinstance(ctx, dict):
+            raise ValueError("ctx must be provided")
+        return ctx
+
     @staticmethod
-    def _get_user_account(sample):
-        ctx = sample.get("ctx")
-        if not isinstance(ctx, dict) or not ctx.get("userAccount"):
-            raise ValueError("sample.ctx.userAccount must be provided")
-        return str(ctx["userAccount"])
+    def _build_openapi_url(ctx: dict[str, Any], path: str) -> str:
+        base_url = ExternalEvalDataImportMapper._get_ctx_required_value(
+            ctx, "openapiBaseUrl"
+        )
+        return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    @staticmethod
+    def _get_ctx_required_value(ctx: dict[str, Any], key: str) -> str:
+        if not ctx.get(key):
+            raise ValueError(f"ctx.{key} must be provided")
+        return str(ctx[key])
 
     @staticmethod
     def _unwrap_sheet_response(data):

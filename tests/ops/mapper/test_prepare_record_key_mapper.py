@@ -8,6 +8,7 @@ from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.prepare_record_key_mapper import (
+    NEED_CTX,
     OP_NAME,
     RECORD_KEY_FIELD,
     PrepareRecordKeyMapper,
@@ -30,9 +31,27 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
 
+    @staticmethod
+    def _ctx():
+        return {
+            "userAccount": "wangjianda.667",
+            "x-tt-env": "ppe_sirius2",
+            "x-use-ppe": "1",
+            "synthesisInstanceId": 10001,
+            "flowInstanceId": 20001,
+            "flowNodeId": "node_prepare_record_key",
+            "taskId": 30001,
+            "taskVersion": 1,
+            "operatorIndex": 0,
+            "operatorName": "prepare_record_key_mapper",
+            "operatorType": "system",
+            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+        }
+
     def test_generates_record_key_from_source_fields(self):
         op = PrepareRecordKeyMapper(
             source_fields=["query", "answer"],
+            ctx=self._ctx(),
             auto_op_parallelism=False,
         )
         dataset = Dataset.from_list([{
@@ -52,7 +71,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         )
 
     def test_generates_record_key_from_sample_without_internal_fields(self):
-        op = PrepareRecordKeyMapper(auto_op_parallelism=False)
+        op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
         sample = {
             "query": "hello",
             "ctx": {"userAccount": "wangjianda.667"},
@@ -66,7 +85,10 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             "old-key",
         )
 
-        overwrite_result = PrepareRecordKeyMapper(overwrite=True).process_single(sample)
+        overwrite_result = PrepareRecordKeyMapper(
+            overwrite=True,
+            ctx=self._ctx(),
+        ).process_single(sample)
         self.assertEqual(
             overwrite_result[RECORD_KEY_FIELD],
             stable_hash({"query": "hello"}),
@@ -108,6 +130,19 @@ process:
       source_fields:
         - query
         - answer
+      ctx:
+        userAccount: "wangjianda.667"
+        x-tt-env: "ppe_sirius2"
+        x-use-ppe: "1"
+        synthesisInstanceId: 10001
+        flowInstanceId: 20001
+        flowNodeId: "node_prepare_record_key"
+        taskId: 30001
+        taskVersion: 1
+        operatorIndex: 0
+        operatorName: "prepare_record_key_mapper"
+        operatorType: "system"
+        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
 """,
             encoding="utf-8",
         )
@@ -119,7 +154,9 @@ process:
         ops = load_ops(cfg.process)
 
         self.assertEqual(OP_NAME, "prepare_record_key_mapper")
+        self.assertEqual(NEED_CTX, True)
         self.assertIsInstance(ops[0], PrepareRecordKeyMapper)
+        self.assertEqual(ops[0].ctx["operatorName"], "prepare_record_key_mapper")
 
 
 if __name__ == "__main__":

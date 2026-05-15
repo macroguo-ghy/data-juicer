@@ -8,7 +8,8 @@ from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper import (
-    DEFAULT_ENDPOINT,
+    CLOUD_DOC_ALL_PLAIN_VALUES_PATH,
+    NEED_CTX,
     OP_NAME,
     ExternalEvalDataImportMapper,
 )
@@ -35,6 +36,23 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
+
+    @staticmethod
+    def _ctx():
+        return {
+            "userAccount": "wangjianda.667",
+            "x-tt-env": "ppe_sirius2",
+            "x-use-ppe": "1",
+            "synthesisInstanceId": 10001,
+            "flowInstanceId": 20001,
+            "flowNodeId": "node_load_data",
+            "taskId": 30001,
+            "taskVersion": 1,
+            "operatorIndex": 0,
+            "operatorName": "external_eval_data_import_mapper",
+            "operatorType": "business",
+            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+        }
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")
     def test_imports_eval_data_sheet_and_runs_python_process(self, mock_client_cls):
@@ -63,6 +81,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
             data_type="eval_data",
+            ctx=self._ctx(),
             python_code=(
                 "def process(data, context):\n"
                 "    return {\"items\": data, \"data_type\": context[\"data_type\"], "
@@ -72,15 +91,15 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         )
         dataset = Dataset.from_list([{
             "id": "row-1",
-            "ctx": {
-                "userAccount": "wangjianda.667",
-            },
         }])
 
         result = op.run(dataset).to_list()
 
         mock_client_cls.assert_called_once_with(
-            endpoint=DEFAULT_ENDPOINT,
+            endpoint=(
+                "https://ai-data-center.bytedance.net/api"
+                f"{CLOUD_DOC_ALL_PLAIN_VALUES_PATH}"
+            ),
             method="POST",
             timeout=30.0,
             headers={
@@ -113,12 +132,30 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
             data_type="eval_data",
+            ctx={},
             python_code="def process(data, context):\n    return {\"items\": data}",
             auto_op_parallelism=False,
         )
 
-        with self.assertRaisesRegex(ValueError, "sample.ctx.userAccount must be provided"):
-            op.process_single({"ctx": {}})
+        with self.assertRaisesRegex(ValueError, "ctx.userAccount must be provided"):
+            op.process_single({})
+
+        mock_client_cls.assert_not_called()
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")
+    def test_rejects_missing_openapi_base_url_in_ctx_before_loading_sheet(self, mock_client_cls):
+        ctx = self._ctx()
+        ctx.pop("openapiBaseUrl")
+        op = ExternalEvalDataImportMapper(
+            sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
+            data_type="eval_data",
+            ctx=ctx,
+            python_code="def process(data, context):\n    return {\"items\": data}",
+            auto_op_parallelism=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "ctx.openapiBaseUrl must be provided"):
+            op.process_single({})
 
         mock_client_cls.assert_not_called()
 
@@ -133,6 +170,19 @@ process:
   - external_eval_data_import_mapper:
       sheet_url: "https://bytedance.feishu.cn/sheets/xxxx"
       data_type: "eval_data"
+      ctx:
+        userAccount: "wangjianda.667"
+        x-tt-env: "ppe_sirius2"
+        x-use-ppe: "1"
+        synthesisInstanceId: 10001
+        flowInstanceId: 20001
+        flowNodeId: "node_load_data"
+        taskId: 30001
+        taskVersion: 1
+        operatorIndex: 0
+        operatorName: "external_eval_data_import_mapper"
+        operatorType: "business"
+        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
       python_code: "def process(data, context):\\n    return {\\"items\\": data}"
 """,
             encoding="utf-8",
@@ -148,7 +198,9 @@ process:
         ops = load_ops(cfg.process)
 
         self.assertEqual(OP_NAME, "external_eval_data_import_mapper")
+        self.assertEqual(NEED_CTX, True)
         self.assertIsInstance(ops[0], ExternalEvalDataImportMapper)
+        self.assertEqual(ops[0].ctx["userAccount"], "wangjianda.667")
 
     @unittest.skipUnless(
         os.getenv("RUN_REAL_EXTERNAL_EVAL_DATA_IMPORT_TEST") == "1",
@@ -158,6 +210,7 @@ process:
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.larkoffice.com/wiki/AnACwPRtOiRxJRk30s8ckk8Yneg",
             data_type="eval_data",
+            ctx=self._ctx(),
             python_code=(
                 "def process(data, context):\n"
                 "    return {\n"
@@ -173,9 +226,6 @@ process:
 
         result = op.process_single({
             "id": "real-doc-url-example",
-            "ctx": {
-                "userAccount": "wangjianda.667",
-            },
         })
 
         external_data_set = result["externalDataSet"]
@@ -232,16 +282,13 @@ process:
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
             data_type="eval_data",
+            ctx=self._ctx(),
             python_code="def process(data, context):\n    return {\"bad\": {1, 2}}",
             auto_op_parallelism=False,
         )
 
         with self.assertRaisesRegex(ValueError, "must be JSON serializable"):
-            op.process_single({
-                "ctx": {
-                    "userAccount": "wangjianda.667",
-                },
-            })
+            op.process_single({})
 
 
 if __name__ == "__main__":

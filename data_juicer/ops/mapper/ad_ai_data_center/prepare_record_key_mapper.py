@@ -7,6 +7,7 @@ from typing import Any
 from data_juicer.ops.base_op import OPERATORS, Mapper
 
 OP_NAME = "prepare_record_key_mapper"
+NEED_CTX = True
 RECORD_KEY_FIELD = "__adc_record_key"
 INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
 
@@ -19,6 +20,7 @@ class PrepareRecordKeyMapper(Mapper):
         self,
         source_fields: list[str] | None = None,
         overwrite: bool = False,
+        ctx: dict | None = None,
         *args,
         **kwargs,
     ):
@@ -28,12 +30,14 @@ class PrepareRecordKeyMapper(Mapper):
         :param source_fields: optional fields used to build the record key.
             If empty, all non-internal sample fields are used.
         :param overwrite: whether to overwrite an existing record key.
+        :param ctx: platform context injected by backend when NEED_CTX is True.
         :param args: extra args.
         :param kwargs: extra args.
         """
         super().__init__(*args, **kwargs)
         self.source_fields = list(source_fields or [])
         self.overwrite = overwrite
+        self.ctx = ctx
 
     def process_single(self, sample: dict[str, Any]):
         if not self.overwrite and sample.get(RECORD_KEY_FIELD):
