@@ -18,6 +18,7 @@ from data_juicer.core.data.load_strategy import (
     RayHiveDataLoadStrategy,
     DefaultTQSDataLoadStrategy,
     _build_hive_cast_block_udf,
+    _build_parquet_read_plan_from_filesystem,
     _count_parquet_rows_from_filesystem,
     _cast_hive_batch_columns,
 )
@@ -1499,6 +1500,131 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
             self.assertEqual(_count_parquet_rows_from_filesystem(pa_fs.LocalFileSystem(), tmp_dir), 5)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_skips_zero_row_group_files(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_read_plan_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        valid_path = osp.join(tmp_dir, "part-00000.parquet")
+        empty_row_group_path = osp.join(tmp_dir, "part-00001.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), valid_path)
+            open(empty_row_group_path, "wb").close()
+            valid_metadata = pq.read_metadata(valid_path)
+            real_read_metadata = pq.read_metadata
+
+            class EmptyRowGroupMetadata:
+                num_rows = 0
+                num_row_groups = 0
+                schema = valid_metadata.schema
+
+            def read_metadata(path, filesystem=None):
+                if path == empty_row_group_path:
+                    return EmptyRowGroupMetadata()
+                return real_read_metadata(path, filesystem=filesystem)
+
+            with patch("pyarrow.parquet.read_metadata", side_effect=read_metadata):
+                plan = _build_parquet_read_plan_from_filesystem(pa_fs.LocalFileSystem(), tmp_dir)
+
+            self.assertEqual(plan.paths, [valid_path])
+            self.assertEqual(plan.row_count, 2)
+            self.assertEqual(plan.skipped_empty_file_count, 1)
+            self.assertEqual(plan.schema, valid_metadata.schema.to_arrow_schema())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.from_arrow")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_returns_empty_dataset_when_all_files_have_zero_row_groups(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_from_arrow,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=[],
+            schema=pa.schema([("id", pa.int64())]),
+            row_count=0,
+            skipped_empty_file_count=1,
+        )
+        mock_from_arrow.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_read_parquet.assert_not_called()
+        mock_from_arrow.assert_called_once()
+        empty_table = mock_from_arrow.call_args.args[0]
+        self.assertEqual(empty_table.num_rows, 0)
+        self.assertEqual(empty_table.schema, pa.schema([("id", pa.int64())]))
+        row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
+        self.assertEqual(row_count_getter(), 0)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_skips_zero_row_group_files_before_ray_sampling(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00001.parquet"],
+            schema=pa.schema([("id", pa.int64())]),
+            row_count=2,
+            skipped_empty_file_count=1,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "override_num_blocks": 16,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_read_parquet.assert_called_once_with(
+            ["/user/demo/parts/part-00001.parquet"],
+            filesystem=fake_filesystem,
+            override_num_blocks=16,
+        )
+        row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
+        self.assertEqual(row_count_getter(), 2)
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")

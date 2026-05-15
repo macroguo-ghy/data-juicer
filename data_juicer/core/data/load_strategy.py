@@ -95,33 +95,78 @@ def _is_countable_parquet_metadata_file(path: str) -> bool:
     return True
 
 
-def _count_parquet_rows_from_filesystem(filesystem, path: str) -> int | None:
+@dataclass(frozen=True)
+class _ParquetReadPlan:
+    paths: str | list[str]
+    schema: pa.Schema | None = None
+    row_count: int | None = None
+    skipped_empty_file_count: int = 0
+
+
+def _parquet_files_from_filesystem(filesystem, path: str) -> list[str] | None:
+    import pyarrow.fs as pa_fs
+
+    file_info = filesystem.get_file_info(path)
+    if file_info.type == pa_fs.FileType.NotFound:
+        return []
+    if file_info.type == pa_fs.FileType.File:
+        return [path] if _is_countable_parquet_metadata_file(path) else []
+    if file_info.type == pa_fs.FileType.Directory:
+        selector = pa_fs.FileSelector(path, recursive=True)
+        return [
+            info.path
+            for info in filesystem.get_file_info(selector)
+            if info.type == pa_fs.FileType.File and _is_countable_parquet_metadata_file(info.path)
+        ]
+    return None
+
+
+def _build_parquet_read_plan_from_filesystem(filesystem, path: str) -> _ParquetReadPlan:
     try:
-        import pyarrow.fs as pa_fs
         import pyarrow.parquet as pq
 
-        file_info = filesystem.get_file_info(path)
-        if file_info.type == pa_fs.FileType.NotFound:
-            return None
-        if file_info.type == pa_fs.FileType.File:
-            paths = [path] if _is_countable_parquet_metadata_file(path) else []
-        elif file_info.type == pa_fs.FileType.Directory:
-            selector = pa_fs.FileSelector(path, recursive=True)
-            paths = [
-                info.path
-                for info in filesystem.get_file_info(selector)
-                if info.type == pa_fs.FileType.File and _is_countable_parquet_metadata_file(info.path)
-            ]
-        else:
-            return None
+        parquet_paths = _parquet_files_from_filesystem(filesystem, path)
+        if parquet_paths is None:
+            return _ParquetReadPlan(paths=path)
 
+        readable_paths = []
         row_count = 0
-        for parquet_path in paths:
-            row_count += pq.read_metadata(parquet_path, filesystem=filesystem).num_rows
-        return row_count
+        schema = None
+        skipped_empty_file_count = 0
+        first_skipped_path = None
+        for parquet_path in parquet_paths:
+            metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
+            if schema is None:
+                schema = metadata.schema.to_arrow_schema()
+            row_count += metadata.num_rows
+            if metadata.num_row_groups == 0:
+                skipped_empty_file_count += 1
+                if first_skipped_path is None:
+                    first_skipped_path = parquet_path
+                continue
+            readable_paths.append(parquet_path)
+
+        if skipped_empty_file_count:
+            logger.warning(
+                "Skipping {} parquet file(s) with 0 row groups under {}. First skipped file: {}",
+                skipped_empty_file_count,
+                path,
+                first_skipped_path,
+            )
+            return _ParquetReadPlan(
+                paths=readable_paths,
+                schema=schema,
+                row_count=row_count,
+                skipped_empty_file_count=skipped_empty_file_count,
+            )
+        return _ParquetReadPlan(paths=path, schema=schema, row_count=row_count)
     except Exception as exc:
-        logger.debug("Failed to count parquet rows from metadata for {}: {}", path, exc)
-        return None
+        logger.debug("Failed to build parquet read plan from metadata for {}: {}", path, exc)
+        return _ParquetReadPlan(paths=path)
+
+
+def _count_parquet_rows_from_filesystem(filesystem, path: str) -> int | None:
+    return _build_parquet_read_plan_from_filesystem(filesystem, path).row_count
 
 
 @dataclass(frozen=True)
@@ -945,12 +990,28 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                 )
             else:
                 filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
-            dataset = ray.data.read_parquet(fs_path, filesystem=filesystem, **read_kwargs)
+            read_plan = _build_parquet_read_plan_from_filesystem(filesystem, fs_path)
+            if read_plan.paths == []:
+                schema = read_plan.schema or pa.schema([])
+                columns = read_kwargs.get("columns")
+                if columns:
+                    schema = pa.schema([field for field in schema if field.name in columns])
+                empty_table = pa.Table.from_batches([], schema=schema)
+                from_arrow_kwargs = {}
+                if read_kwargs.get("override_num_blocks") is not None:
+                    from_arrow_kwargs["override_num_blocks"] = read_kwargs["override_num_blocks"]
+                dataset = ray.data.from_arrow(empty_table, **from_arrow_kwargs)
+            else:
+                dataset = ray.data.read_parquet(read_plan.paths, filesystem=filesystem, **read_kwargs)
             return RayDataset(
                 dataset,
                 dataset_path=hdfs_uri,
                 cfg=self.cfg,
-                row_count_getter=lambda: _count_parquet_rows_from_filesystem(filesystem, fs_path),
+                row_count_getter=lambda: (
+                    read_plan.row_count
+                    if read_plan.row_count is not None
+                    else _count_parquet_rows_from_filesystem(filesystem, fs_path)
+                ),
             )
         except Exception as e:
             raise RuntimeError(
