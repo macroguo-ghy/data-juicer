@@ -2,7 +2,7 @@
 
 本文档描述 DataJuicer 如何导出处理后的数据集，包括支持的格式、分片、并行导出、S3 导出以及统计信息/哈希管理。
 
-更完整的 export target 与参数解析请参阅 [Loader 与 Export 配置解析](LoaderAndExport_ZH.md)。
+更完整的 export target 与参数解析请参阅 [Loader 与 Export 配置解析](LoaderAndExport_ZH.md)，也可以阅读对应的 [HTML 版本](LoaderAndExport_ZH.html)。
 
 ## 概述
 
