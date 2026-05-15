@@ -68,7 +68,12 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
             output_field="dimension_and_metric",
             auto_op_parallelism=False,
         )
-        dataset = Dataset.from_list([{"datasourceGroupId": "11308"}])
+        dataset = Dataset.from_list([{
+            "datasourceGroupId": "11308",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        }])
 
         result = op.run(dataset).to_list()
 
@@ -117,7 +122,13 @@ process:
             "error": None,
         })
         mock_client_cls.return_value = fake_client
-        dataset = Dataset.from_list([{"prompt": "hi", "extra": "keep"}])
+        dataset = Dataset.from_list([{
+            "prompt": "hi",
+            "extra": "keep",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        }])
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
             headers={"X-Test": "1"},
@@ -160,26 +171,75 @@ process:
             auto_op_parallelism=False,
         )
 
-        result = op.process_single({"prompt": "hi"})
+        result = op.process_single({
+            "prompt": "hi",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        })
 
         self.assertEqual(
             self.mock_send_test_card_notification.call_args_list,
             [
                 call(
                     template_id="AAqt1lQ72dVxK",
-                    template_variable={"input": {"prompt": "hi"}},
-                    user_email_or_account="wangjianda.667@bytedance.com",
+                    template_variable={
+                        "operator": "ad_ai_data_center_http_mapper",
+                        "stage": "开始",
+                        "content": '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com"}}',
+                        "errMsg": "",
+                        "user": "tester@example.com",
+                    },
+                    user_email_or_account="tester@example.com",
                 ),
                 call(
                     template_id="AAqt1lQ72dVxK",
                     template_variable={
-                        "output": {"prompt": "hi", "http_result": '{"answer": "hello"}'}
+                        "operator": "ad_ai_data_center_http_mapper",
+                        "stage": "结束",
+                        "content": (
+                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com"}, '
+                            '"http_result": "{\\"answer\\": \\"hello\\"}"}'
+                        ),
+                        "errMsg": "",
+                        "user": "tester@example.com",
                     },
-                    user_email_or_account="wangjianda.667@bytedance.com",
+                    user_email_or_account="tester@example.com",
                 ),
             ],
         )
         self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
+    def test_sends_failed_http_error_message_in_end_notification(self, mock_client_cls):
+        error_result = {
+            "ok": False,
+            "status_code": 500,
+            "data": None,
+            "text": "server error",
+            "error": {"type": "HTTPStatusError", "message": "bad"},
+        }
+        fake_client = FakeHttpClient(error_result)
+        mock_client_cls.return_value = fake_client
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/error",
+            input_fields=["prompt"],
+            output_field="http_result",
+            error_field="http_error",
+            auto_op_parallelism=False,
+        )
+
+        op.process_single({
+            "prompt": "hi",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        })
+
+        self.assertEqual(
+            self.mock_send_test_card_notification.call_args_list[-1].kwargs["template_variable"]["errMsg"],
+            "bad",
+        )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_writes_text_response_when_response_is_not_json(self, mock_client_cls):
@@ -198,7 +258,12 @@ process:
             auto_op_parallelism=False,
         )
 
-        result = op.run(Dataset.from_list([{"query": "ping"}])).to_list()
+        result = op.run(Dataset.from_list([{
+            "query": "ping",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        }])).to_list()
 
         self.assertEqual(result[0]["http_result"], "plain response")
 
@@ -221,7 +286,12 @@ process:
             auto_op_parallelism=False,
         )
 
-        result = op.run(Dataset.from_list([{"prompt": "hi"}])).to_list()
+        result = op.run(Dataset.from_list([{
+            "prompt": "hi",
+            "ctx": {
+                "userAccount": "tester@example.com",
+            },
+        }])).to_list()
 
         self.assertNotIn("http_result", result[0])
         self.assertEqual(json.loads(result[0]["http_error"]), error_result)
