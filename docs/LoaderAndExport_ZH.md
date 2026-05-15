@@ -649,6 +649,251 @@ export:
 
 `field_mapping` 用于把数据集字段映射到 WebDataset 样本扩展名。
 
+## 从 Demo 抽取的配置案例
+
+本节从 `demos/` 中抽取常见 loader/export 组合，并对内部路径、表名、凭证做了占位符化。真实任务中应替换为自己的资源。
+
+### 案例 1：Ray 本地 JSONL 读取，导出到本地目录
+
+来源：`demos/process_on_ray/configs/demo-new-config.yaml`
+
+```yaml
+project_name: ray-local-jsonl-demo
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/process_on_ray/data/demo-dataset.jsonl
+      weight: 1.0
+
+process:
+  - text_length_filter:
+      min_len: 10
+
+export_path: ./outputs/demo/demo-processed
+```
+
+适用场景：
+
+- 本地文件作为输入。
+- 需要在 Ray 上跑算子。
+- 结果写到本地路径；Ray export 格式由 `export_path` 或 `export_type` 推断。
+
+### 案例 2：S3 读取，结果元信息导出回 S3
+
+来源：`demos/process_video_on_ray/configs/s3_video_processing_config.yaml`
+
+```yaml
+project_name: s3-video-processing-demo
+executor_type: ray
+ray_address: auto
+work_dir: ./outputs/s3_demo
+
+dataset:
+  configs:
+    - type: remote
+      source: s3
+      path: s3://<bucket>/dj/dataset/input.jsonl
+      aws_region: us-east-1
+      endpoint_url: https://<s3-compatible-endpoint>
+
+export_path: s3://<bucket>/dj/dataset/demo-processed
+export_type: jsonl
+export_aws_credentials:
+  aws_access_key_id: <aws_access_key_id>
+  aws_secret_access_key: <aws_secret_access_key>
+  aws_region: us-east-1
+  endpoint_url: https://<s3-compatible-endpoint>
+```
+
+适用场景：
+
+- 数据集文件在 S3 或 S3 兼容存储。
+- 默认 loader 使用 fsspec/s3fs；Ray loader 使用 PyArrow S3 filesystem。
+- 输入凭证在 `dataset.configs` 中配置，输出凭证在 `export_aws_credentials` 或结构化 `export.aws_credentials` 中配置。
+
+### 案例 3：Lark Sheet 读取，导出 JSONL
+
+来源：`demos/bytedance/lark_sheet_loader/lark_sheet_loader_default.yaml`
+
+```yaml
+project_name: lark-sheet-loader-default
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+
+process:
+  - text_length_filter:
+      min_len: 0
+
+export_path: ./outputs/lark_sheet_loader_default.jsonl
+```
+
+适用场景：
+
+- 一个飞书电子表格作为输入。
+- 表格中需要有 Data-Juicer 后续算子要用的字段，例如 `text`。
+- 应用需要有目标表的读取权限；如果 Drive 导出没权限但 values read 有权限，会自动 fallback 到 read 后写临时 CSV。
+
+### 案例 4：Ray Hive 读取，写入 Magnus Lance 表
+
+来源：`demos/bytedance/process_landing_page_on_ray/configs/preloads_demo.yaml`
+
+```yaml
+project_name: hive-to-magnus-ray
+executor_type: ray
+ray_address: auto
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: <hive_db.hive_table>
+      columns:
+        p_date: STRING
+        site_id: BIGINT
+        text: STRING
+      filter: |
+        p_date = '<partition_date>'
+        AND text IS NOT NULL
+      override_num_blocks: 1024
+      concurrency: 32
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: magnus
+  table_name: <catalog.db.output_table>
+  create_table_if_not_exists: true
+  operation: OVERWRITE
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: <partition_date>
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "text", type: "string"}
+      - {name: "p_date", type: "string"}
+      - {name: "site_id", type: "int64"}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+```
+
+适用场景：
+
+- 内部 byted-ray 直接读 Hive。
+- 结果写到 Magnus，底层格式使用 Lance。
+- 覆盖分区时应同时配置 `partition_columns` 和 `partition_values`，并确保数据中分区列存在。
+
+### 案例 5：TQS client_result 小样本读取，写入 Magnus
+
+来源：`demos/bytedance/process_landing_page_on_ray/configs/preloads_demo_tqs_100.yaml`
+
+```yaml
+project_name: tqs-client-result-to-magnus
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: tqs
+      read_mode: client_result
+      max_result_rows: 1000
+      tqs_app_id: <tqs_app_id>
+      tqs_app_key: <tqs_app_key>
+      user_name: <user_name>
+      tqs_cluster: cn
+      tqs_timeout: 120
+      query: |
+        SELECT
+          CAST(p_date AS STRING) AS p_date,
+          CAST(id AS BIGINT) AS id,
+          CAST(text AS STRING) AS text
+        FROM <db.table>
+        WHERE p_date = '<partition_date>'
+
+export:
+  target: magnus
+  table_name: <catalog.db.output_table>
+  operation: OVERWRITE
+  partition_columns: ["p_date"]
+  partition_values:
+    p_date: <partition_date>
+  schema:
+    fields:
+      - {name: "id", type: "int64"}
+      - {name: "text", type: "string"}
+      - {name: "p_date", type: "string"}
+  magnus_conf:
+    write_options:
+      write.format.default: lance
+```
+
+适用场景：
+
+- 只需要小批量查询结果，不想先物化到 HDFS。
+- `max_result_rows` 控制 client_result 读取上限。
+- 大结果集更适合 `read_mode: materialized` 并配置 `output_uri`。
+
+### 案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表
+
+来源：`demos/bytedance/process_magnus/configs/lance_create_smoke.yaml`
+
+```yaml
+project_name: magnus-lance-create-smoke
+executor_type: ray
+ray_address: auto
+np: 1
+work_dir: ./outputs/magnus_lance_create_smoke
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/bytedance/process_magnus/data/lance_create_smoke.jsonl
+
+export:
+  target: magnus
+  table_name: <catalog.db.output_table>
+  operation: OVERWRITE
+  schema:
+    fields:
+      - {name: "id", type: "int64"}
+      - {name: "text", type: "string"}
+      - {name: "score", type: "double"}
+  magnus_conf:
+    concurrency: 1
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: "true"
+      magnus.ray.write.disable_sort: "true"
+
+process: []
+```
+
+适用场景：
+
+- 用本地小数据做 Magnus 写入 smoke test。
+- 通过显式 `schema` 固定建表/写入字段。
+- 已存在但格式不符合预期的表应失败，而不是被静默覆盖成另一种物理格式。
+
 ## 旧式 `dataset_path`
 
 旧式配置仍可用：

@@ -5,159 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Loader 与 Export 配置解析</title>
   <style>
-    :root {
-      color-scheme: light;
-      --bg: #f7f8fb;
-      --panel: #ffffff;
-      --text: #20242c;
-      --muted: #657084;
-      --line: #d9dee8;
-      --accent: #2166d5;
-      --accent-soft: #eaf1ff;
-      --code-bg: #f2f4f8;
-      --shadow: 0 10px 30px rgba(31, 45, 71, 0.08);
-    }
+    :root { color-scheme: light; --bg:#f7f8fb; --panel:#fff; --text:#20242c; --muted:#657084; --line:#d9dee8; --accent:#2166d5; --accent-soft:#eaf1ff; --code-bg:#f2f4f8; --shadow:0 10px 30px rgba(31,45,71,.08); }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      line-height: 1.7;
-    }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(230px, 300px) minmax(0, 1fr);
-      gap: 28px;
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 28px;
-    }
-    aside {
-      position: sticky;
-      top: 20px;
-      align-self: start;
-      max-height: calc(100vh - 40px);
-      overflow: auto;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-      padding: 18px;
-    }
-    aside h2 {
-      margin: 0 0 12px;
-      font-size: 16px;
-    }
-    .toc a {
-      display: block;
-      color: var(--muted);
-      text-decoration: none;
-      padding: 5px 0;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-    .toc a:hover { color: var(--accent); }
-    .toc-l1 { font-weight: 700; color: var(--text) !important; }
-    .toc-l2 { padding-left: 10px !important; }
-    .toc-l3 { padding-left: 24px !important; font-size: 13px !important; }
-    main {
-      min-width: 0;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-      padding: 36px 44px;
-    }
-    h1, h2, h3, h4, h5, h6 {
-      line-height: 1.35;
-      scroll-margin-top: 18px;
-    }
-    h1 {
-      margin-top: 0;
-      font-size: 34px;
-      border-bottom: 1px solid var(--line);
-      padding-bottom: 18px;
-    }
-    h2 {
-      margin-top: 38px;
-      font-size: 24px;
-      border-bottom: 1px solid var(--line);
-      padding-bottom: 8px;
-    }
-    h3 { margin-top: 28px; font-size: 19px; }
-    p { margin: 12px 0; }
-    a { color: var(--accent); }
-    code {
-      background: var(--code-bg);
-      padding: 2px 5px;
-      border-radius: 4px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.92em;
-    }
-    pre {
-      overflow: auto;
-      background: #111827;
-      color: #f8fafc;
-      border-radius: 8px;
-      padding: 16px;
-      line-height: 1.55;
-    }
-    pre code {
-      background: transparent;
-      color: inherit;
-      padding: 0;
-      border-radius: 0;
-    }
-    .table-wrap {
-      overflow-x: auto;
-      margin: 16px 0 24px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 720px;
-      font-size: 14px;
-    }
-    th, td {
-      border-bottom: 1px solid var(--line);
-      border-right: 1px solid var(--line);
-      padding: 9px 11px;
-      vertical-align: top;
-      text-align: left;
-    }
-    th:last-child, td:last-child { border-right: none; }
-    tr:last-child td { border-bottom: none; }
-    th {
-      background: var(--accent-soft);
-      color: #173a75;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-    ul { padding-left: 22px; }
-    .meta {
-      color: var(--muted);
-      font-size: 14px;
-      margin-top: -8px;
-      margin-bottom: 24px;
-    }
-    .ordered-item { margin-left: 1em; }
-    @media (max-width: 980px) {
-      .layout { display: block; padding: 14px; }
-      aside { position: static; max-height: none; margin-bottom: 16px; }
-      main { padding: 24px 18px; }
-      h1 { font-size: 28px; }
-      table { min-width: 640px; }
-    }
-    @media print {
-      body { background: #fff; }
-      .layout { display: block; max-width: none; padding: 0; }
-      aside { display: none; }
-      main { box-shadow: none; border: none; padding: 0; }
-      a { color: inherit; text-decoration: none; }
-    }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; line-height:1.7; }
+    .layout { display:grid; grid-template-columns:minmax(230px,300px) minmax(0,1fr); gap:28px; max-width:1480px; margin:0 auto; padding:28px; }
+    aside { position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:18px; }
+    aside h2 { margin:0 0 12px; font-size:16px; }
+    .toc a { display:block; color:var(--muted); text-decoration:none; padding:5px 0; border-radius:4px; font-size:14px; }
+    .toc a:hover { color:var(--accent); }
+    .toc-l1 { font-weight:700; color:var(--text)!important; }
+    .toc-l2 { padding-left:10px!important; }
+    .toc-l3 { padding-left:24px!important; font-size:13px!important; }
+    main { min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:36px 44px; }
+    h1,h2,h3,h4,h5,h6 { line-height:1.35; scroll-margin-top:18px; }
+    h1 { margin-top:0; font-size:34px; border-bottom:1px solid var(--line); padding-bottom:18px; }
+    h2 { margin-top:38px; font-size:24px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    h3 { margin-top:28px; font-size:19px; }
+    p { margin:12px 0; } a { color:var(--accent); }
+    code { background:var(--code-bg); padding:2px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em; }
+    pre { overflow:auto; background:#111827; color:#f8fafc; border-radius:8px; padding:16px; line-height:1.55; }
+    pre code { background:transparent; color:inherit; padding:0; border-radius:0; }
+    .table-wrap { overflow-x:auto; margin:16px 0 24px; border:1px solid var(--line); border-radius:8px; }
+    table { width:100%; border-collapse:collapse; min-width:720px; font-size:14px; }
+    th,td { border-bottom:1px solid var(--line); border-right:1px solid var(--line); padding:9px 11px; vertical-align:top; text-align:left; }
+    th:last-child,td:last-child { border-right:none; } tr:last-child td { border-bottom:none; }
+    th { background:var(--accent-soft); color:#173a75; font-weight:700; white-space:nowrap; }
+    ul { padding-left:22px; } .meta { color:var(--muted); font-size:14px; margin-top:-8px; margin-bottom:24px; } .ordered-item { margin-left:1em; }
+    @media (max-width:980px) { .layout{display:block;padding:14px;} aside{position:static;max-height:none;margin-bottom:16px;} main{padding:24px 18px;} h1{font-size:28px;} table{min-width:640px;} }
+    @media print { body{background:#fff;} .layout{display:block;max-width:none;padding:0;} aside{display:none;} main{box-shadow:none;border:none;padding:0;} a{color:inherit;text-decoration:none;} }
+
   </style>
 </head>
 <body>
@@ -193,6 +69,13 @@
 <a class="toc-l2" href="#tos-export">TOS Export</a>
 <a class="toc-l2" href="#magnus-export">Magnus Export</a>
 <a class="toc-l2" href="#webdataset-export">WebDataset Export</a>
+<a class="toc-l2" href="#从-demo-抽取的配置案例">从 Demo 抽取的配置案例</a>
+<a class="toc-l3" href="#案例-1ray-本地-jsonl-读取导出到本地目录">案例 1：Ray 本地 JSONL 读取，导出到本地目录</a>
+<a class="toc-l3" href="#案例-2s3-读取结果元信息导出回-s3">案例 2：S3 读取，结果元信息导出回 S3</a>
+<a class="toc-l3" href="#案例-3lark-sheet-读取导出-jsonl">案例 3：Lark Sheet 读取，导出 JSONL</a>
+<a class="toc-l3" href="#案例-4ray-hive-读取写入-magnus-lance-表">案例 4：Ray Hive 读取，写入 Magnus Lance 表</a>
+<a class="toc-l3" href="#案例-5tqs-clientresult-小样本读取写入-magnus">案例 5：TQS client_result 小样本读取，写入 Magnus</a>
+<a class="toc-l3" href="#案例-6本地-jsonl-创建覆盖-magnus-lance-表">案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表</a>
 <a class="toc-l2" href="#旧式-datasetpath">旧式 <code>dataset_path</code></a>
       </nav>
     </aside>
@@ -730,6 +613,219 @@ export:
       png: images
       json: metadata</code></pre>
 <p><code>field_mapping</code> 用于把数据集字段映射到 WebDataset 样本扩展名。</p>
+<h2 id="从-demo-抽取的配置案例">从 Demo 抽取的配置案例</h2>
+<p>本节从 <code>demos/</code> 中抽取常见 loader/export 组合，并对内部路径、表名、凭证做了占位符化。真实任务中应替换为自己的资源。</p>
+<h3 id="案例-1ray-本地-jsonl-读取导出到本地目录">案例 1：Ray 本地 JSONL 读取，导出到本地目录</h3>
+<p>来源：<code>demos/process_on_ray/configs/demo-new-config.yaml</code></p>
+<pre><code class="language-yaml">project_name: ray-local-jsonl-demo
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/process_on_ray/data/demo-dataset.jsonl
+      weight: 1.0
+
+process:
+  - text_length_filter:
+      min_len: 10
+
+export_path: ./outputs/demo/demo-processed</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>本地文件作为输入。</li>
+<li>需要在 Ray 上跑算子。</li>
+<li>结果写到本地路径；Ray export 格式由 <code>export_path</code> 或 <code>export_type</code> 推断。</li>
+</ul>
+<h3 id="案例-2s3-读取结果元信息导出回-s3">案例 2：S3 读取，结果元信息导出回 S3</h3>
+<p>来源：<code>demos/process_video_on_ray/configs/s3_video_processing_config.yaml</code></p>
+<pre><code class="language-yaml">project_name: s3-video-processing-demo
+executor_type: ray
+ray_address: auto
+work_dir: ./outputs/s3_demo
+
+dataset:
+  configs:
+    - type: remote
+      source: s3
+      path: s3://&lt;bucket&gt;/dj/dataset/input.jsonl
+      aws_region: us-east-1
+      endpoint_url: https://&lt;s3-compatible-endpoint&gt;
+
+export_path: s3://&lt;bucket&gt;/dj/dataset/demo-processed
+export_type: jsonl
+export_aws_credentials:
+  aws_access_key_id: &lt;aws_access_key_id&gt;
+  aws_secret_access_key: &lt;aws_secret_access_key&gt;
+  aws_region: us-east-1
+  endpoint_url: https://&lt;s3-compatible-endpoint&gt;</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>数据集文件在 S3 或 S3 兼容存储。</li>
+<li>默认 loader 使用 fsspec/s3fs；Ray loader 使用 PyArrow S3 filesystem。</li>
+<li>输入凭证在 <code>dataset.configs</code> 中配置，输出凭证在 <code>export_aws_credentials</code> 或结构化 <code>export.aws_credentials</code> 中配置。</li>
+</ul>
+<h3 id="案例-3lark-sheet-读取导出-jsonl">案例 3：Lark Sheet 读取，导出 JSONL</h3>
+<p>来源：<code>demos/bytedance/lark_sheet_loader/lark_sheet_loader_default.yaml</code></p>
+<pre><code class="language-yaml">project_name: lark-sheet-loader-default
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;
+      lark_app_id: &lt;lark_app_id&gt;
+      lark_app_secret: &lt;lark_app_secret&gt;
+      file_extension: csv
+
+process:
+  - text_length_filter:
+      min_len: 0
+
+export_path: ./outputs/lark_sheet_loader_default.jsonl</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>一个飞书电子表格作为输入。</li>
+<li>表格中需要有 Data-Juicer 后续算子要用的字段，例如 <code>text</code>。</li>
+<li>应用需要有目标表的读取权限；如果 Drive 导出没权限但 values read 有权限，会自动 fallback 到 read 后写临时 CSV。</li>
+</ul>
+<h3 id="案例-4ray-hive-读取写入-magnus-lance-表">案例 4：Ray Hive 读取，写入 Magnus Lance 表</h3>
+<p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo.yaml</code></p>
+<pre><code class="language-yaml">project_name: hive-to-magnus-ray
+executor_type: ray
+ray_address: auto
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: &lt;hive_db.hive_table&gt;
+      columns:
+        p_date: STRING
+        site_id: BIGINT
+        text: STRING
+      filter: |
+        p_date = &#x27;&lt;partition_date&gt;&#x27;
+        AND text IS NOT NULL
+      override_num_blocks: 1024
+      concurrency: 32
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  create_table_if_not_exists: true
+  operation: OVERWRITE
+  partition_columns: [&quot;p_date&quot;]
+  partition_values:
+    p_date: &lt;partition_date&gt;
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;string&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;p_date&quot;, type: &quot;string&quot;}
+      - {name: &quot;site_id&quot;, type: &quot;int64&quot;}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: &quot;true&quot;
+      magnus.ray.write.disable_sort: &quot;true&quot;</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>内部 byted-ray 直接读 Hive。</li>
+<li>结果写到 Magnus，底层格式使用 Lance。</li>
+<li>覆盖分区时应同时配置 <code>partition_columns</code> 和 <code>partition_values</code>，并确保数据中分区列存在。</li>
+</ul>
+<h3 id="案例-5tqs-clientresult-小样本读取写入-magnus">案例 5：TQS client_result 小样本读取，写入 Magnus</h3>
+<p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo_tqs_100.yaml</code></p>
+<pre><code class="language-yaml">project_name: tqs-client-result-to-magnus
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: tqs
+      read_mode: client_result
+      max_result_rows: 1000
+      tqs_app_id: &lt;tqs_app_id&gt;
+      tqs_app_key: &lt;tqs_app_key&gt;
+      user_name: &lt;user_name&gt;
+      tqs_cluster: cn
+      tqs_timeout: 120
+      query: |
+        SELECT
+          CAST(p_date AS STRING) AS p_date,
+          CAST(id AS BIGINT) AS id,
+          CAST(text AS STRING) AS text
+        FROM &lt;db.table&gt;
+        WHERE p_date = &#x27;&lt;partition_date&gt;&#x27;
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  operation: OVERWRITE
+  partition_columns: [&quot;p_date&quot;]
+  partition_values:
+    p_date: &lt;partition_date&gt;
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;int64&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;p_date&quot;, type: &quot;string&quot;}
+  magnus_conf:
+    write_options:
+      write.format.default: lance</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>只需要小批量查询结果，不想先物化到 HDFS。</li>
+<li><code>max_result_rows</code> 控制 client_result 读取上限。</li>
+<li>大结果集更适合 <code>read_mode: materialized</code> 并配置 <code>output_uri</code>。</li>
+</ul>
+<h3 id="案例-6本地-jsonl-创建覆盖-magnus-lance-表">案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表</h3>
+<p>来源：<code>demos/bytedance/process_magnus/configs/lance_create_smoke.yaml</code></p>
+<pre><code class="language-yaml">project_name: magnus-lance-create-smoke
+executor_type: ray
+ray_address: auto
+np: 1
+work_dir: ./outputs/magnus_lance_create_smoke
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/bytedance/process_magnus/data/lance_create_smoke.jsonl
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  operation: OVERWRITE
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;int64&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;score&quot;, type: &quot;double&quot;}
+  magnus_conf:
+    concurrency: 1
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: &quot;true&quot;
+      magnus.ray.write.disable_sort: &quot;true&quot;
+
+process: []</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>用本地小数据做 Magnus 写入 smoke test。</li>
+<li>通过显式 <code>schema</code> 固定建表/写入字段。</li>
+<li>已存在但格式不符合预期的表应失败，而不是被静默覆盖成另一种物理格式。</li>
+</ul>
 <h2 id="旧式-datasetpath">旧式 <code>dataset_path</code></h2>
 <p>旧式配置仍可用：</p>
 <pre><code class="language-yaml">dataset_path: ./data/input.jsonl</code></pre>
