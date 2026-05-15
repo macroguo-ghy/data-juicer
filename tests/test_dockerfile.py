@@ -67,6 +67,8 @@ class DockerfileTest(unittest.TestCase):
         self.assertNotIn('print("vllm", md.version("vllm"))', content)
         self.assertIn("ray module", content)
         self.assertIn("from ray.data.datasource.hive import HiveCatalog", content)
+        self.assertIn("from data_juicer.ops.mapper.io.download_file_mapper import DownloadFileMapper", content)
+        self.assertNotIn("from data_juicer.ops.mapper.download_file_mapper import DownloadFileMapper", content)
 
     def test_coverage_artifacts_are_ignored_locally_and_in_ray_packages(self):
         repo_root = Path(__file__).resolve().parents[1]
