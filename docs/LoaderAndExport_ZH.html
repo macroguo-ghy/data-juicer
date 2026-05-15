@@ -73,9 +73,10 @@
 <a class="toc-l3" href="#案例-1ray-本地-jsonl-读取导出到本地目录">案例 1：Ray 本地 JSONL 读取，导出到本地目录</a>
 <a class="toc-l3" href="#案例-2s3-读取结果元信息导出回-s3">案例 2：S3 读取，结果元信息导出回 S3</a>
 <a class="toc-l3" href="#案例-3lark-sheet-读取导出-jsonl">案例 3：Lark Sheet 读取，导出 JSONL</a>
-<a class="toc-l3" href="#案例-4ray-hive-读取写入-magnus-lance-表">案例 4：Ray Hive 读取，写入 Magnus Lance 表</a>
-<a class="toc-l3" href="#案例-5tqs-clientresult-小样本读取写入-magnus">案例 5：TQS client_result 小样本读取，写入 Magnus</a>
-<a class="toc-l3" href="#案例-6本地-jsonl-创建覆盖-magnus-lance-表">案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表</a>
+<a class="toc-l3" href="#案例-4lark-sheet-读取处理并追加回同一-sheet">案例 4：Lark Sheet 读取、处理并追加回同一 Sheet</a>
+<a class="toc-l3" href="#案例-5ray-hive-读取写入-magnus-lance-表">案例 5：Ray Hive 读取，写入 Magnus Lance 表</a>
+<a class="toc-l3" href="#案例-6tqs-clientresult-小样本读取写入-magnus">案例 6：TQS client_result 小样本读取，写入 Magnus</a>
+<a class="toc-l3" href="#案例-7本地-jsonl-创建覆盖-magnus-lance-表">案例 7：本地 JSONL 创建/覆盖 Magnus Lance 表</a>
 <a class="toc-l2" href="#旧式-datasetpath">旧式 <code>dataset_path</code></a>
       </nav>
     </aside>
@@ -523,21 +524,29 @@ export:
   lark_app_id: &lt;lark_app_id&gt;
   lark_app_secret: &lt;lark_app_secret&gt;
   range: A1
-  type: csv</code></pre>
+  type: csv
+  mode: file</code></pre>
 <p>参数：</p>
 <div class="table-wrap"><table>
 <thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td><code>lark_path</code></td><td>是</td><td>无</td><td>目标飞书表格 URL，必须能解析出 spreadsheet token 和 sheet id。</td></tr>
+<tr><td><code>lark_path</code></td><td>视模式而定</td><td>无</td><td>目标飞书表格 URL，必须能解析出 spreadsheet token 和 sheet id。<code>create_spreadsheet: true</code> 时可不写。</td></tr>
 <tr><td><code>lark_app_id</code></td><td>是</td><td>无</td><td>飞书应用 app id。</td></tr>
 <tr><td><code>lark_app_secret</code></td><td>是</td><td>无</td><td>飞书应用 app secret。不要提交真实 secret。</td></tr>
-<tr><td><code>range</code></td><td>是</td><td>无</td><td>写入起始区域，例如 <code>A1</code>。</td></tr>
-<tr><td><code>type</code></td><td>否</td><td><code>csv</code></td><td>暂存导出格式。当前 Lark 上传链路按文件上传并更新单元格。</td></tr>
+<tr><td><code>range</code></td><td>仅 <code>file</code>/<code>upload</code> 必填</td><td><code>append</code> 从 <code>lark_path</code> 的 <code>sheet</code> 推断；<code>overwrite</code> 从 <code>A1</code> 开始</td><td>写入范围。<code>append</code> 可不写，会默认追加到 <code>lark_path</code> 指定的 sheet 当前表尾；<code>overwrite</code> 可不写，会按暂存 CSV 的行列数从 <code>A1</code> 覆盖写入。</td></tr>
+<tr><td><code>type</code></td><td>否</td><td><code>csv</code></td><td>暂存导出格式。<code>append</code> 和 <code>overwrite</code> 只支持 <code>csv</code>。</td></tr>
+<tr><td><code>mode</code></td><td>否</td><td><code>file</code></td><td><code>file</code>/<code>upload</code>：上传暂存文件并把文件对象写入目标单元格；<code>append</code>：把暂存 CSV 的行追加写入目标 sheet；<code>overwrite</code>：把暂存 CSV 覆盖写入目标 sheet。</td></tr>
+<tr><td><code>skip_header</code></td><td>否</td><td><code>append</code> 默认为 <code>true</code>；<code>overwrite</code> 默认为 <code>false</code></td><td>values 写入时是否跳过暂存 CSV 表头。</td></tr>
+<tr><td><code>clear_sheet</code></td><td>否</td><td><code>true</code></td><td>仅 <code>overwrite</code> 且未配置 <code>range</code> 时生效。写入前删除本次输出行数之后的旧行，避免历史尾行残留。</td></tr>
+<tr><td><code>create_spreadsheet</code></td><td>否</td><td><code>false</code></td><td>为 <code>true</code> 且未配置 <code>lark_path</code> 时，先创建一个新的飞书表格，再写入。</td></tr>
+<tr><td><code>spreadsheet_title</code> / <code>title</code></td><td>否</td><td><code>data-juicer-export</code></td><td><code>create_spreadsheet: true</code> 时的新表标题。</td></tr>
 </tbody></table></div>
 <p>行为：</p>
 <ul>
 <li>先把结果数据集导出为本地暂存文件，默认 <code>dataset.csv</code>。</li>
-<li>再上传文件到 Lark，并把文件对象写入目标 sheet 的 <code>range</code>。</li>
+<li><code>mode: file</code>/<code>upload</code>：再上传文件到 Lark，并把文件对象写入目标 sheet 的 <code>range</code>。</li>
+<li><code>mode: append</code>：读取暂存 CSV，并调用 Lark Sheets append 接口把数据行追加到目标 sheet。不写 <code>range</code> 时使用 <code>lark_path</code> 里的 <code>sheet</code> 作为 append range；写单个起始单元格时会按暂存 CSV 的行列数扩展为矩形范围。</li>
+<li><code>mode: overwrite</code>：读取暂存 CSV，并调用 Lark Sheets values PUT 接口覆盖写入。未配置 <code>range</code> 时从 <code>A1</code> 开始，自动扩展到暂存 CSV 的行列范围，并默认清理旧的尾行。</li>
 <li>与 Lark loader 一样，使用 app/tenant 身份，不使用本机 user 登录态。</li>
 </ul>
 <h2 id="tos-export">TOS Export</h2>
@@ -690,7 +699,39 @@ export_path: ./outputs/lark_sheet_loader_default.jsonl</code></pre>
 <li>表格中需要有 Data-Juicer 后续算子要用的字段，例如 <code>text</code>。</li>
 <li>应用需要有目标表的读取权限；如果 Drive 导出没权限但 values read 有权限，会自动 fallback 到 read 后写临时 CSV。</li>
 </ul>
-<h3 id="案例-4ray-hive-读取写入-magnus-lance-表">案例 4：Ray Hive 读取，写入 Magnus Lance 表</h3>
+<h3 id="案例-4lark-sheet-读取处理并追加回同一-sheet">案例 4：Lark Sheet 读取、处理并追加回同一 Sheet</h3>
+<p>来源：<code>demos/bytedance/lark_sheet_loader/lark_sheet_transform_append.yaml</code></p>
+<pre><code class="language-yaml">project_name: lark_sheet_transform_append
+text_keys: null
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: &quot;https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81&quot;
+      lark_app_id: &quot;cli_a52ccb9c37fbd00c&quot;
+      lark_app_secret: &quot;&lt;lark_app_secret&gt;&quot;
+      file_extension: csv
+
+process:
+  - python_lambda_mapper:
+      lambda_str: &#x27;lambda d: {k: (&quot;empty&quot; if v is None or v == &quot;&quot; else (v + 1 if isinstance(v, (int, float)) and not isinstance(v, bool) else (v + &quot;_process_by_dj&quot; if isinstance(v, str) else v))) for k, v in d.items()}&#x27;
+
+export:
+  target: lark
+  mode: append
+  lark_path: &quot;https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81&quot;
+  lark_app_id: &quot;cli_a52ccb9c37fbd00c&quot;
+  lark_app_secret: &quot;&lt;lark_app_secret&gt;&quot;
+  type: csv
+  skip_header: true</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>不要求输入表有 <code>text</code> 列；<code>text_keys: null</code> 会关闭默认文本列校验。</li>
+<li>mapper 会遍历每一列：数字加 1，字符串追加 <code>_process_by_dj</code>，空值写成 <code>empty</code>，其他 Python 值类型保持不变。</li>
+<li><code>skip_header: true</code> 会避免把暂存 CSV 的表头再次追加进原表。</li>
+</ul>
+<h3 id="案例-5ray-hive-读取写入-magnus-lance-表">案例 5：Ray Hive 读取，写入 Magnus Lance 表</h3>
 <p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo.yaml</code></p>
 <pre><code class="language-yaml">project_name: hive-to-magnus-ray
 executor_type: ray
@@ -742,7 +783,7 @@ export:
 <li>结果写到 Magnus，底层格式使用 Lance。</li>
 <li>覆盖分区时应同时配置 <code>partition_columns</code> 和 <code>partition_values</code>，并确保数据中分区列存在。</li>
 </ul>
-<h3 id="案例-5tqs-clientresult-小样本读取写入-magnus">案例 5：TQS client_result 小样本读取，写入 Magnus</h3>
+<h3 id="案例-6tqs-clientresult-小样本读取写入-magnus">案例 6：TQS client_result 小样本读取，写入 Magnus</h3>
 <p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo_tqs_100.yaml</code></p>
 <pre><code class="language-yaml">project_name: tqs-client-result-to-magnus
 executor_type: ray
@@ -788,7 +829,7 @@ export:
 <li><code>max_result_rows</code> 控制 client_result 读取上限。</li>
 <li>大结果集更适合 <code>read_mode: materialized</code> 并配置 <code>output_uri</code>。</li>
 </ul>
-<h3 id="案例-6本地-jsonl-创建覆盖-magnus-lance-表">案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表</h3>
+<h3 id="案例-7本地-jsonl-创建覆盖-magnus-lance-表">案例 7：本地 JSONL 创建/覆盖 Magnus Lance 表</h3>
 <p>来源：<code>demos/bytedance/process_magnus/configs/lance_create_smoke.yaml</code></p>
 <pre><code class="language-yaml">project_name: magnus-lance-create-smoke
 executor_type: ray

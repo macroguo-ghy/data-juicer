@@ -7,12 +7,15 @@ from loguru import logger
 
 from data_juicer.core.exporter import Exporter
 from data_juicer.core.io_utils import (
+    append_csv_to_lark_sheet,
     copy_local_to_uri,
+    create_lark_spreadsheet,
     ensure_parent,
     infer_storage_target_from_path,
     make_staging_dir,
     merge_dicts,
     namespace_to_plain_dict,
+    overwrite_csv_to_lark_sheet,
     upload_file_to_lark_sheet,
     upload_file_to_tos,
     write_hf_dataset_to_magnus,
@@ -187,18 +190,61 @@ class ExportManager:
 
     def _export_to_lark(self, dataset, columns=None):
         export_type = self.export_cfg.get("type") or "csv"
+        mode = self.export_cfg.get("mode", "file")
+        if mode in {"append", "overwrite"} and export_type != "csv":
+            raise ValueError("Lark values export currently supports only `type: csv`.")
+
+        lark_path = self.export_cfg.get("lark_path")
+        if not lark_path and self.export_cfg.get("create_spreadsheet"):
+            lark_path = create_lark_spreadsheet(
+                lark_app_id=self.export_cfg["lark_app_id"],
+                lark_app_secret=self.export_cfg["lark_app_secret"],
+                title=self.export_cfg.get("spreadsheet_title", self.export_cfg.get("title", "data-juicer-export")),
+            )
+            logger.info(f"Created Lark spreadsheet for export: {lark_path}")
+        if not lark_path:
+            raise ValueError("Lark export requires `lark_path` unless `create_spreadsheet` is true.")
+
         stage_path = self._export_via_staging(
             dataset,
             columns=columns,
             filename=f"dataset.{export_type}",
         )
+        if mode == "append":
+            append_csv_to_lark_sheet(
+                local_path=stage_path,
+                lark_path=lark_path,
+                lark_app_id=self.export_cfg["lark_app_id"],
+                lark_app_secret=self.export_cfg["lark_app_secret"],
+                cell_range=self.export_cfg.get("range"),
+                skip_header=self.export_cfg.get("skip_header", True),
+            )
+            return lark_path
+
+        if mode == "overwrite":
+            overwrite_csv_to_lark_sheet(
+                local_path=stage_path,
+                lark_path=lark_path,
+                lark_app_id=self.export_cfg["lark_app_id"],
+                lark_app_secret=self.export_cfg["lark_app_secret"],
+                cell_range=self.export_cfg.get("range"),
+                skip_header=self.export_cfg.get("skip_header", False),
+                clear_sheet=self.export_cfg.get("clear_sheet", True),
+            )
+            return lark_path
+
+        if mode not in {"file", "upload"}:
+            raise ValueError("Lark export `mode` must be one of `file`, `upload`, `append`, or `overwrite`.")
+        if not self.export_cfg.get("range"):
+            raise ValueError("Lark file/upload export requires `range`.")
         upload_file_to_lark_sheet(
             local_path=stage_path,
-            lark_path=self.export_cfg["lark_path"],
+            lark_path=lark_path,
             lark_app_id=self.export_cfg["lark_app_id"],
             lark_app_secret=self.export_cfg["lark_app_secret"],
             cell_range=self.export_cfg["range"],
         )
+        return lark_path
 
     def _export_to_tos(self, dataset, columns=None):
         stage_path = self._export_via_staging(dataset, columns=columns)

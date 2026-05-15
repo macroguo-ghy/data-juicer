@@ -543,22 +543,30 @@ export:
   lark_app_secret: <lark_app_secret>
   range: A1
   type: csv
+  mode: file
 ```
 
 参数：
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `lark_path` | 是 | 无 | 目标飞书表格 URL，必须能解析出 spreadsheet token 和 sheet id。 |
+| `lark_path` | 视模式而定 | 无 | 目标飞书表格 URL，必须能解析出 spreadsheet token 和 sheet id。`create_spreadsheet: true` 时可不写。 |
 | `lark_app_id` | 是 | 无 | 飞书应用 app id。 |
 | `lark_app_secret` | 是 | 无 | 飞书应用 app secret。不要提交真实 secret。 |
-| `range` | 是 | 无 | 写入起始区域，例如 `A1`。 |
-| `type` | 否 | `csv` | 暂存导出格式。当前 Lark 上传链路按文件上传并更新单元格。 |
+| `range` | 仅 `file`/`upload` 必填 | `append` 从 `lark_path` 的 `sheet` 推断；`overwrite` 从 `A1` 开始 | 写入范围。`append` 可不写，会默认追加到 `lark_path` 指定的 sheet 当前表尾；`overwrite` 可不写，会按暂存 CSV 的行列数从 `A1` 覆盖写入。 |
+| `type` | 否 | `csv` | 暂存导出格式。`append` 和 `overwrite` 只支持 `csv`。 |
+| `mode` | 否 | `file` | `file`/`upload`：上传暂存文件并把文件对象写入目标单元格；`append`：把暂存 CSV 的行追加写入目标 sheet；`overwrite`：把暂存 CSV 覆盖写入目标 sheet。 |
+| `skip_header` | 否 | `append` 默认为 `true`；`overwrite` 默认为 `false` | values 写入时是否跳过暂存 CSV 表头。 |
+| `clear_sheet` | 否 | `true` | 仅 `overwrite` 且未配置 `range` 时生效。写入前删除本次输出行数之后的旧行，避免历史尾行残留。 |
+| `create_spreadsheet` | 否 | `false` | 为 `true` 且未配置 `lark_path` 时，先创建一个新的飞书表格，再写入。 |
+| `spreadsheet_title` / `title` | 否 | `data-juicer-export` | `create_spreadsheet: true` 时的新表标题。 |
 
 行为：
 
 - 先把结果数据集导出为本地暂存文件，默认 `dataset.csv`。
-- 再上传文件到 Lark，并把文件对象写入目标 sheet 的 `range`。
+- `mode: file`/`upload`：再上传文件到 Lark，并把文件对象写入目标 sheet 的 `range`。
+- `mode: append`：读取暂存 CSV，并调用 Lark Sheets append 接口把数据行追加到目标 sheet。不写 `range` 时使用 `lark_path` 里的 `sheet` 作为 append range；写单个起始单元格时会按暂存 CSV 的行列数扩展为矩形范围。
+- `mode: overwrite`：读取暂存 CSV，并调用 Lark Sheets values PUT 接口覆盖写入。未配置 `range` 时从 `A1` 开始，自动扩展到暂存 CSV 的行列范围，并默认清理旧的尾行。
 - 与 Lark loader 一样，使用 app/tenant 身份，不使用本机 user 登录态。
 
 ## TOS Export
@@ -743,7 +751,44 @@ export_path: ./outputs/lark_sheet_loader_default.jsonl
 - 表格中需要有 Data-Juicer 后续算子要用的字段，例如 `text`。
 - 应用需要有目标表的读取权限；如果 Drive 导出没权限但 values read 有权限，会自动 fallback 到 read 后写临时 CSV。
 
-### 案例 4：Ray Hive 读取，写入 Magnus Lance 表
+### 案例 4：Lark Sheet 读取、处理并追加回同一 Sheet
+
+来源：`demos/bytedance/lark_sheet_loader/lark_sheet_transform_append.yaml`
+
+```yaml
+project_name: lark_sheet_transform_append
+text_keys: null
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
+      lark_app_id: "cli_a52ccb9c37fbd00c"
+      lark_app_secret: "<lark_app_secret>"
+      file_extension: csv
+
+process:
+  - python_lambda_mapper:
+      lambda_str: 'lambda d: {k: ("empty" if v is None or v == "" else (v + 1 if isinstance(v, (int, float)) and not isinstance(v, bool) else (v + "_process_by_dj" if isinstance(v, str) else v))) for k, v in d.items()}'
+
+export:
+  target: lark
+  mode: append
+  lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
+  lark_app_id: "cli_a52ccb9c37fbd00c"
+  lark_app_secret: "<lark_app_secret>"
+  type: csv
+  skip_header: true
+```
+
+适用场景：
+
+- 不要求输入表有 `text` 列；`text_keys: null` 会关闭默认文本列校验。
+- mapper 会遍历每一列：数字加 1，字符串追加 `_process_by_dj`，空值写成 `empty`，其他 Python 值类型保持不变。
+- `skip_header: true` 会避免把暂存 CSV 的表头再次追加进原表。
+
+### 案例 5：Ray Hive 读取，写入 Magnus Lance 表
 
 来源：`demos/bytedance/process_landing_page_on_ray/configs/preloads_demo.yaml`
 
@@ -800,7 +845,7 @@ export:
 - 结果写到 Magnus，底层格式使用 Lance。
 - 覆盖分区时应同时配置 `partition_columns` 和 `partition_values`，并确保数据中分区列存在。
 
-### 案例 5：TQS client_result 小样本读取，写入 Magnus
+### 案例 6：TQS client_result 小样本读取，写入 Magnus
 
 来源：`demos/bytedance/process_landing_page_on_ray/configs/preloads_demo_tqs_100.yaml`
 
@@ -851,7 +896,7 @@ export:
 - `max_result_rows` 控制 client_result 读取上限。
 - 大结果集更适合 `read_mode: materialized` 并配置 `output_uri`。
 
-### 案例 6：本地 JSONL 创建/覆盖 Magnus Lance 表
+### 案例 7：本地 JSONL 创建/覆盖 Magnus Lance 表
 
 来源：`demos/bytedance/process_magnus/configs/lance_create_smoke.yaml`
 

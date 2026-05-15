@@ -1,0 +1,24 @@
+project_name: lark_sheet_transform_append
+text_keys: null
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
+      lark_app_id: "cli_a52ccb9c37fbd00c"
+      lark_app_secret: "<lark_app_secret>"
+      file_extension: csv
+
+process:
+  - python_lambda_mapper:
+      lambda_str: 'lambda d: {k: ("empty" if v is None or v == "" else (v + 1 if isinstance(v, (int, float)) and not isinstance(v, bool) else (v + "_process_by_dj" if isinstance(v, str) else v))) for k, v in d.items()}'
+
+export:
+  target: lark
+  mode: append
+  lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
+  lark_app_id: "cli_a52ccb9c37fbd00c"
+  lark_app_secret: "<lark_app_secret>"
+  type: csv
+  skip_header: true

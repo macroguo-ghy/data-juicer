@@ -173,6 +173,165 @@ class ExportManagerTest(unittest.TestCase):
             with open(uploaded_path) as fin:
                 self.assertEqual(fin.read(), "text\nhello\n")
 
+    @patch("data_juicer.core.export_manager.append_csv_to_lark_sheet")
+    @patch("data_juicer.core.export_manager.upload_file_to_lark_sheet")
+    def test_lark_export_append_mode_appends_staged_csv_rows(
+        self,
+        mock_upload_file_to_lark_sheet,
+        mock_append_csv_to_lark_sheet,
+    ):
+        cfg = self._make_cfg(
+            {
+                "target": "lark",
+                "lark_path": "https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+                "lark_app_id": "app_id",
+                "lark_app_secret": "app_secret",
+                "type": "csv",
+                "mode": "append",
+                "skip_header": True,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class CsvDataset:
+            features = {"text": object()}
+
+            def remove_columns(self, columns):
+                return self
+
+            def to_csv(self, export_path, num_proc=1, storage_options=None):
+                with open(export_path, "w") as fout:
+                    fout.write("text\nhello_process_by_dj\n")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir):
+                manager._export_to_lark(CsvDataset())
+            staged_path = mock_append_csv_to_lark_sheet.call_args.kwargs["local_path"]
+            self.assertEqual(os.path.basename(staged_path), "dataset.csv")
+            with open(staged_path) as fin:
+                self.assertEqual(fin.read(), "text\nhello_process_by_dj\n")
+
+        mock_append_csv_to_lark_sheet.assert_called_once_with(
+            local_path=staged_path,
+            lark_path="https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            cell_range=None,
+            skip_header=True,
+        )
+        mock_upload_file_to_lark_sheet.assert_not_called()
+
+    def test_lark_file_export_requires_range(self):
+        cfg = self._make_cfg(
+            {
+                "target": "lark",
+                "lark_path": "https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+                "lark_app_id": "app_id",
+                "lark_app_secret": "app_secret",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class CsvDataset:
+            features = {"text": object()}
+
+            def remove_columns(self, columns):
+                return self
+
+            def to_csv(self, export_path, num_proc=1, storage_options=None):
+                with open(export_path, "w") as fout:
+                    fout.write("text\nhello\n")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir):
+                with self.assertRaisesRegex(ValueError, "requires `range`"):
+                    manager._export_to_lark(CsvDataset())
+
+    @patch("data_juicer.core.export_manager.overwrite_csv_to_lark_sheet")
+    def test_lark_export_overwrite_mode_writes_staged_csv_rows(self, mock_overwrite_csv_to_lark_sheet):
+        cfg = self._make_cfg(
+            {
+                "target": "lark",
+                "lark_path": "https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+                "lark_app_id": "app_id",
+                "lark_app_secret": "app_secret",
+                "type": "csv",
+                "mode": "overwrite",
+                "range": "B2",
+                "skip_header": False,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class CsvDataset:
+            features = {"text": object()}
+
+            def remove_columns(self, columns):
+                return self
+
+            def to_csv(self, export_path, num_proc=1, storage_options=None):
+                with open(export_path, "w") as fout:
+                    fout.write("text\nhello_process_by_dj\n")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir):
+                result = manager._export_to_lark(CsvDataset())
+            staged_path = mock_overwrite_csv_to_lark_sheet.call_args.kwargs["local_path"]
+
+        self.assertEqual(result, "https://example.feishu.cn/sheets/shtcn123?sheet=abc")
+        mock_overwrite_csv_to_lark_sheet.assert_called_once_with(
+            local_path=staged_path,
+            lark_path="https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            cell_range="B2",
+            skip_header=False,
+            clear_sheet=True,
+        )
+
+    @patch("data_juicer.core.export_manager.overwrite_csv_to_lark_sheet")
+    @patch("data_juicer.core.export_manager.create_lark_spreadsheet")
+    def test_lark_export_can_create_spreadsheet_then_overwrite(
+        self,
+        mock_create_lark_spreadsheet,
+        mock_overwrite_csv_to_lark_sheet,
+    ):
+        mock_create_lark_spreadsheet.return_value = "https://example.feishu.cn/sheets/newtoken?sheet=abc"
+        cfg = self._make_cfg(
+            {
+                "target": "lark",
+                "create_spreadsheet": True,
+                "spreadsheet_title": "dj-e2e",
+                "lark_app_id": "app_id",
+                "lark_app_secret": "app_secret",
+                "type": "csv",
+                "mode": "overwrite",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class CsvDataset:
+            features = {"text": object()}
+
+            def remove_columns(self, columns):
+                return self
+
+            def to_csv(self, export_path, num_proc=1, storage_options=None):
+                with open(export_path, "w") as fout:
+                    fout.write("text\nhello_process_by_dj\n")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir):
+                result = manager._export_to_lark(CsvDataset())
+
+        self.assertEqual(result, "https://example.feishu.cn/sheets/newtoken?sheet=abc")
+        mock_create_lark_spreadsheet.assert_called_once_with(
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            title="dj-e2e",
+        )
+        mock_overwrite_csv_to_lark_sheet.assert_called_once()
+
     def test_format_partition_spec(self):
         self.assertEqual(
             ExportManager._format_partition_spec({"dt": "20260101", "region": "cn"}),

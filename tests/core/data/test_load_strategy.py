@@ -24,6 +24,10 @@ from data_juicer.core.data.load_strategy import (
 from data_juicer.core.data.config_validator import ConfigValidationError
 from data_juicer.core.io_utils import (
     _ensure_csv_field_size_limit,
+    _format_lark_sheet_range,
+    _format_lark_overwrite_range,
+    append_csv_to_lark_sheet,
+    overwrite_csv_to_lark_sheet,
     _write_lark_sheet_values_to_csv,
     build_tqs_client_result_limited_query,
     export_lark_sheet_to_local,
@@ -1207,6 +1211,22 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(ValueError, "requires a sheet id"):
             parse_lark_sheet_location("shtcn123")
 
+    def test_format_lark_sheet_range_expands_single_cell_for_append(self):
+        values = [["a", "b", "c"], ["d", "e", "f"]]
+
+        self.assertEqual(_format_lark_sheet_range("abc", "A1", values=values), "abc!A1:C2")
+        self.assertEqual(_format_lark_sheet_range("abc", "def!B2", values=values), "def!B2:D3")
+        self.assertEqual(_format_lark_sheet_range("abc", "A1:C3"), "abc!A1:C3")
+        self.assertEqual(_format_lark_sheet_range("abc", "abc", values=values), "abc")
+        self.assertEqual(_format_lark_sheet_range("abc", None, values=values), "abc")
+
+    def test_format_lark_overwrite_range_defaults_to_csv_shape_from_a1(self):
+        values = [["text", "count"], ["hello", "2"], ["empty", "3"]]
+
+        self.assertEqual(_format_lark_overwrite_range("abc", None, values=values), "abc!A1:B3")
+        self.assertEqual(_format_lark_overwrite_range("abc", "C2", values=values), "abc!C2:D4")
+        self.assertEqual(_format_lark_overwrite_range("abc", "def!A1:B3", values=values), "def!A1:B3")
+
     def test_write_lark_sheet_values_to_csv_serializes_complex_cells(self):
         output_path = osp.join(self.tmp_dir, "values.csv")
 
@@ -1225,6 +1245,68 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         self.assertEqual(rows[0], ["text", "meta", "empty"])
         self.assertEqual(rows[1], ["hello", '{"score": 0.5}', ""])
         self.assertEqual(rows[2], ["world", '["a", "b"]', ""])
+
+    @patch("data_juicer.core.io_utils.append_values_to_lark_sheet")
+    def test_append_csv_to_lark_sheet_skips_header_before_values_append(self, mock_append_values_to_lark_sheet):
+        csv_path = osp.join(self.tmp_dir, "processed.csv")
+        with open(csv_path, "w", encoding="utf-8", newline="") as wf:
+            writer = csv.writer(wf)
+            writer.writerow(["text", "count"])
+            writer.writerow(["hello_process_by_dj", "2"])
+            writer.writerow(["empty", "3"])
+
+        append_csv_to_lark_sheet(
+            local_path=csv_path,
+            lark_path="https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            skip_header=True,
+        )
+
+        mock_append_values_to_lark_sheet.assert_called_once_with(
+            values=[["hello_process_by_dj", "2"], ["empty", "3"]],
+            lark_path="https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            cell_range=None,
+            sheet_id=None,
+        )
+
+    @patch("data_juicer.core.io_utils.delete_lark_sheet_rows_after")
+    @patch("data_juicer.core.io_utils.overwrite_values_to_lark_sheet")
+    def test_overwrite_csv_to_lark_sheet_keeps_header_by_default(
+        self,
+        mock_overwrite_values_to_lark_sheet,
+        mock_delete_lark_sheet_rows_after,
+    ):
+        csv_path = osp.join(self.tmp_dir, "processed.csv")
+        with open(csv_path, "w", encoding="utf-8", newline="") as wf:
+            writer = csv.writer(wf)
+            writer.writerow(["text", "count"])
+            writer.writerow(["hello_process_by_dj", "2"])
+
+        overwrite_csv_to_lark_sheet(
+            local_path=csv_path,
+            lark_path="https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+        )
+
+        mock_delete_lark_sheet_rows_after.assert_called_once_with(
+            lark_path="https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            keep_rows=2,
+            sheet_id=None,
+        )
+        mock_overwrite_values_to_lark_sheet.assert_called_once_with(
+            values=[["text", "count"], ["hello_process_by_dj", "2"]],
+            lark_path="https://bytedance.larkoffice.com/sheets/shtcn123?sheet=abc",
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            cell_range=None,
+            sheet_id=None,
+        )
 
     @patch("data_juicer.core.io_utils.read_lark_sheet_to_csv")
     @patch("data_juicer.core.io_utils._export_lark_sheet_with_drive")
@@ -1255,6 +1337,32 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
             output_path=output_path,
             sheet_id="abc",
         )
+
+    @patch("data_juicer.core.io_utils.read_lark_sheet_to_csv")
+    @patch("data_juicer.core.io_utils._export_lark_sheet_with_drive")
+    def test_export_lark_sheet_to_local_falls_back_to_read_on_missing_export_scope(
+        self,
+        mock_export_lark_sheet_with_drive,
+        mock_read_lark_sheet_to_csv,
+    ):
+        output_path = osp.join(self.tmp_dir, "fallback.csv")
+        mock_export_lark_sheet_with_drive.side_effect = RuntimeError(
+            "Lark export task creation failed: code=99991672, "
+            "msg=Access denied. One of the following scopes is required: "
+            "[drive:export:readonly, docs:document:export]"
+        )
+        mock_read_lark_sheet_to_csv.return_value = output_path
+
+        result = export_lark_sheet_to_local(
+            lark_path=self.base_config["lark_path"],
+            lark_app_id="app_id",
+            lark_app_secret="app_secret",
+            output_path=output_path,
+            sheet_id="abc",
+        )
+
+        self.assertEqual(result, output_path)
+        mock_read_lark_sheet_to_csv.assert_called_once()
 
     @patch("data_juicer.core.io_utils.read_lark_sheet_to_csv")
     @patch("data_juicer.core.io_utils._export_lark_sheet_with_drive")
