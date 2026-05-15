@@ -950,6 +950,7 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         return cfg
     if not isinstance(export_cfg, dict):
         raise ValueError("Structured `export` config must be a dictionary")
+    _validate_export_max_rows(export_cfg, cfg)
 
     path = export_cfg.get("path")
     if path:
@@ -967,6 +968,21 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
 
     cfg.export = dict_to_namespace(export_cfg)
     return cfg
+
+
+def _validate_export_max_rows(export_cfg: dict, cfg: Namespace) -> None:
+    if "max_rows" not in export_cfg or export_cfg.get("max_rows") is None:
+        return
+
+    max_rows = export_cfg["max_rows"]
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
+        raise ValueError("`export.max_rows` must be a positive integer when set.")
+
+    if getattr(cfg, "ray_collect_real_metrics", False):
+        raise ValueError(
+            "`ray_collect_real_metrics` cannot be true when `export.max_rows` is set, because eager "
+            "Ray Dataset materialize/count before export would defeat lazy export limiting."
+        )
 
 
 def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
@@ -1331,11 +1347,14 @@ def namespace_to_arg_list(namespace, prefix="", includes=None, excludes=None):
     arg_list = []
 
     for key, value in vars(namespace).items():
+        concat_key = f"{prefix}{key}"
         if issubclass(type(value), Namespace):
+            if includes is not None and concat_key in includes:
+                arg_list.append(f"--{concat_key}={json.dumps(namespace_to_dict(value), ensure_ascii=False)}")
+                continue
             nested_args = namespace_to_arg_list(value, f"{prefix}{key}.")
             arg_list.extend(nested_args)
         elif value is not None:
-            concat_key = f"{prefix}{key}"
             if includes is not None and concat_key not in includes:
                 continue
             if excludes is not None and concat_key in excludes:

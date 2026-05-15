@@ -35,6 +35,33 @@ class RayLikeDataset:
         return self._columns
 
 
+class HFDatasetLike:
+    def __init__(self, rows):
+        self.rows = rows
+        self.selected_range = None
+
+    def __len__(self):
+        return len(self.rows)
+
+    def select(self, row_range):
+        selected_range = list(row_range)
+        selected = HFDatasetLike([self.rows[index] for index in selected_range])
+        selected.selected_range = selected_range
+        return selected
+
+
+class RayLimitDataset(RayLikeDataset):
+    def __init__(self, columns, label="original"):
+        super().__init__(columns)
+        self.label = label
+        self.limited_dataset = None
+        self.limit = MagicMock(side_effect=self._limit)
+
+    def _limit(self, max_rows):
+        self.limited_dataset = RayLimitDataset(self._columns, label=f"limit-{max_rows}")
+        return self.limited_dataset
+
+
 class ExportManagerTest(unittest.TestCase):
     def _make_cfg(self, export=None):
         return Namespace(
@@ -67,6 +94,60 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(manager.path, "hdfs://cluster/path/result.parquet")
         self.assertEqual(manager.export_cfg["type"], "parquet")
         self.assertEqual(manager.export_cfg["extra_args"], {"compression": "snappy"})
+
+    def test_export_max_rows_limits_hf_like_dataset_before_hdfs_export(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.jsonl",
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+        dataset = HFDatasetLike([{"id": 1}, {"id": 2}, {"id": 3}])
+
+        with patch.object(manager, "_export_to_hdfs") as mock_export_to_hdfs:
+            manager.export(dataset)
+
+        exported_dataset = mock_export_to_hdfs.call_args.args[0]
+        self.assertEqual(exported_dataset.selected_range, [0, 1])
+        self.assertEqual(len(exported_dataset), 2)
+
+    def test_export_max_rows_limits_ray_dataset_before_hive_export(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hive",
+                "table_name": "db.table_name",
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLimitDataset(["id"])
+
+        manager.export(dataset)
+
+        dataset.limit.assert_called_once_with(2)
+        self.assertIsNotNone(dataset.limited_dataset)
+        dataset.write_hive_table.assert_not_called()
+        dataset.limited_dataset.write_hive_table.assert_called_once_with(table_name="db.table_name")
+
+    @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
+    def test_export_max_rows_limits_ray_dataset_before_magnus_export(self, mock_write_ray_dataset_to_magnus):
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "magnus_conf": {},
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLimitDataset(["id"])
+
+        manager.export(dataset)
+
+        dataset.limit.assert_called_once_with(2)
+        self.assertIs(mock_write_ray_dataset_to_magnus.call_args.args[0], dataset.limited_dataset)
 
     def test_bytedance_magnus_demo_configs_write_lance(self):
         demo_root = os.path.join(os.getcwd(), "demos", "bytedance")

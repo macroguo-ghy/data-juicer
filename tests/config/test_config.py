@@ -472,6 +472,100 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_max_rows_accepts_positive_integer(self):
+        config_data = {
+            'project_name': 'structured_export_max_rows',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'target': 'local',
+                'path': './outputs/max_rows.jsonl',
+                'max_rows': 2,
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(cfg.export.max_rows, 2)
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_config_is_accepted_from_sys_argv(self):
+        config_data = {
+            'project_name': 'structured_export_sys_argv',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'target': 'local',
+                'path': './outputs/max_rows.jsonl',
+                'type': 'jsonl',
+                'max_rows': 2,
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            with patch.object(sys, 'argv', ['process_data.py', '--config', temp_config]):
+                cfg = init_configs(load_configs_only=True)
+            self.assertEqual(cfg.export.target, 'local')
+            self.assertEqual(cfg.export.max_rows, 2)
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_max_rows_rejects_non_positive_values(self):
+        for max_rows in [0, -1, True, '2']:
+            config_data = {
+                'project_name': 'structured_export_max_rows_invalid',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'export': {
+                    'target': 'local',
+                    'path': './outputs/max_rows.jsonl',
+                    'max_rows': max_rows,
+                },
+                'process': []
+            }
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, 'export.max_rows'):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_max_rows_rejects_ray_real_metrics(self):
+        config_data = {
+            'project_name': 'structured_export_max_rows_conflict',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'executor_type': 'ray',
+            'ray_collect_real_metrics': True,
+            'export': {
+                'target': 'local',
+                'path': './outputs/max_rows.jsonl',
+                'max_rows': 2,
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            with self.assertRaisesRegex(ValueError, 'ray_collect_real_metrics'):
+                init_configs(args=['--config', temp_config], load_configs_only=True)
+        finally:
+            os.unlink(temp_config)
+
     def test_cli_override(self):
         """Test that command line arguments correctly override YAML config values."""
         out = StringIO()

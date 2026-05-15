@@ -12,6 +12,7 @@
 - **分片导出** — 按大小将大型数据集拆分为多个文件
 - **并行导出** — 使用多进程加速单文件导出
 - **S3 导出** — 将结果直接写入 Amazon S3 或 S3 兼容存储
+- **行数限制** — 通过结构化 export 配置限制传给导出 sink 的行数
 - **统计信息和哈希管理** — 控制输出中保留哪些中间字段
 
 ## 配置
@@ -27,6 +28,16 @@ keep_stats_in_res_ds: false                # 在输出中保留计算的统计�
 keep_hashes_in_res_ds: false               # 在输出中保留计算的哈希值
 export_extra_args: {}                      # 额外的格式特定参数
 export_aws_credentials: null               # S3 导出专用，详见 S3 导出章节
+```
+
+限制导出行数时，使用结构化 `export` 配置：
+
+```yaml
+export:
+  target: local
+  path: ./outputs/result.jsonl
+  type: jsonl
+  max_rows: 1000
 ```
 
 ### 命令行
@@ -171,6 +182,14 @@ AWS 凭证按以下优先级解析：
 1. `export_aws_credentials` 配置（默认模式）或 `export_extra_args`（Ray 模式）
 2. 环境变量（`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`）
 3. 默认凭证链（IAM 角色、`~/.aws/credentials`）
+
+## 导出行数限制
+
+`export.max_rows` 限制传给导出 sink 的行数。它必须是正整数；未配置或为 `null` 时不限制。
+
+默认模式 / HuggingFace Dataset 导出中，这是精确上限。Ray Dataset 导出中，Data-Juicer 会在 sink 写入前应用 Ray Dataset `limit(max_rows)`。最终导出行数仍受 `max_rows` 约束，同时 Ray 可能把 limit 下推到上游，从而减少兼容 lazy pipeline 的执行量。这个执行量减少是 best-effort，不是强保证：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset，或非 lazy 的指标采集，都可能执行超过 `max_rows` 行的上游工作。
+
+`ray_collect_real_metrics: true` 不能和 `export.max_rows` 同时配置，因为导出前的 eager Ray Dataset `materialize()` / `count()` 会破坏 lazy limit 路径。
 
 ## 统计信息和哈希管理
 

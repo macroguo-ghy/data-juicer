@@ -435,6 +435,7 @@ export:
   type: jsonl
   shard_size: 0
   in_parallel: false
+  max_rows: null
   extra_args: {}
 ```
 
@@ -447,8 +448,11 @@ export:
 | `type` | `export_type` | 从路径后缀推断 | 输出格式。 |
 | `shard_size` | `export_shard_size` | `0` | 分片大小，字节。`0` 表示单文件。 |
 | `in_parallel` | `export_in_parallel` | `false` | 默认模式单文件导出是否并行。 |
+| `max_rows` | 无 | `null` | 传给导出 sink 的最大行数，必须是正整数。默认模式是精确上限；Ray 模式会在写入前应用 `Dataset.limit(max_rows)`，最终导出行数受该值约束，并尽量保留 lazy limit 下推能力。 |
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
+
+`export.max_rows` 只控制传给 sink 的数据规模，不改变写入模式；例如 `OVERWRITE` 仍会覆盖目标，只是写入受限后的数据。Ray 模式下，limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 `max_rows` 行的上游工作。`ray_collect_real_metrics: true` 不能和 `export.max_rows` 同时配置，因为导出前的 eager `materialize()` / `count()` 会破坏 lazy limit 路径。
 
 导出前，默认会移除中间字段：
 

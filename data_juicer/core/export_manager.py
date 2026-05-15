@@ -41,6 +41,7 @@ class ExportManager:
             self.file_exporter = self._build_file_exporter(self.path)
 
     def export(self, dataset, columns=None):
+        dataset = self._limit_dataset_for_export(dataset)
         if self.target in {"local", "s3"}:
             if self.executor_type == "ray":
                 return self.file_exporter.export(dataset, columns=columns)
@@ -57,6 +58,19 @@ class ExportManager:
         if self.target == "magnus":
             return self._export_to_magnus(dataset, columns=columns)
         raise NotImplementedError(f"Unsupported export target [{self.target}]")
+
+    def _limit_dataset_for_export(self, dataset):
+        max_rows = self.export_cfg.get("max_rows")
+        if max_rows is None:
+            return dataset
+
+        # Apply the row limit before target-specific sinks so Ray can keep it
+        # lazy and push it upstream when the operator plan allows.
+        if callable(getattr(dataset, "limit", None)):
+            return dataset.limit(max_rows)
+        if callable(getattr(dataset, "select", None)):
+            return dataset.select(range(min(max_rows, len(dataset))))
+        return dataset
 
     def export_compute_stats(self, dataset, export_path):
         exporter = Exporter(

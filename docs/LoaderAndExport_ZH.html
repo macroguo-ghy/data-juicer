@@ -442,6 +442,7 @@ keep_hashes_in_res_ds: false</code></pre>
   type: jsonl
   shard_size: 0
   in_parallel: false
+  max_rows: null
   extra_args: {}</code></pre>
 <p>公共字段：</p>
 <div class="table-wrap"><table>
@@ -452,9 +453,11 @@ keep_hashes_in_res_ds: false</code></pre>
 <tr><td><code>type</code></td><td><code>export_type</code></td><td>从路径后缀推断</td><td>输出格式。</td></tr>
 <tr><td><code>shard_size</code></td><td><code>export_shard_size</code></td><td><code>0</code></td><td>分片大小，字节。<code>0</code> 表示单文件。</td></tr>
 <tr><td><code>in_parallel</code></td><td><code>export_in_parallel</code></td><td><code>false</code></td><td>默认模式单文件导出是否并行。</td></tr>
+<tr><td><code>max_rows</code></td><td>无</td><td><code>null</code></td><td>传给导出 sink 的最大行数，必须是正整数。默认模式是精确上限；Ray 模式会在写入前应用 <code>Dataset.limit(max_rows)</code>，最终导出行数受该值约束，并尽量保留 lazy limit 下推能力。</td></tr>
 <tr><td><code>extra_args</code></td><td><code>export_extra_args</code></td><td><code>{}</code></td><td>传给底层导出函数的额外参数。</td></tr>
 <tr><td><code>aws_credentials</code></td><td><code>export_aws_credentials</code></td><td><code>{}</code></td><td>S3 导出凭证。</td></tr>
 </tbody></table></div>
+<p><code>export.max_rows</code> 只控制传给 sink 的数据规模，不改变写入模式；例如 <code>OVERWRITE</code> 仍会覆盖目标，只是写入受限后的数据。Ray 模式下，limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 <code>max_rows</code> 行的上游工作。<code>ray_collect_real_metrics: true</code> 不能和 <code>export.max_rows</code> 同时配置，因为导出前的 eager <code>materialize()</code> / <code>count()</code> 会破坏 lazy limit 路径。</p>
 <p>导出前，默认会移除中间字段：</p>
 <ul>
 <li><code>keep_stats_in_res_ds: false</code> 时移除 <code>__dj__stats__</code>、<code>__dj__meta__</code>。</li>
