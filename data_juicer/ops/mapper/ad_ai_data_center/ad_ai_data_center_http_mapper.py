@@ -52,20 +52,18 @@ class AdAiDataCenterHttpMapper(Mapper):
         self.input_fields = list(input_fields)
         self.output_field = output_field
         self.error_field = error_field
-        self.client = HttpClient(
-            endpoint=endpoint,
-            method=method,
-            headers=headers,
-            timeout=timeout,
-        )
+        self.endpoint = endpoint
+        self.method = method
+        self.headers = dict(headers or {})
+        self.timeout = timeout
 
     def process_single(self, sample):
-        user = self._get_user_account(sample)
+        ctx = self._get_notification_ctx(sample)
         self._send_test_card_notification(
             stage="开始",
             content=copy.deepcopy(sample),
             err_msg="",
-            user=user,
+            ctx=ctx,
         )
 
         payload = {
@@ -74,7 +72,7 @@ class AdAiDataCenterHttpMapper(Mapper):
                 for field in self.input_fields
             }
         }
-        result = self.client.request(json_body=payload)
+        result = self._build_client(ctx).request(json_body=payload)
         if result["ok"]:
             sample[self.output_field] = self._stringify_result_value(
                 result["data"] if result["data"] is not None else result["text"]
@@ -88,12 +86,12 @@ class AdAiDataCenterHttpMapper(Mapper):
             stage="结束",
             content=copy.deepcopy(sample),
             err_msg=self._extract_error_message(result),
-            user=user,
+            ctx=ctx,
         )
         return sample
 
     @staticmethod
-    def _send_test_card_notification(stage, content, err_msg, user):
+    def _send_test_card_notification(stage, content, err_msg, ctx):
         send_test_card_notification(
             template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
             template_variable={
@@ -101,9 +99,18 @@ class AdAiDataCenterHttpMapper(Mapper):
                 "stage": stage,
                 "content": AdAiDataCenterHttpMapper._stringify_result_value(content),
                 "errMsg": err_msg,
-                "user": user,
             },
-            user_email_or_account=user,
+            ctx=ctx,
+        )
+
+    def _build_client(self, ctx):
+        headers = dict(self.headers)
+        headers["user-account"] = self._get_user_account(ctx)
+        return HttpClient(
+            endpoint=self.endpoint,
+            method=self.method,
+            headers=headers,
+            timeout=self.timeout,
         )
 
     @staticmethod
@@ -113,11 +120,17 @@ class AdAiDataCenterHttpMapper(Mapper):
         return value
 
     @staticmethod
-    def _get_user_account(sample):
+    def _get_notification_ctx(sample):
         ctx = sample.get("ctx")
-        if not isinstance(ctx, dict) or not ctx.get("userAccount"):
+        if not isinstance(ctx, dict):
+            raise ValueError("sample.ctx must be provided")
+        return ctx
+
+    @staticmethod
+    def _get_user_account(ctx):
+        if not ctx.get("userAccount"):
             raise ValueError("sample.ctx.userAccount must be provided")
-        return ctx["userAccount"]
+        return str(ctx["userAccount"])
 
     @staticmethod
     def _extract_error_message(result):

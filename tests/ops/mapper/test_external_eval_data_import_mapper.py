@@ -1,3 +1,4 @@
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -41,16 +42,19 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             "ok": True,
             "status_code": 200,
             "data": {
-                "sheets": [
-                    {
-                        "sheetId": "sheet_1",
-                        "title": "Sheet1",
-                        "values": [
-                            ["query", "answer"],
-                            ["example question", "example answer"],
-                        ],
-                    }
-                ]
+                "code": 0,
+                "data": {
+                    "sheets": [
+                        {
+                            "sheetId": "sheet_1",
+                            "title": "Sheet1",
+                            "values": [
+                                ["query", "answer"],
+                                ["example question", "example answer"],
+                            ],
+                        }
+                    ]
+                },
             },
             "text": None,
             "error": None,
@@ -66,7 +70,12 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             ),
             auto_op_parallelism=False,
         )
-        dataset = Dataset.from_list([{"id": "row-1"}])
+        dataset = Dataset.from_list([{
+            "id": "row-1",
+            "ctx": {
+                "userAccount": "wangjianda.667",
+            },
+        }])
 
         result = op.run(dataset).to_list()
 
@@ -74,6 +83,11 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             endpoint=DEFAULT_ENDPOINT,
             method="POST",
             timeout=30.0,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "user-account": "wangjianda.667",
+            },
         )
         self.assertEqual(
             fake_client.requests,
@@ -93,6 +107,20 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
                 "sheet_count": 1,
             },
         )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")
+    def test_rejects_missing_user_account_in_ctx_before_loading_sheet(self, mock_client_cls):
+        op = ExternalEvalDataImportMapper(
+            sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
+            data_type="eval_data",
+            python_code="def process(data, context):\n    return {\"items\": data}",
+            auto_op_parallelism=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "sample.ctx.userAccount must be provided"):
+            op.process_single({"ctx": {}})
+
+        mock_client_cls.assert_not_called()
 
     def test_config_uses_operator_name_without_ad_ai_data_center_prefix(self):
         config_path = Path("/private/tmp/external_eval_data_import_mapper_config_test.yaml")
@@ -121,6 +149,44 @@ process:
 
         self.assertEqual(OP_NAME, "external_eval_data_import_mapper")
         self.assertIsInstance(ops[0], ExternalEvalDataImportMapper)
+
+    @unittest.skipUnless(
+        os.getenv("RUN_REAL_EXTERNAL_EVAL_DATA_IMPORT_TEST") == "1",
+        "Set RUN_REAL_EXTERNAL_EVAL_DATA_IMPORT_TEST=1 to call the real cloud-doc API.",
+    )
+    def test_lark_wiki_doc_url_sends_real_request_and_processes_result(self):
+        op = ExternalEvalDataImportMapper(
+            sheet_url="https://bytedance.larkoffice.com/wiki/AnACwPRtOiRxJRk30s8ckk8Yneg",
+            data_type="eval_data",
+            python_code=(
+                "def process(data, context):\n"
+                "    return {\n"
+                "        \"data_type\": context[\"data_type\"],\n"
+                "        \"sheet_url\": context[\"sheet_url\"],\n"
+                "        \"sheet_count\": len(context[\"raw_sheets\"]),\n"
+                "        \"item_count\": len(data),\n"
+                "        \"first_item\": data[0] if data else {},\n"
+                "    }"
+            ),
+            auto_op_parallelism=False,
+        )
+
+        result = op.process_single({
+            "id": "real-doc-url-example",
+            "ctx": {
+                "userAccount": "wangjianda.667",
+            },
+        })
+
+        external_data_set = result["externalDataSet"]
+        self.assertEqual(external_data_set["data_type"], "eval_data")
+        self.assertEqual(
+            external_data_set["sheet_url"],
+            "https://bytedance.larkoffice.com/wiki/AnACwPRtOiRxJRk30s8ckk8Yneg",
+        )
+        self.assertGreater(external_data_set["sheet_count"], 0)
+        self.assertIsInstance(external_data_set["item_count"], int)
+        self.assertIsInstance(external_data_set["first_item"], dict)
 
     def test_rejects_empty_sheet_url(self):
         with self.assertRaisesRegex(ValueError, "sheet_url must be provided"):
@@ -171,7 +237,11 @@ process:
         )
 
         with self.assertRaisesRegex(ValueError, "must be JSON serializable"):
-            op.process_single({})
+            op.process_single({
+                "ctx": {
+                    "userAccount": "wangjianda.667",
+                },
+            })
 
 
 if __name__ == "__main__":

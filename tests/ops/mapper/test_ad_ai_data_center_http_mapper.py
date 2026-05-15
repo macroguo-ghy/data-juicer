@@ -72,6 +72,8 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
             "datasourceGroupId": "11308",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         }])
 
@@ -127,6 +129,8 @@ process:
             "extra": "keep",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         }])
         op = AdAiDataCenterHttpMapper(
@@ -142,7 +146,10 @@ process:
         mock_client_cls.assert_called_once_with(
             endpoint="http://example.test/invoke",
             method="POST",
-            headers={"X-Test": "1"},
+            headers={
+                "X-Test": "1",
+                "user-account": "tester@example.com",
+            },
             timeout=30.0,
         )
         self.assertEqual(
@@ -175,6 +182,8 @@ process:
             "prompt": "hi",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         })
 
@@ -186,11 +195,17 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "开始",
-                        "content": '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com"}}',
+                        "content": (
+                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com", '
+                            '"x-tt-env": "ppe_sirius2", "x-use-ppe": "1"}}'
+                        ),
                         "errMsg": "",
-                        "user": "tester@example.com",
                     },
-                    user_email_or_account="tester@example.com",
+                    ctx={
+                        "userAccount": "tester@example.com",
+                        "x-tt-env": "ppe_sirius2",
+                        "x-use-ppe": "1",
+                    },
                 ),
                 call(
                     template_id="AAqt1lQ72dVxK",
@@ -198,13 +213,17 @@ process:
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "结束",
                         "content": (
-                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com"}, '
+                            '{"prompt": "hi", "ctx": {"userAccount": "tester@example.com", '
+                            '"x-tt-env": "ppe_sirius2", "x-use-ppe": "1"}, '
                             '"http_result": "{\\"answer\\": \\"hello\\"}"}'
                         ),
                         "errMsg": "",
-                        "user": "tester@example.com",
                     },
-                    user_email_or_account="tester@example.com",
+                    ctx={
+                        "userAccount": "tester@example.com",
+                        "x-tt-env": "ppe_sirius2",
+                        "x-use-ppe": "1",
+                    },
                 ),
             ],
         )
@@ -233,6 +252,8 @@ process:
             "prompt": "hi",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         })
 
@@ -262,6 +283,8 @@ process:
             "query": "ping",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         }])).to_list()
 
@@ -290,6 +313,8 @@ process:
             "prompt": "hi",
             "ctx": {
                 "userAccount": "tester@example.com",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
             },
         }])).to_list()
 

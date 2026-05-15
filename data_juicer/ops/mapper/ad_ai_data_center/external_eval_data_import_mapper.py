@@ -49,15 +49,12 @@ class ExternalEvalDataImportMapper(Mapper):
         self.sheet_url = sheet_url
         self.data_type = data_type
         self.output_field = OUTPUT_FIELD
-        self.client = HttpClient(
-            endpoint=DEFAULT_ENDPOINT,
-            method="POST",
-            timeout=timeout,
-        )
+        self.timeout = timeout
         self.process_func = self._compile_process_func(python_code)
 
     def process_single(self, sample):
-        sheets = self._load_sheets()
+        user_account = self._get_user_account(sample)
+        sheets = self._load_sheets(user_account)
         parsed_data = self._parse_eval_data(sheets)
         context = {
             "data_type": self.data_type,
@@ -69,14 +66,37 @@ class ExternalEvalDataImportMapper(Mapper):
         sample[self.output_field] = result
         return sample
 
-    def _load_sheets(self) -> list[dict[str, Any]]:
-        result = self.client.request(json_body={"docUrl": self.sheet_url})
+    def _load_sheets(self, user_account: str) -> list[dict[str, Any]]:
+        client = HttpClient(
+            endpoint=DEFAULT_ENDPOINT,
+            method="POST",
+            timeout=self.timeout,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "user-account": user_account,
+            },
+        )
+        result = client.request(json_body={"docUrl": self.sheet_url})
         if not result["ok"]:
             raise ValueError(f"Failed to load sheet data: {result['error']}")
-        data = result["data"]
+        data = self._unwrap_sheet_response(result["data"])
         if not isinstance(data, dict) or not isinstance(data.get("sheets"), list):
             raise ValueError("Sheet response must contain a sheets list")
         return data["sheets"]
+
+    @staticmethod
+    def _get_user_account(sample):
+        ctx = sample.get("ctx")
+        if not isinstance(ctx, dict) or not ctx.get("userAccount"):
+            raise ValueError("sample.ctx.userAccount must be provided")
+        return str(ctx["userAccount"])
+
+    @staticmethod
+    def _unwrap_sheet_response(data):
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            return data["data"]
+        return data
 
     def _parse_eval_data(self, sheets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         items = []
