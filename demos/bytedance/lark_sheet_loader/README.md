@@ -26,3 +26,14 @@ Run with local Ray:
 ```bash
 python tools/process_data.py --config demos/bytedance/lark_sheet_loader/lark_sheet_loader_ray.yaml
 ```
+
+Run a transform and append the processed rows back to the same sheet:
+
+```bash
+python tools/process_data.py --config demos/bytedance/lark_sheet_loader/lark_sheet_transform_append.yaml
+```
+
+`lark_sheet_transform_append.yaml` uses `text_keys: null`, so it does not
+require a `text` column. Its mapper applies the same transformation to every
+column in each row: numbers plus 1, strings suffixed with `_process_by_dj`,
+empty cells changed to `empty`, and other Python value types left unchanged.
