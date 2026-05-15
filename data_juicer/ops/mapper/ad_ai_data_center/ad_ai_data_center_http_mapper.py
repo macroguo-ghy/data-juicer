@@ -1,8 +1,14 @@
+import copy
+import json
+
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.http_utils import HttpClient
+from data_juicer.utils.notification_utils import send_test_card_notification
 
 OP_NAME = "ad_ai_data_center_http_mapper"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
+TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
+TEST_CARD_NOTIFICATION_USER_EMAIL_OR_ACCOUNT = "wangjianda.667@bytedance.com"
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -55,6 +61,8 @@ class AdAiDataCenterHttpMapper(Mapper):
         )
 
     def process_single(self, sample):
+        self._send_test_card_notification(copy.deepcopy(sample))
+
         payload = {
             "inputs": {
                 field: sample.get(field)
@@ -63,11 +71,27 @@ class AdAiDataCenterHttpMapper(Mapper):
         }
         result = self.client.request(json_body=payload)
         if result["ok"]:
-            sample[self.output_field] = (
+            sample[self.output_field] = self._stringify_result_value(
                 result["data"] if result["data"] is not None else result["text"]
             )
             sample.pop(self.error_field, None)
         else:
-            sample[self.error_field] = result
+            sample[self.error_field] = self._stringify_result_value(result)
             sample.pop(self.output_field, None)
+
+        self._send_test_card_notification(copy.deepcopy(sample))
         return sample
+
+    @staticmethod
+    def _send_test_card_notification(sample):
+        send_test_card_notification(
+            template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
+            template_variable={"input": sample},
+            user_email_or_account=TEST_CARD_NOTIFICATION_USER_EMAIL_OR_ACCOUNT,
+        )
+
+    @staticmethod
+    def _stringify_result_value(value):
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return value

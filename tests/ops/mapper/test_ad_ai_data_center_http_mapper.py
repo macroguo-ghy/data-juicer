@@ -1,6 +1,7 @@
+import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
@@ -34,6 +35,22 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
 
+    def setUp(self):
+        self.notification_patcher = patch(
+            "data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.send_test_card_notification"
+        )
+        self.mock_send_test_card_notification = self.notification_patcher.start()
+        self.mock_send_test_card_notification.return_value = {
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0},
+            "text": None,
+            "error": None,
+        }
+
+    def tearDown(self):
+        self.notification_patcher.stop()
+
     def test_declares_custom_config_page_key(self):
         self.assertEqual(CONFIG_PAGE_KEY, "adAiDataCenterHttp")
 
@@ -55,7 +72,8 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
 
         result = op.run(dataset).to_list()
 
-        self.assertIsInstance(result[0]["dimension_and_metric"], dict)
+        self.assertIsInstance(result[0]["dimension_and_metric"], str)
+        self.assertIsInstance(json.loads(result[0]["dimension_and_metric"]), dict)
 
     def test_config_process_accepts_endpoint_and_input_fields(self):
         config_path = Path("/private/tmp/ad_ai_data_center_http_mapper_config_test.yaml")
@@ -122,8 +140,46 @@ process:
         )
         self.assertEqual(result[0]["prompt"], "hi")
         self.assertEqual(result[0]["extra"], "keep")
-        self.assertEqual(result[0]["http_result"], {"answer": "hello"})
+        self.assertEqual(json.loads(result[0]["http_result"]), {"answer": "hello"})
         self.assertNotIn("http_error", result[0])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
+    def test_sends_test_card_notification_before_and_after_processing(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"answer": "hello"},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/invoke",
+            input_fields=["prompt"],
+            output_field="http_result",
+            auto_op_parallelism=False,
+        )
+
+        result = op.process_single({"prompt": "hi"})
+
+        self.assertEqual(
+            self.mock_send_test_card_notification.call_args_list,
+            [
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={"input": {"prompt": "hi"}},
+                    user_email_or_account="wangjianda.667@bytedance.com",
+                ),
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={
+                        "input": {"prompt": "hi", "http_result": '{"answer": "hello"}'}
+                    },
+                    user_email_or_account="wangjianda.667@bytedance.com",
+                ),
+            ],
+        )
+        self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_writes_text_response_when_response_is_not_json(self, mock_client_cls):
@@ -168,7 +224,7 @@ process:
         result = op.run(Dataset.from_list([{"prompt": "hi"}])).to_list()
 
         self.assertNotIn("http_result", result[0])
-        self.assertEqual(result[0]["http_error"], error_result)
+        self.assertEqual(json.loads(result[0]["http_error"]), error_result)
 
     def test_rejects_empty_input_fields(self):
         with self.assertRaises(ValueError):
