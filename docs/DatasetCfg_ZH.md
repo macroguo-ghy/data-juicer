@@ -3,7 +3,7 @@
 
 本指南概述了如何在 Data-Juicer 框架中使用 YAML 格式配置数据集。允许您指定本地和远程数据集以及数据验证规则。
 
-更完整的 loader 参数解析请参阅 [Loader 与 Export 配置解析](LoaderAndExport_ZH.md)。
+更完整的 loader 参数解析请参阅 [Loader 与 Export 配置解析](LoaderAndExport_ZH.md)，也可以阅读对应的 [HTML 版本](LoaderAndExport_ZH.html)。
 
 ## 支持的数据集格式
 
