@@ -173,7 +173,7 @@ process:
                 call(
                     template_id="AAqt1lQ72dVxK",
                     template_variable={
-                        "input": {"prompt": "hi", "http_result": '{"answer": "hello"}'}
+                        "output": {"prompt": "hi", "http_result": '{"answer": "hello"}'}
                     },
                     user_email_or_account="wangjianda.667@bytedance.com",
                 ),

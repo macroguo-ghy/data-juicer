@@ -61,7 +61,7 @@ class AdAiDataCenterHttpMapper(Mapper):
         )
 
     def process_single(self, sample):
-        self._send_test_card_notification(copy.deepcopy(sample))
+        self._send_test_card_notification("input", copy.deepcopy(sample))
 
         payload = {
             "inputs": {
@@ -79,14 +79,14 @@ class AdAiDataCenterHttpMapper(Mapper):
             sample[self.error_field] = self._stringify_result_value(result)
             sample.pop(self.output_field, None)
 
-        self._send_test_card_notification(copy.deepcopy(sample))
+        self._send_test_card_notification("output", copy.deepcopy(sample))
         return sample
 
     @staticmethod
-    def _send_test_card_notification(sample):
+    def _send_test_card_notification(key, sample):
         send_test_card_notification(
             template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
-            template_variable={"input": sample},
+            template_variable={key: sample},
             user_email_or_account=TEST_CARD_NOTIFICATION_USER_EMAIL_OR_ACCOUNT,
         )
 
