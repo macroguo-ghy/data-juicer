@@ -1,9 +1,15 @@
 import copy
 import json
 
+from loguru import logger
+
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.notification_utils import send_test_card_notification
+from data_juicer.utils.operator_execution_callback_utils import (
+    OperatorExecutionCallbackClient,
+    RECORD_KEY_FIELD,
+)
 
 OP_NAME = "ad_ai_data_center_http_mapper"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
@@ -60,52 +66,69 @@ class AdAiDataCenterHttpMapper(Mapper):
         self.headers = dict(headers or {})
         self.ctx = ctx
         self.timeout = timeout
+        self._operator_execution_callback_client = None
 
     def process_single(self, sample):
         ctx = self._get_notification_ctx()
-        self._send_test_card_notification(
-            stage="开始",
-            content=copy.deepcopy(sample),
-            err_msg="",
-            ctx=ctx,
-        )
-
-        payload = {
-            "inputs": {
-                field: sample.get(field)
-                for field in self.input_fields
-            }
-        }
-        result = self._build_client(ctx).request(json_body=payload)
-        if result["ok"]:
-            sample[self.output_field] = self._stringify_result_value(
-                result["data"] if result["data"] is not None else result["text"]
+        original_sample = copy.deepcopy(sample)
+        try:
+            self._try_send_test_card_notification(
+                stage="开始",
+                content=copy.deepcopy(sample),
+                err_msg="",
+                ctx=ctx,
             )
-            sample.pop(self.error_field, None)
-        else:
-            sample[self.error_field] = self._stringify_result_value(result)
-            sample.pop(self.output_field, None)
 
-        self._send_test_card_notification(
-            stage="结束",
-            content=copy.deepcopy(sample),
-            err_msg=self._extract_error_message(result),
-            ctx=ctx,
-        )
+            payload = {
+                "inputs": {
+                    field: sample.get(field)
+                    for field in self.input_fields
+                }
+            }
+            result = self._build_client(ctx).request(json_body=payload)
+            if result["ok"]:
+                sample[self.output_field] = self._stringify_result_value(
+                    result["data"] if result["data"] is not None else result["text"]
+                )
+                sample.pop(self.error_field, None)
+            else:
+                sample[self.error_field] = self._stringify_result_value(result)
+                sample.pop(self.output_field, None)
+
+            self._try_send_test_card_notification(
+                stage="结束",
+                content=copy.deepcopy(sample),
+                err_msg=self._extract_error_message(result),
+                ctx=ctx,
+            )
+        except Exception as exc:
+            self._report_record_failure(original_sample, sample, str(exc))
+            raise
+        if result["ok"]:
+            self._report_record_success(original_sample, sample)
+        else:
+            self._report_record_failure(
+                original_sample,
+                sample,
+                self._extract_error_message(result),
+            )
         return sample
 
     @staticmethod
-    def _send_test_card_notification(stage, content, err_msg, ctx):
-        send_test_card_notification(
-            template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
-            template_variable={
-                "operator": OP_NAME,
-                "stage": stage,
-                "content": AdAiDataCenterHttpMapper._stringify_result_value(content),
-                "errMsg": err_msg,
-            },
-            ctx=ctx,
-        )
+    def _try_send_test_card_notification(stage, content, err_msg, ctx):
+        try:
+            send_test_card_notification(
+                template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
+                template_variable={
+                    "operator": OP_NAME,
+                    "stage": stage,
+                    "content": AdAiDataCenterHttpMapper._stringify_result_value(content),
+                    "errMsg": err_msg,
+                },
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.warning("Failed to send test card notification: {}", exc)
 
     def _build_client(self, ctx):
         headers = dict(self.headers)
@@ -134,6 +157,49 @@ class AdAiDataCenterHttpMapper(Mapper):
         if not ctx.get("userAccount"):
             raise ValueError("ctx.userAccount must be provided")
         return str(ctx["userAccount"])
+
+    def _get_operator_execution_callback_client(self):
+        if self._operator_execution_callback_client is None:
+            callback_client = OperatorExecutionCallbackClient(self.ctx)
+            callback_client.upsert(
+                operator_config={
+                    "endpoint": self.endpoint,
+                    "input_fields": self.input_fields,
+                    "output_field": self.output_field,
+                    "error_field": self.error_field,
+                    "method": self.method,
+                    "headers": self.headers,
+                }
+            )
+            self._operator_execution_callback_client = callback_client
+        return self._operator_execution_callback_client
+
+    def _report_record_success(self, input_sample, output_sample):
+        try:
+            self._get_operator_execution_callback_client().report_record_success(
+                record_key=self._get_record_key(output_sample),
+                input_data=input_sample,
+                output_data=copy.deepcopy(output_sample),
+            )
+        except Exception as exc:
+            logger.warning("Failed to report record success callback: {}", exc)
+
+    def _report_record_failure(self, input_sample, output_sample, error_message):
+        try:
+            self._get_operator_execution_callback_client().report_record_failure(
+                record_key=self._get_record_key(output_sample),
+                input_data=input_sample,
+                error_message=error_message,
+                output_data=copy.deepcopy(output_sample),
+            )
+        except Exception as exc:
+            logger.warning("Failed to report record failure callback: {}", exc)
+
+    @staticmethod
+    def _get_record_key(sample):
+        if not sample.get(RECORD_KEY_FIELD):
+            raise ValueError(f"sample.{RECORD_KEY_FIELD} must be provided")
+        return sample[RECORD_KEY_FIELD]
 
     @staticmethod
     def _extract_error_message(result):

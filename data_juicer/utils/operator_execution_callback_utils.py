@@ -16,7 +16,19 @@ class OperatorExecutionStatus(IntEnum):
 
 
 class OperatorExecutionCallbackClient:
-    """Client for data synthesis operator execution callback APIs."""
+    """Client for data synthesis operator execution callback APIs.
+
+    Intended usage:
+    - Business operators with ``NEED_CTX = True`` call ``upsert`` before
+      processing records and keep the returned ``operatorExecutionId``.
+    - Business operators call ``report_record_success`` or
+      ``report_record_failure`` after each record. A failed record is only a
+      record-level failure and does not imply operator-level FAILED.
+    - Execution engines call ``finalize`` only after the current operator output
+      is fully consumed. Business operators should not infer that by themselves.
+    - Operator-level FAILED is reported through ``report_status`` when the
+      operator as a whole fails, not for ordinary single-record failures.
+    """
 
     def __init__(
         self,
@@ -38,6 +50,7 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> int:
+        """Create or update the operator execution row and cache its ID."""
         payload = {
             "synthesisInstanceId": self._get_ctx_required_value("synthesisInstanceId"),
             "taskId": self._get_ctx_required_value("taskId"),
@@ -83,6 +96,7 @@ class OperatorExecutionCallbackClient:
         *,
         record_key: str,
         input_data: Any | None = None,
+        output_data: Any | None = None,
         error_message: str | None = None,
         properties: dict[str, Any] | None = None,
         started_at: int | None = None,
@@ -92,6 +106,7 @@ class OperatorExecutionCallbackClient:
             record_key=record_key,
             status=OperatorExecutionStatus.FAILED,
             input_data=input_data,
+            output_data=output_data,
             error_message=error_message,
             properties=properties,
             started_at=started_at,
@@ -110,6 +125,11 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
+        """Report the execution result of one input record.
+
+        This method upserts by ``recordKey`` on the server side, so reruns can
+        safely update the same record result.
+        """
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
             "recordKey": self._get_required_value(record_key, "record_key"),
@@ -131,6 +151,11 @@ class OperatorExecutionCallbackClient:
         error_message: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Report an operator-level status transition.
+
+        Do not call this with FAILED for ordinary single-record failures; use
+        ``report_record_failure`` instead.
+        """
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
             "status": int(status),
@@ -146,6 +171,7 @@ class OperatorExecutionCallbackClient:
         finished_at: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Finalize operator success after the execution engine consumes output."""
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
         }

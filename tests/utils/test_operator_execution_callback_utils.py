@@ -160,6 +160,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         client.report_record_failure(
             record_key="adc-record-001",
             input_data={"text": "input"},
+            output_data={"http_error": "process failed"},
             error_message="process failed",
         )
 
@@ -175,6 +176,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "recordKey": "adc-record-001",
                 "status": 3,
                 "inputData": {"text": "input"},
+                "outputData": {"http_error": "process failed"},
                 "errorMessage": "process failed",
             },
         )
