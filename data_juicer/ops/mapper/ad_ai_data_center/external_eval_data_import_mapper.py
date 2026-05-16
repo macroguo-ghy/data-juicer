@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any
 
 from loguru import logger
@@ -11,6 +10,7 @@ from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
 )
+from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "external_eval_data_import_mapper"
 NEED_CTX = True
@@ -59,7 +59,11 @@ class ExternalEvalDataImportMapper(Mapper):
         self.output_field = OUTPUT_FIELD
         self.ctx = ctx
         self.timeout = timeout
-        self.process_func = self._compile_process_func(python_code)
+        self.script_runner = PythonScriptRunner(
+            python_code,
+            entrypoint="process",
+            require_dict_result=False,
+        )
         self._operator_execution_callback_client = None
 
     def process_single(self, sample):
@@ -73,8 +77,7 @@ class ExternalEvalDataImportMapper(Mapper):
             "sheet_url": self.sheet_url,
             "raw_sheets": sheets,
         }
-        result = self.process_func(copy.deepcopy(parsed_data), copy.deepcopy(context))
-        self._ensure_json_serializable(result)
+        result = self.script_runner.run(copy.deepcopy(parsed_data), copy.deepcopy(context))
         sample[self.output_field] = result
         return sample
 
@@ -170,24 +173,3 @@ class ExternalEvalDataImportMapper(Mapper):
                     item[field_name] = row[index] if index < len(row) else ""
                 items.append(item)
         return items
-
-    @staticmethod
-    def _compile_process_func(python_code: str):
-        namespace: dict[str, Any] = {}
-        try:
-            compiled_code = compile(python_code, "<external_eval_data_import_mapper>", "exec")
-            exec(compiled_code, {"__builtins__": __builtins__}, namespace)
-        except Exception as exc:
-            raise ValueError(f"Invalid python_code: {exc}") from exc
-
-        process_func = namespace.get("process")
-        if not callable(process_func):
-            raise ValueError("python_code must define a callable process(data, context)")
-        return process_func
-
-    @staticmethod
-    def _ensure_json_serializable(value):
-        try:
-            json.dumps(value, ensure_ascii=False)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"python_code result must be JSON serializable: {exc}") from exc
