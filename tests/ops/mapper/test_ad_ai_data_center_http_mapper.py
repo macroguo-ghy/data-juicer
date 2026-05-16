@@ -12,6 +12,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper impo
     CONFIG_PAGE_KEY,
     AdAiDataCenterHttpMapper,
     NEED_CTX,
+    RECORD_KEY_FIELD,
 )
 
 
@@ -49,8 +50,15 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
             "text": None,
             "error": None,
         }
+        self.callback_patcher = patch(
+            "data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.OperatorExecutionCallbackClient"
+        )
+        self.mock_callback_cls = self.callback_patcher.start()
+        self.mock_callback = self.mock_callback_cls.return_value
+        self.mock_callback.upsert.return_value = 10001
 
     def tearDown(self):
+        self.callback_patcher.stop()
         self.notification_patcher.stop()
 
     @staticmethod
@@ -95,6 +103,7 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
         )
         dataset = Dataset.from_list([{
             "datasourceGroupId": "11308",
+            RECORD_KEY_FIELD: "record-1",
         }])
 
         result = op.run(dataset).to_list()
@@ -161,6 +170,7 @@ process:
         dataset = Dataset.from_list([{
             "prompt": "hi",
             "extra": "keep",
+            RECORD_KEY_FIELD: "record-1",
         }])
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
@@ -190,6 +200,43 @@ process:
         self.assertEqual(result[0]["extra"], "keep")
         self.assertEqual(json.loads(result[0]["http_result"]), {"answer": "hello"})
         self.assertNotIn("http_error", result[0])
+        self.mock_callback.upsert.assert_called_once()
+        self.mock_callback.report_record_success.assert_called_once_with(
+            record_key="record-1",
+            input_data={
+                "prompt": "hi",
+                "extra": "keep",
+                RECORD_KEY_FIELD: "record-1",
+            },
+            output_data=result[0],
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
+    def test_callback_failure_does_not_block_http_output(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"answer": "hello"},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        self.mock_callback.report_record_success.side_effect = RuntimeError("callback down")
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/invoke",
+            input_fields=["prompt"],
+            output_field="http_result",
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+
+        result = op.process_single({
+            "prompt": "hi",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
+        self.assertNotIn("http_error", result)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_sends_test_card_notification_before_and_after_processing(self, mock_client_cls):
@@ -211,6 +258,7 @@ process:
 
         result = op.process_single({
             "prompt": "hi",
+            RECORD_KEY_FIELD: "record-1",
         })
 
         self.assertEqual(
@@ -221,7 +269,7 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "开始",
-                        "content": '{"prompt": "hi"}',
+                        "content": '{"prompt": "hi", "__adc_record_key": "record-1"}',
                         "errMsg": "",
                     },
                     ctx=self._ctx(),
@@ -231,7 +279,10 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "结束",
-                        "content": '{"prompt": "hi", "http_result": "{\\"answer\\": \\"hello\\"}"}',
+                        "content": (
+                            '{"prompt": "hi", "__adc_record_key": "record-1", '
+                            '"http_result": "{\\"answer\\": \\"hello\\"}"}'
+                        ),
                         "errMsg": "",
                     },
                     ctx=self._ctx(),
@@ -262,6 +313,7 @@ process:
 
         op.process_single({
             "prompt": "hi",
+            RECORD_KEY_FIELD: "record-1",
         })
 
         self.assertEqual(
@@ -289,6 +341,7 @@ process:
 
         result = op.run(Dataset.from_list([{
             "query": "ping",
+            RECORD_KEY_FIELD: "record-1",
         }])).to_list()
 
         self.assertEqual(result[0]["http_result"], "plain response")
@@ -315,10 +368,20 @@ process:
 
         result = op.run(Dataset.from_list([{
             "prompt": "hi",
+            RECORD_KEY_FIELD: "record-1",
         }])).to_list()
 
         self.assertNotIn("http_result", result[0])
         self.assertEqual(json.loads(result[0]["http_error"]), error_result)
+        self.mock_callback.report_record_failure.assert_called_once_with(
+            record_key="record-1",
+            input_data={
+                "prompt": "hi",
+                RECORD_KEY_FIELD: "record-1",
+            },
+            error_message="bad",
+            output_data=result[0],
+        )
 
     def test_rejects_empty_input_fields(self):
         with self.assertRaises(ValueError):

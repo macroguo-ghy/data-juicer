@@ -2,6 +2,7 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
@@ -30,6 +31,17 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
+
+    def setUp(self):
+        self.callback_patcher = patch(
+            "data_juicer.ops.mapper.ad_ai_data_center.prepare_record_key_mapper.OperatorExecutionCallbackClient"
+        )
+        self.mock_callback_cls = self.callback_patcher.start()
+        self.mock_callback = self.mock_callback_cls.return_value
+        self.mock_callback.upsert.return_value = 10001
+
+    def tearDown(self):
+        self.callback_patcher.stop()
 
     @staticmethod
     def _ctx():
@@ -69,6 +81,16 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "query": "hello",
             }),
         )
+        self.mock_callback.upsert.assert_called_once()
+        self.mock_callback.report_record_success.assert_called_once_with(
+            record_key=result[0][RECORD_KEY_FIELD],
+            input_data={
+                "query": "hello",
+                "answer": "world",
+                "extra": "ignored",
+            },
+            output_data=result[0],
+        )
 
     def test_generates_record_key_from_sample_without_internal_fields(self):
         op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
@@ -95,7 +117,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         )
 
     def test_preserves_existing_record_key_by_default(self):
-        op = PrepareRecordKeyMapper(source_fields=["query"])
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
         sample = {
             "query": "hello",
             RECORD_KEY_FIELD: "existing-key",
@@ -104,9 +126,17 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         result = op.process_single(sample)
 
         self.assertEqual(result[RECORD_KEY_FIELD], "existing-key")
+        self.mock_callback.report_record_success.assert_called_once_with(
+            record_key="existing-key",
+            input_data={
+                "query": "hello",
+                RECORD_KEY_FIELD: "existing-key",
+            },
+            output_data=result,
+        )
 
     def test_missing_source_field_uses_none_value(self):
-        op = PrepareRecordKeyMapper(source_fields=["query", "missing"])
+        op = PrepareRecordKeyMapper(source_fields=["query", "missing"], ctx=self._ctx())
 
         result = op.process_single({"query": "hello"})
 
@@ -116,6 +146,17 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "missing": None,
                 "query": "hello",
             }),
+        )
+
+    def test_callback_failure_does_not_block_record_key_generation(self):
+        self.mock_callback.report_record_success.side_effect = RuntimeError("callback down")
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
+
+        result = op.process_single({"query": "hello"})
+
+        self.assertEqual(
+            result[RECORD_KEY_FIELD],
+            stable_hash({"query": "hello"}),
         )
 
     def test_config_loads_operator_name_without_record_key_field(self):
