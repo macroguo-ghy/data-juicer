@@ -43,7 +43,7 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
             "operatorIndex": 0,
             "operatorName": "ad_test_processing_timestamp_mapper",
             "operatorType": "business",
-            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+            "apiBase": "https://ai-data-center.bytedance.net/api",
         }
 
     def test_adds_default_timestamp_field(self):

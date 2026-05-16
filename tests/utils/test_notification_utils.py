@@ -34,7 +34,7 @@ class TestCardNotificationTest(unittest.TestCase):
             "operatorIndex": 0,
             "operatorName": "ad_ai_data_center_http_mapper",
             "operatorType": "business",
-            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+            "apiBase": "https://ai-data-center.bytedance.net/api",
         }
 
     @patch("data_juicer.utils.notification_utils.HttpClient")
@@ -99,10 +99,10 @@ class TestCardNotificationTest(unittest.TestCase):
                 ctx={},
             )
 
-    def test_rejects_missing_openapi_base_url_in_ctx(self):
+    def test_rejects_missing_api_base_in_ctx(self):
         ctx = self._ctx()
-        ctx.pop("openapiBaseUrl")
-        with self.assertRaisesRegex(ValueError, "ctx.openapiBaseUrl must be provided"):
+        ctx.pop("apiBase")
+        with self.assertRaisesRegex(ValueError, "ctx.apiBase must be provided"):
             send_test_card_notification(
                 template_id="AAqt1lQ72dVxK",
                 template_variable={},

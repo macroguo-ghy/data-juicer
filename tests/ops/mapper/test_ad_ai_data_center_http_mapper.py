@@ -75,7 +75,7 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
             "operatorIndex": 0,
             "operatorName": "ad_ai_data_center_http_mapper",
             "operatorType": "business",
-            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+            "apiBase": "https://ai-data-center.bytedance.net/api",
         }
 
     def test_declares_custom_config_page_key(self):
@@ -139,7 +139,7 @@ process:
         operatorIndex: 0
         operatorName: "ad_ai_data_center_http_mapper"
         operatorType: "business"
-        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
+        apiBase: "https://ai-data-center.bytedance.net/api"
       input_fields:
         - "1"
 """,
@@ -266,6 +266,31 @@ process:
         self.assertNotIn("http_error", result)
         self.mock_callback.report_record_success.assert_called_once()
         self.mock_callback.report_record_failure.assert_not_called()
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
+    def test_sends_notification_with_api_base_ctx(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"answer": "hello"},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/invoke",
+            input_fields=["prompt"],
+            output_field="http_result",
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+
+        op.process_single({
+            "prompt": "hi",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(self.mock_send_test_card_notification.call_count, 2)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_upsert_failure_does_not_cache_uninitialized_callback_client(self, mock_client_cls):

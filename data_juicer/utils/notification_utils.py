@@ -49,8 +49,17 @@ def _build_headers(ctx: dict[str, Any]) -> dict[str, str]:
 
 
 def _build_openapi_url(ctx: dict[str, Any], path: str) -> str:
-    base_url = _get_ctx_required_value(ctx, "openapiBaseUrl")
+    base_url = _get_api_base(ctx)
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _get_api_base(ctx: dict[str, Any]) -> str:
+    if not isinstance(ctx, dict):
+        raise ValueError("ctx.apiBase must be provided")
+    api_base = ctx.get("apiBase")
+    if not api_base:
+        raise ValueError("ctx.apiBase must be provided")
+    return str(api_base)
 
 
 def _get_ctx_required_value(ctx: dict[str, Any], key: str) -> str:
