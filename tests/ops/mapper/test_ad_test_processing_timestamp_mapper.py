@@ -80,7 +80,7 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
     def test_declares_need_ctx(self):
         self.assertEqual(NEED_CTX, True)
 
-    def test_reports_callback_and_sends_notifications_for_each_sample(self):
+    def test_reports_callback_without_per_sample_notifications(self):
         dataset = Dataset.from_list([
             {"text": "first", RECORD_KEY_FIELD: "record-1"},
             {"text": "second", RECORD_KEY_FIELD: "record-2"},
@@ -105,29 +105,67 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
             output_data=result[1],
             started_at=ANY,
         )
-        self.assertEqual(self.mock_send_test_card_notification.call_count, 4)
-        self.mock_send_test_card_notification.assert_has_calls([
-            call(
-                template_id="AAqt1lQ72dVxK",
-                template_variable={
-                    "operator": "ad_test_processing_timestamp_mapper",
-                    "stage": "开始",
-                    "content": '{"text": "first", "__adc_record_key": "record-1"}',
-                    "errMsg": "",
-                },
-                ctx=self._ctx(),
-            ),
-            call(
-                template_id="AAqt1lQ72dVxK",
-                template_variable={
-                    "operator": "ad_test_processing_timestamp_mapper",
-                    "stage": "开始",
-                    "content": '{"text": "second", "__adc_record_key": "record-2"}',
-                    "errMsg": "",
-                },
-                ctx=self._ctx(),
-            ),
-        ], any_order=True)
+        self.assertEqual(self.mock_send_test_card_notification.call_count, 2)
+
+    def test_sends_test_card_notification_on_operator_start_and_finish(self):
+        op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)
+
+        op.before_operator_started()
+        op.after_operator_finished(error=None)
+
+        self.assertEqual(
+            self.mock_send_test_card_notification.call_args_list,
+            [
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={
+                        "operator": "ad_test_processing_timestamp_mapper",
+                        "stage": "开始",
+                        "content": '{"field_name": "processing_timestamp"}',
+                        "errMsg": "",
+                    },
+                    ctx=self._ctx(),
+                ),
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={
+                        "operator": "ad_test_processing_timestamp_mapper",
+                        "stage": "结束",
+                        "content": '{"status": "SUCCESS"}',
+                        "errMsg": "",
+                    },
+                    ctx=self._ctx(),
+                ),
+            ],
+        )
+
+    def test_sends_failed_operator_error_message_in_finish_notification(self):
+        op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)
+
+        op.after_operator_finished(error=RuntimeError("consume failed"))
+
+        self.mock_send_test_card_notification.assert_called_once_with(
+            template_id="AAqt1lQ72dVxK",
+            template_variable={
+                "operator": "ad_test_processing_timestamp_mapper",
+                "stage": "结束",
+                "content": '{"status": "FAILED"}',
+                "errMsg": "consume failed",
+            },
+            ctx=self._ctx(),
+        )
+
+    def test_notification_failure_does_not_block_lifecycle_callback(self):
+        self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")
+        op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)
+
+        op.before_operator_started()
+        op.after_operator_finished(error=None)
+
+        self.mock_callback.start.assert_called_once_with(
+            operator_config={"field_name": "processing_timestamp"}
+        )
+        self.mock_callback.finalize.assert_called_once_with()
 
     def test_observation_failure_does_not_block_timestamp(self):
         self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")

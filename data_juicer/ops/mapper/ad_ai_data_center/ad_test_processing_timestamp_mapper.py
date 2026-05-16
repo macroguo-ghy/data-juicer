@@ -49,17 +49,7 @@ class AdTestProcessingTimestampMapper(Mapper):
     def process_single(self, sample):
         record_started_at = current_time_millis()
         input_sample = copy.deepcopy(sample)
-        self._try_send_test_card_notification(
-            stage="开始",
-            content=input_sample,
-            err_msg="",
-        )
         sample[self.field_name] = time.time()
-        self._try_send_test_card_notification(
-            stage="结束",
-            content=sample,
-            err_msg="",
-        )
         self._report_record_success(
             input_sample,
             sample,
@@ -104,6 +94,11 @@ class AdTestProcessingTimestampMapper(Mapper):
             self._get_operator_execution_callback_client()
         except Exception as exc:
             logger.warning("Failed to start operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="开始",
+            content=self._operator_config(),
+            err_msg="",
+        )
 
     def after_operator_finished(self, dataset=None, context=None, error=None):
         if not isinstance(self.ctx, dict):
@@ -116,17 +111,27 @@ class AdTestProcessingTimestampMapper(Mapper):
                 callback_client.failed(error_message=str(error))
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="结束",
+            content={
+                "status": "SUCCESS" if error is None else "FAILED",
+            },
+            err_msg="" if error is None else str(error),
+        )
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)
             callback_client.start(
-                operator_config={
-                    "field_name": self.field_name,
-                }
+                operator_config=self._operator_config()
             )
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
+
+    def _operator_config(self):
+        return {
+            "field_name": self.field_name,
+        }
 
     @staticmethod
     def _get_record_key(sample):

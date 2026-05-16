@@ -74,13 +74,6 @@ class AdAiDataCenterHttpMapper(Mapper):
         record_started_at = current_time_millis()
         original_sample = copy.deepcopy(sample)
         try:
-            self._try_send_test_card_notification(
-                stage="开始",
-                content=copy.deepcopy(sample),
-                err_msg="",
-                ctx=ctx,
-            )
-
             payload = {
                 "inputs": {
                     field: sample.get(field)
@@ -97,12 +90,6 @@ class AdAiDataCenterHttpMapper(Mapper):
                 sample[self.error_field] = self._stringify_result_value(result)
                 sample.pop(self.output_field, None)
 
-            self._try_send_test_card_notification(
-                stage="结束",
-                content=copy.deepcopy(sample),
-                err_msg=self._extract_error_message(result),
-                ctx=ctx,
-            )
         except Exception as exc:
             self._report_record_failure(
                 original_sample,
@@ -177,6 +164,12 @@ class AdAiDataCenterHttpMapper(Mapper):
             self._get_operator_execution_callback_client()
         except Exception as exc:
             logger.warning("Failed to start operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="开始",
+            content=self._operator_config(),
+            err_msg="",
+            ctx=self.ctx,
+        )
 
     def after_operator_finished(self, dataset=None, context=None, error=None):
         try:
@@ -187,22 +180,33 @@ class AdAiDataCenterHttpMapper(Mapper):
                 callback_client.failed(error_message=str(error))
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="结束",
+            content={
+                "status": "SUCCESS" if error is None else "FAILED",
+            },
+            err_msg="" if error is None else str(error),
+            ctx=self.ctx,
+        )
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)
             callback_client.start(
-                operator_config={
-                    "endpoint": self.endpoint,
-                    "input_fields": self.input_fields,
-                    "output_field": self.output_field,
-                    "error_field": self.error_field,
-                    "method": self.method,
-                    "headers": self.headers,
-                }
+                operator_config=self._operator_config()
             )
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
+
+    def _operator_config(self):
+        return {
+            "endpoint": self.endpoint,
+            "input_fields": self.input_fields,
+            "output_field": self.output_field,
+            "error_field": self.error_field,
+            "method": self.method,
+            "headers": self.headers,
+        }
 
     def _report_record_success(self, input_sample, output_sample, started_at):
         try:

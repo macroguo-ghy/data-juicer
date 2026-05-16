@@ -309,7 +309,7 @@ process:
         self.mock_callback.report_record_failure.assert_not_called()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
-    def test_sends_notification_with_api_base_ctx(self, mock_client_cls):
+    def test_process_single_does_not_send_per_record_notification(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
             "status_code": 200,
@@ -331,7 +331,7 @@ process:
             RECORD_KEY_FIELD: "record-1",
         })
 
-        self.assertEqual(self.mock_send_test_card_notification.call_count, 2)
+        self.mock_send_test_card_notification.assert_not_called()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_start_failure_does_not_cache_uninitialized_callback_client(self, mock_client_cls):
@@ -375,15 +375,7 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
-    def test_sends_test_card_notification_before_and_after_processing(self, mock_client_cls):
-        fake_client = FakeHttpClient({
-            "ok": True,
-            "status_code": 200,
-            "data": {"answer": "hello"},
-            "text": None,
-            "error": None,
-        })
-        mock_client_cls.return_value = fake_client
+    def test_sends_test_card_notification_on_operator_start_and_finish(self, mock_client_cls):
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
@@ -392,10 +384,8 @@ process:
             auto_op_parallelism=False,
         )
 
-        result = op.process_single({
-            "prompt": "hi",
-            RECORD_KEY_FIELD: "record-1",
-        })
+        op.before_operator_started()
+        op.after_operator_finished(error=None)
 
         self.assertEqual(
             self.mock_send_test_card_notification.call_args_list,
@@ -405,7 +395,13 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "开始",
-                        "content": '{"prompt": "hi", "__adc_record_key": "record-1"}',
+                        "content": (
+                            '{"endpoint": "http://example.test/invoke", '
+                            '"input_fields": ["prompt"], '
+                            '"output_field": "http_result", '
+                            '"error_field": "http_error", '
+                            '"method": "POST", "headers": {}}'
+                        ),
                         "errMsg": "",
                     },
                     ctx=self._ctx(),
@@ -415,29 +411,15 @@ process:
                     template_variable={
                         "operator": "ad_ai_data_center_http_mapper",
                         "stage": "结束",
-                        "content": (
-                            '{"prompt": "hi", "__adc_record_key": "record-1", '
-                            '"http_result": "{\\"answer\\": \\"hello\\"}"}'
-                        ),
+                        "content": '{"status": "SUCCESS"}',
                         "errMsg": "",
                     },
                     ctx=self._ctx(),
                 ),
             ],
         )
-        self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
 
-    @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
-    def test_sends_failed_http_error_message_in_end_notification(self, mock_client_cls):
-        error_result = {
-            "ok": False,
-            "status_code": 500,
-            "data": None,
-            "text": "server error",
-            "error": {"type": "HTTPStatusError", "message": "bad"},
-        }
-        fake_client = FakeHttpClient(error_result)
-        mock_client_cls.return_value = fake_client
+    def test_sends_failed_operator_error_message_in_finish_notification(self):
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/error",
             input_fields=["prompt"],
@@ -447,15 +429,11 @@ process:
             auto_op_parallelism=False,
         )
 
-        with self.assertRaisesRegex(ValueError, "HTTP mapper request failed: bad"):
-            op.process_single({
-                "prompt": "hi",
-                RECORD_KEY_FIELD: "record-1",
-            })
+        op.after_operator_finished(error=RuntimeError("consume failed"))
 
         self.assertEqual(
             self.mock_send_test_card_notification.call_args_list[-1].kwargs["template_variable"]["errMsg"],
-            "bad",
+            "consume failed",
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
