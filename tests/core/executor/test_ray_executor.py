@@ -236,6 +236,67 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         executor._pre_execute_operations_with_dag_monitoring.assert_not_called()
         executor._post_execute_operations_with_dag_monitoring.assert_not_called()
 
+    def test_run_passes_materialize_after_each_op_when_enabled(self):
+        class FakeData:
+            def columns(self):
+                return ['text']
+
+        class FakeDataset:
+            def __init__(self):
+                self.data = FakeData()
+                self.process_kwargs = None
+
+            def process(self, ops, **kwargs):
+                self.process_kwargs = kwargs
+                return self
+
+        dataset = FakeDataset()
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'noop': {}}],
+            op_fusion=False,
+            export_path=os.path.join(self.tmp_dir, 'unused.jsonl'),
+            dataset=None,
+            dataset_path=None,
+            ray_collect_real_metrics=False,
+            ray_materialize_after_each_op=True,
+        )
+        executor.datasetbuilder = SimpleNamespace(load_dataset=MagicMock(return_value=dataset))
+        executor.work_dir = self.tmp_dir
+        executor.executor_type = 'ray'
+        executor.tmp_dir = os.path.join(self.tmp_dir, '.tmp')
+        executor.op_env_manager = None
+        executor.tracer = None
+        executor.pipeline_dag = SimpleNamespace(nodes=[object()], edges=[], parallel_groups=[])
+        executor.log_job_start = MagicMock()
+        executor._initialize_dag_execution = MagicMock()
+        executor._pre_execute_operations_with_dag_monitoring = MagicMock()
+        executor._post_execute_operations_with_dag_monitoring = MagicMock()
+        executor.log_job_complete = MagicMock()
+
+        with patch('data_juicer.core.executor.ray_executor.load_ops', return_value=[]):
+            executor.run(skip_export=True)
+
+        self.assertTrue(dataset.process_kwargs['materialize_after_each_op'])
+
+    def test_config_parses_ray_materialize_after_each_op(self):
+        config_path = os.path.join(self.tmp_dir, 'ray_materialize_after_each_op.yaml')
+        with open(config_path, 'w') as writer:
+            writer.write(
+                'project_name: test_ray_materialize_after_each_op\n'
+                'ray_materialize_after_each_op: true\n'
+                'process: []\n'
+            )
+        cfg = init_configs(
+            [
+                '--config',
+                config_path,
+            ],
+            load_configs_only=True,
+        )
+
+        self.assertTrue(cfg.ray_materialize_after_each_op)
+
     def test_build_dry_run_ray_dataset_uses_export_schema_without_loading_sources(self):
         import pyarrow as pa
 

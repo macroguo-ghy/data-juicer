@@ -1,5 +1,7 @@
-import unittest
 import os
+import unittest
+from types import SimpleNamespace
+
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
 
 
@@ -24,6 +26,208 @@ class RayDatasetImportTest(unittest.TestCase):
         )
 
         self.assertEqual(get_configured_ray_columns(cfg), ["id", "text", "image"])
+
+    def test_process_materializes_and_calls_after_hook_after_each_op_when_enabled(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.materialize_calls = 0
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+            def materialize(self):
+                self.materialize_calls += 1
+                events.append(("materialize", self.materialize_calls))
+                return self
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                return sample
+
+            def after_all_records_processed(self, dataset=None, context=None):
+                events.append((
+                    "after",
+                    self._name,
+                    dataset.data.materialize_calls,
+                    context["executor_type"],
+                ))
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process(
+            [
+                HookMapper(auto_op_parallelism=False),
+                HookMapper(auto_op_parallelism=False),
+            ],
+            materialize_after_each_op=True,
+        )
+
+        self.assertEqual(ray_dataset.data.materialize_calls, 2)
+        self.assertEqual(
+            events,
+            [
+                ("map_batches", "pyarrow"),
+                ("materialize", 1),
+                ("after", "hook_mapper", 1, "ray"),
+                ("map_batches", "pyarrow"),
+                ("materialize", 2),
+                ("after", "hook_mapper", 2, "ray"),
+            ],
+        )
+
+    def test_process_does_not_materialize_or_call_after_hook_by_default(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append("map_batches")
+                return self
+
+            def materialize(self):
+                events.append("materialize")
+                return self
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                return sample
+
+            def after_all_records_processed(self, dataset=None, context=None):
+                events.append("after")
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process([HookMapper(auto_op_parallelism=False)])
+
+        self.assertEqual(events, ["map_batches"])
+
+    def test_process_does_not_call_after_hook_when_materialize_fails(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append("map_batches")
+                return self
+
+            def materialize(self):
+                events.append("materialize")
+                raise RuntimeError("materialize failed")
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                return sample
+
+            def after_all_records_processed(self, dataset=None, context=None):
+                events.append("after")
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with self.assertRaisesRegex(RuntimeError, "materialize failed"):
+            ray_dataset.process(
+                [HookMapper(auto_op_parallelism=False)],
+                materialize_after_each_op=True,
+            )
+
+        self.assertEqual(events, ["map_batches", "materialize"])
+
+    def test_process_retries_with_base_runtime_env_when_materialize_fails(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.last_runtime_env = None
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                self.last_runtime_env = kwargs.get("runtime_env")
+                events.append(("map_batches", self.last_runtime_env))
+                return self
+
+            def materialize(self):
+                events.append(("materialize", self.last_runtime_env))
+                if self.last_runtime_env:
+                    raise RuntimeError("runtime env failed")
+                return self
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                return sample
+
+            def after_all_records_processed(self, dataset=None, context=None):
+                events.append(("after", self.runtime_env))
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+        op = HookMapper(
+            auto_op_parallelism=False,
+            runtime_env={"pip": ["bad-package"]},
+        )
+
+        ray_dataset.process([op], materialize_after_each_op=True)
+
+        self.assertEqual(op.runtime_env, {"pip": ["bad-package"]})
+        self.assertEqual(
+            events,
+            [
+                ("map_batches", {"pip": ["bad-package"]}),
+                ("materialize", {"pip": ["bad-package"]}),
+                ("map_batches", None),
+                ("materialize", None),
+                ("after", {"pip": ["bad-package"]}),
+            ],
+        )
 
 
 class RayDatasetFuncsTest(DataJuicerTestCaseBase):

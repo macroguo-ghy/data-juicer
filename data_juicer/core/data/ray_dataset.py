@@ -387,7 +387,16 @@ class RayDataset(DJDataset):
 
         return [row[column] for row in self.data.take()]
 
-    def process(self, operators, *, exporter=None, checkpointer=None, tracer=None, plan_only: bool = False) -> DJDataset:
+    def process(
+        self,
+        operators,
+        *,
+        exporter=None,
+        checkpointer=None,
+        tracer=None,
+        plan_only: bool = False,
+        materialize_after_each_op: bool | None = None,
+    ) -> DJDataset:
         if operators is None:
             return self
         if not isinstance(operators, list):
@@ -401,6 +410,8 @@ class RayDataset(DJDataset):
         if self._auto_proc:
             calculate_ray_np(operators)
 
+        if materialize_after_each_op is None:
+            materialize_after_each_op = bool(_cfg_get(self.cfg, "ray_materialize_after_each_op", False))
         checkpoint_enabled = _is_ray_data_checkpoint_enabled()
 
         # Cache columns once at start to avoid breaking pipeline with repeated columns() calls.
@@ -429,21 +440,57 @@ class RayDataset(DJDataset):
         cached_columns = set(columns_result)
 
         for op in operators:
+            original_data = self.data
             try:
-                cached_columns = self._run_single_op(op, cached_columns, tracer=tracer, plan_only=plan_only)
+                cached_columns = self._run_single_op_with_optional_materialize(
+                    op,
+                    cached_columns,
+                    tracer=tracer,
+                    plan_only=plan_only,
+                    materialize_after_each_op=materialize_after_each_op,
+                )
             except Exception as e:
                 logger.error(f"Error processing operator {op}: {e}.")
                 if op.runtime_env is not None:
                     logger.error("Try to fallback to the base runtime environment.")
                     original_runtime_env = op.runtime_env
                     try:
+                        self.data = original_data
                         op.runtime_env = None
-                        cached_columns = self._run_single_op(op, cached_columns, tracer=tracer, plan_only=plan_only)
+                        cached_columns = self._run_single_op_with_optional_materialize(
+                            op,
+                            cached_columns,
+                            tracer=tracer,
+                            plan_only=plan_only,
+                            materialize_after_each_op=materialize_after_each_op,
+                        )
                     finally:
                         op.runtime_env = original_runtime_env
                 else:
                     raise e
+            if materialize_after_each_op and not plan_only:
+                op.after_all_records_processed(
+                    dataset=self,
+                    context={
+                        "executor_type": "ray",
+                        "op_name": op._name,
+                    },
+                )
         return self
+
+    def _run_single_op_with_optional_materialize(
+        self,
+        op,
+        cached_columns=None,
+        tracer=None,
+        plan_only: bool = False,
+        materialize_after_each_op: bool = False,
+    ):
+        cached_columns = self._run_single_op(op, cached_columns, tracer=tracer, plan_only=plan_only)
+        if materialize_after_each_op and not plan_only:
+            logger.info(f"Materializing Ray Dataset after Op [{op._name}]...")
+            self.data = self.data.materialize()
+        return cached_columns
 
     def _run_single_op(self, op, cached_columns=None, tracer=None, plan_only: bool = False):
         # Use cached columns to avoid calling self.data.columns() which breaks pipeline

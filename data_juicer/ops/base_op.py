@@ -466,6 +466,10 @@ class OP(metaclass=OPMetaClass):
     def process(self, *args, **kwargs):
         raise NotImplementedError
 
+    def after_all_records_processed(self, dataset=None, context=None):
+        """Hook called after an executor confirms this OP processed all records."""
+        pass
+
     def use_cuda(self):
         return self.accelerator == "cuda" and is_cuda_available()
 

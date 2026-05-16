@@ -321,7 +321,10 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
                     duration = time.time() - start_time
                     output_rows = None
                 else:
-                    dataset = dataset.process(ops, tracer=self.tracer)
+                    process_kwargs = {"tracer": self.tracer}
+                    if getattr(self.cfg, "ray_materialize_after_each_op", False):
+                        process_kwargs["materialize_after_each_op"] = True
+                    dataset = dataset.process(ops, **process_kwargs)
 
                     collect_real_metrics = getattr(self.cfg, "ray_collect_real_metrics", False)
                     if ray_data_checkpoint.enabled:
