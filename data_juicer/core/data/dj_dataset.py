@@ -291,6 +291,13 @@ class NestedDataset(Dataset, DJDataset):
                 setup_mp(mp_context)
 
                 start = time()
+                op.before_operator_started(
+                    dataset=dataset,
+                    context={
+                        "executor_type": "local",
+                        "op_name": op._name,
+                    },
+                )
                 # run single op
                 run_args = {
                     "dataset": dataset,

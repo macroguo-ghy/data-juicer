@@ -86,6 +86,12 @@ class PrepareRecordKeyMapper(Mapper):
         except Exception as callback_exc:
             logger.warning("Failed to report record failure callback: {}", callback_exc)
 
+    def before_operator_started(self, dataset=None, context=None):
+        try:
+            self._get_operator_execution_callback_client()
+        except Exception as exc:
+            logger.warning("Failed to upsert operator execution callback: {}", exc)
+
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)

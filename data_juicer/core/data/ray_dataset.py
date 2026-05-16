@@ -441,6 +441,14 @@ class RayDataset(DJDataset):
 
         for op in operators:
             original_data = self.data
+            if not plan_only:
+                op.before_operator_started(
+                    dataset=self,
+                    context={
+                        "executor_type": "ray",
+                        "op_name": op._name,
+                    },
+                )
             try:
                 cached_columns = self._run_single_op_with_optional_materialize(
                     op,

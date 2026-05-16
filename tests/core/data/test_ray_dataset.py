@@ -1,4 +1,5 @@
 import os
+import importlib.util
 import unittest
 from types import SimpleNamespace
 
@@ -126,6 +127,87 @@ class RayDatasetImportTest(unittest.TestCase):
         ray_dataset._row_count_getter = None
 
         ray_dataset.process([HookMapper(auto_op_parallelism=False)])
+
+        self.assertEqual(events, ["map_batches"])
+
+    @unittest.skipUnless(importlib.util.find_spec("ray"), "ray is not installed")
+    def test_process_calls_before_hook_once_before_each_op(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def before_operator_started(self, dataset=None, context=None):
+                events.append(("before", self._name, context["executor_type"]))
+
+            def process_single(self, sample):
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process([
+            HookMapper(auto_op_parallelism=False),
+            HookMapper(auto_op_parallelism=False),
+        ])
+
+        self.assertEqual(
+            events,
+            [
+                ("before", "hook_mapper", "ray"),
+                ("map_batches", "pyarrow"),
+                ("before", "hook_mapper", "ray"),
+                ("map_batches", "pyarrow"),
+            ],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("ray"), "ray is not installed")
+    def test_process_does_not_call_before_hook_for_plan_only(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops import Mapper
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["text"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append("map_batches")
+                return self
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def before_operator_started(self, dataset=None, context=None):
+                events.append("before")
+
+            def process_single(self, sample):
+                return sample
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["text"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process([HookMapper(auto_op_parallelism=False)], plan_only=True)
 
         self.assertEqual(events, ["map_batches"])
 

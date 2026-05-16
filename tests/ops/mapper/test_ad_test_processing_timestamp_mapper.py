@@ -137,6 +137,16 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
 
         self.assertIn("processing_timestamp", result[0])
 
+    def test_before_operator_started_upserts_running_once(self):
+        op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)
+
+        op.before_operator_started()
+        op.before_operator_started()
+
+        self.mock_callback.upsert.assert_called_once_with(
+            operator_config={"field_name": "processing_timestamp"}
+        )
+
     def test_upsert_failure_does_not_cache_uninitialized_callback_client(self):
         self.mock_callback.upsert.side_effect = [RuntimeError("upsert down"), 10001]
         op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)

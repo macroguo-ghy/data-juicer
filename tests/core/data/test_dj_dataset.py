@@ -3,6 +3,7 @@ from datasets import Dataset, DatasetDict
 from datasets.formatting.formatting import LazyBatch
 from data_juicer.core.data import NestedDataset, wrap_func_with_nested_access
 from data_juicer.core.data.dj_dataset import nested_obj_factory, NestedDatasetDict, NestedQueryDict
+from data_juicer.ops import Mapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 
@@ -130,6 +131,25 @@ class TestNestedDataset(DataJuicerTestCaseBase):
         texts = self.dataset.get_column('text', k=2)
         self.assertEqual(texts[0], 'Hello')
         self.assertEqual(texts[1], 'World')
+
+    def test_process_calls_before_hook_once_per_operator(self):
+        events = []
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def before_operator_started(self, dataset=None, context=None):
+                events.append(("before", self._name, context["executor_type"]))
+
+            def process_single(self, sample):
+                events.append(("process", sample["text"]))
+                return sample
+
+        dataset = NestedDataset(Dataset.from_list([{"text": "hello"}]))
+
+        dataset.process([HookMapper(auto_op_parallelism=False)], open_monitor=False)
+
+        self.assertEqual(events, [("before", "hook_mapper", "local"), ("process", "hello")])
 
     def test_get(self):
         """Test get method for NestedDataset"""

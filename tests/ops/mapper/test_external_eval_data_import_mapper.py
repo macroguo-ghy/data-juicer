@@ -37,6 +37,17 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
     def tearDownClass(cls):
         base_op.free_models = cls._original_free_models
 
+    def setUp(self):
+        self.callback_patcher = patch(
+            "data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.OperatorExecutionCallbackClient"
+        )
+        self.mock_callback_cls = self.callback_patcher.start()
+        self.mock_callback = self.mock_callback_cls.return_value
+        self.mock_callback.upsert.return_value = 10001
+
+    def tearDown(self):
+        self.callback_patcher.stop()
+
     @staticmethod
     def _ctx():
         return {
@@ -51,8 +62,28 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             "operatorIndex": 0,
             "operatorName": "external_eval_data_import_mapper",
             "operatorType": "business",
-            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+            "apiBase": "https://ai-data-center.bytedance.net/api",
         }
+
+    def test_before_operator_started_upserts_running_once(self):
+        op = ExternalEvalDataImportMapper(
+            sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
+            data_type="eval_data",
+            ctx=self._ctx(),
+            python_code="def process(data, context):\n    return data",
+            auto_op_parallelism=False,
+        )
+
+        op.before_operator_started()
+        op.before_operator_started()
+
+        self.mock_callback.upsert.assert_called_once_with(
+            operator_config={
+                "sheet_url": "https://bytedance.feishu.cn/sheets/xxxx",
+                "data_type": "eval_data",
+                "output_field": "externalDataSet",
+            }
+        )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")
     def test_imports_eval_data_sheet_and_runs_python_process(self, mock_client_cls):
@@ -143,9 +174,9 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         mock_client_cls.assert_not_called()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")
-    def test_rejects_missing_openapi_base_url_in_ctx_before_loading_sheet(self, mock_client_cls):
+    def test_rejects_missing_api_base_in_ctx_before_loading_sheet(self, mock_client_cls):
         ctx = self._ctx()
-        ctx.pop("openapiBaseUrl")
+        ctx.pop("apiBase")
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
             data_type="eval_data",
@@ -154,7 +185,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             auto_op_parallelism=False,
         )
 
-        with self.assertRaisesRegex(ValueError, "ctx.openapiBaseUrl must be provided"):
+        with self.assertRaisesRegex(ValueError, "ctx.apiBase must be provided"):
             op.process_single({})
 
         mock_client_cls.assert_not_called()
@@ -182,7 +213,7 @@ process:
         operatorIndex: 0
         operatorName: "external_eval_data_import_mapper"
         operatorType: "business"
-        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
+        apiBase: "https://ai-data-center.bytedance.net/api"
       python_code: "def process(data, context):\\n    return {\\"items\\": data}"
 """,
             encoding="utf-8",

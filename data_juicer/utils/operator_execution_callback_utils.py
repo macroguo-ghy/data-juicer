@@ -214,7 +214,7 @@ class OperatorExecutionCallbackClient:
     def _get_api_base(self) -> str:
         if not isinstance(self.ctx, dict):
             raise ValueError("ctx.apiBase must be provided")
-        api_base = self.ctx.get("apiBase") or self.ctx.get("openapiBaseUrl")
+        api_base = self.ctx.get("apiBase")
         if not api_base:
             raise ValueError("ctx.apiBase must be provided")
         return str(api_base)

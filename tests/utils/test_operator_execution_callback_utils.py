@@ -245,30 +245,6 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "userAccount": "wangjianda.667",
             })
 
-    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
-    def test_accepts_openapi_base_url_alias_for_existing_ctx_contract(self, mock_client_cls):
-        fake_client = FakeHttpClient({
-            "ok": True,
-            "status_code": 200,
-            "data": {"code": 0, "data": {"success": True}},
-            "text": None,
-            "error": None,
-        })
-        mock_client_cls.return_value = fake_client
-        ctx = self._ctx()
-        ctx["openapiBaseUrl"] = ctx.pop("apiBase")
-        client = OperatorExecutionCallbackClient(ctx, operator_execution_id=10001)
-
-        client.finalize()
-
-        self.assertEqual(
-            mock_client_cls.call_args.kwargs["endpoint"],
-            (
-                "https://ai-data-center.bytedance.net/api"
-                "/openapi/synthesis/operator-execution/finalize"
-            ),
-        )
-
     def test_rejects_record_report_before_upsert(self):
         client = OperatorExecutionCallbackClient(self._ctx())
 

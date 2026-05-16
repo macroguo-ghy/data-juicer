@@ -103,6 +103,14 @@ class AdTestProcessingTimestampMapper(Mapper):
         except Exception as exc:
             logger.warning("Failed to report record success callback: {}", exc)
 
+    def before_operator_started(self, dataset=None, context=None):
+        if not isinstance(self.ctx, dict):
+            return
+        try:
+            self._get_operator_execution_callback_client()
+        except Exception as exc:
+            logger.warning("Failed to upsert operator execution callback: {}", exc)
+
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)

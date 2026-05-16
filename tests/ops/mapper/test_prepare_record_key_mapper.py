@@ -57,7 +57,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             "operatorIndex": 0,
             "operatorName": "prepare_record_key_mapper",
             "operatorType": "system",
-            "openapiBaseUrl": "https://ai-data-center.bytedance.net/api",
+            "apiBase": "https://ai-data-center.bytedance.net/api",
         }
 
     def test_generates_record_key_from_source_fields(self):
@@ -159,6 +159,19 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             stable_hash({"query": "hello"}),
         )
 
+    def test_before_operator_started_upserts_running_once(self):
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
+
+        op.before_operator_started()
+        op.before_operator_started()
+
+        self.mock_callback.upsert.assert_called_once_with(
+            operator_config={
+                "source_fields": ["query"],
+                "overwrite": False,
+            }
+        )
+
     def test_upsert_failure_does_not_cache_uninitialized_callback_client(self):
         self.mock_callback.upsert.side_effect = [RuntimeError("upsert down"), 10001]
         op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
@@ -199,7 +212,7 @@ process:
         operatorIndex: 0
         operatorName: "prepare_record_key_mapper"
         operatorType: "system"
-        openapiBaseUrl: "https://ai-data-center.bytedance.net/api"
+        apiBase: "https://ai-data-center.bytedance.net/api"
 """,
             encoding="utf-8",
         )

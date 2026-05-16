@@ -466,6 +466,10 @@ class OP(metaclass=OPMetaClass):
     def process(self, *args, **kwargs):
         raise NotImplementedError
 
+    def before_operator_started(self, dataset=None, context=None):
+        """Hook called before an executor starts this OP."""
+        pass
+
     def after_all_records_processed(self, dataset=None, context=None):
         """Hook called after an executor confirms this OP processed all records."""
         pass

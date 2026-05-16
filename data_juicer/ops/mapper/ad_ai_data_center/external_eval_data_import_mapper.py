@@ -4,8 +4,13 @@ import copy
 import json
 from typing import Any
 
+from loguru import logger
+
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.http_utils import HttpClient
+from data_juicer.utils.operator_execution_callback_utils import (
+    OperatorExecutionCallbackClient,
+)
 
 OP_NAME = "external_eval_data_import_mapper"
 NEED_CTX = True
@@ -55,6 +60,7 @@ class ExternalEvalDataImportMapper(Mapper):
         self.ctx = ctx
         self.timeout = timeout
         self.process_func = self._compile_process_func(python_code)
+        self._operator_execution_callback_client = None
 
     def process_single(self, sample):
         ctx = self._get_ctx()
@@ -97,10 +103,29 @@ class ExternalEvalDataImportMapper(Mapper):
             raise ValueError("ctx must be provided")
         return ctx
 
+    def before_operator_started(self, dataset=None, context=None):
+        try:
+            self._get_operator_execution_callback_client()
+        except Exception as exc:
+            logger.warning("Failed to upsert operator execution callback: {}", exc)
+
+    def _get_operator_execution_callback_client(self):
+        if self._operator_execution_callback_client is None:
+            callback_client = OperatorExecutionCallbackClient(self.ctx)
+            callback_client.upsert(
+                operator_config={
+                    "sheet_url": self.sheet_url,
+                    "data_type": self.data_type,
+                    "output_field": self.output_field,
+                }
+            )
+            self._operator_execution_callback_client = callback_client
+        return self._operator_execution_callback_client
+
     @staticmethod
     def _build_openapi_url(ctx: dict[str, Any], path: str) -> str:
         base_url = ExternalEvalDataImportMapper._get_ctx_required_value(
-            ctx, "openapiBaseUrl"
+            ctx, "apiBase"
         )
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 

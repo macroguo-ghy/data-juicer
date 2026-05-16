@@ -238,6 +238,29 @@ process:
         self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
         self.assertNotIn("http_error", result)
 
+    def test_before_operator_started_upserts_running_once(self):
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/invoke",
+            input_fields=["prompt"],
+            output_field="http_result",
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+
+        op.before_operator_started()
+        op.before_operator_started()
+
+        self.mock_callback.upsert.assert_called_once_with(
+            operator_config={
+                "endpoint": "http://example.test/invoke",
+                "input_fields": ["prompt"],
+                "output_field": "http_result",
+                "error_field": "http_error",
+                "method": "POST",
+                "headers": {},
+            }
+        )
+
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
     def test_notification_failure_does_not_block_http_output_or_report_record_failure(self, mock_client_cls):
         fake_client = FakeHttpClient({
