@@ -107,11 +107,9 @@ class AdAiDataCenterHttpMapper(Mapper):
         if result["ok"]:
             self._report_record_success(original_sample, sample)
         else:
-            self._report_record_failure(
-                original_sample,
-                sample,
-                self._extract_error_message(result),
-            )
+            error_message = self._extract_error_message(result)
+            self._report_record_failure(original_sample, sample, error_message)
+            raise ValueError(f"HTTP mapper request failed: {error_message}")
         return sample
 
     @staticmethod
