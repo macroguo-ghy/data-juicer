@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
@@ -26,6 +26,10 @@ class PythonScriptMapperTest(unittest.TestCase):
         base_op.free_models = cls._original_free_models
 
     def setUp(self):
+        self.notification_patcher = patch(
+            "data_juicer.ops.mapper.ad_ai_data_center.python_script_mapper.send_test_card_notification"
+        )
+        self.mock_send_test_card_notification = self.notification_patcher.start()
         self.callback_patcher = patch(
             "data_juicer.ops.mapper.ad_ai_data_center.python_script_mapper.OperatorExecutionCallbackClient"
         )
@@ -35,6 +39,7 @@ class PythonScriptMapperTest(unittest.TestCase):
 
     def tearDown(self):
         self.callback_patcher.stop()
+        self.notification_patcher.stop()
 
     @staticmethod
     def _ctx():
@@ -162,6 +167,77 @@ class PythonScriptMapperTest(unittest.TestCase):
         self.mock_callback.failed.assert_called_once_with(
             error_message="consume failed"
         )
+
+    def test_sends_test_card_notification_on_operator_start_and_finish(self):
+        op = PythonScriptMapper(
+            python_code="def process(sample, context):\n    return sample",
+            ctx=self._ctx(),
+        )
+
+        op.before_operator_started()
+        op.after_operator_finished(error=None)
+
+        self.assertEqual(
+            self.mock_send_test_card_notification.call_args_list,
+            [
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={
+                        "operator": "python_script_mapper",
+                        "stage": "开始",
+                        "content": '{"entrypoint": "process"}',
+                        "errMsg": "",
+                    },
+                    ctx=self._ctx(),
+                ),
+                call(
+                    template_id="AAqt1lQ72dVxK",
+                    template_variable={
+                        "operator": "python_script_mapper",
+                        "stage": "结束",
+                        "content": '{"status": "SUCCESS"}',
+                        "errMsg": "",
+                    },
+                    ctx=self._ctx(),
+                ),
+            ],
+        )
+
+    def test_sends_failed_operator_error_message_in_finish_notification(self):
+        op = PythonScriptMapper(
+            python_code="def process(sample, context):\n    return sample",
+            ctx=self._ctx(),
+        )
+
+        op.after_operator_finished(error=RuntimeError("consume failed"))
+
+        self.mock_send_test_card_notification.assert_called_once_with(
+            template_id="AAqt1lQ72dVxK",
+            template_variable={
+                "operator": "python_script_mapper",
+                "stage": "结束",
+                "content": '{"status": "FAILED"}',
+                "errMsg": "consume failed",
+            },
+            ctx=self._ctx(),
+        )
+
+    def test_notification_failure_does_not_block_lifecycle_callback(self):
+        self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")
+        op = PythonScriptMapper(
+            python_code="def process(sample, context):\n    return sample",
+            ctx=self._ctx(),
+        )
+
+        op.before_operator_started()
+        op.after_operator_finished(error=None)
+
+        self.mock_callback.start.assert_called_once_with(
+            operator_config={
+                "entrypoint": "process",
+            }
+        )
+        self.mock_callback.finalize.assert_called_once_with()
 
     def test_config_loads_operator_name_without_ad_ai_data_center_prefix(self):
         config_path = Path("/private/tmp/python_script_mapper_config_test.yaml")

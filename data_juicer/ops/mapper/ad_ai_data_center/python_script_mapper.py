@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
@@ -15,6 +17,7 @@ from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "python_script_mapper"
 NEED_CTX = True
+TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -84,6 +87,11 @@ class PythonScriptMapper(Mapper):
             self._get_operator_execution_callback_client()
         except Exception as exc:
             logger.warning("Failed to start operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="开始",
+            content=self._operator_config(),
+            err_msg="",
+        )
 
     def after_operator_finished(self, dataset=None, context=None, error=None):
         try:
@@ -94,17 +102,44 @@ class PythonScriptMapper(Mapper):
                 callback_client.failed(error_message=str(error))
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
+        self._try_send_test_card_notification(
+            stage="结束",
+            content={
+                "status": "SUCCESS" if error is None else "FAILED",
+            },
+            err_msg="" if error is None else str(error),
+        )
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)
             callback_client.start(
-                operator_config={
-                    "entrypoint": self.entrypoint,
-                }
+                operator_config=self._operator_config()
             )
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
+
+    def _operator_config(self):
+        return {
+            "entrypoint": self.entrypoint,
+        }
+
+    def _try_send_test_card_notification(self, stage: str, content: dict[str, Any], err_msg: str):
+        if not isinstance(self.ctx, dict):
+            return
+        try:
+            send_test_card_notification(
+                template_id=TEST_CARD_NOTIFICATION_TEMPLATE_ID,
+                template_variable={
+                    "operator": OP_NAME,
+                    "stage": stage,
+                    "content": self._stringify_result_value(content),
+                    "errMsg": err_msg,
+                },
+                ctx=self.ctx,
+            )
+        except Exception as exc:
+            logger.warning("Failed to send test card notification: {}", exc)
 
     def _report_record_success(self, input_sample, output_sample, started_at):
         try:
@@ -133,6 +168,12 @@ class PythonScriptMapper(Mapper):
         if not isinstance(self.ctx, dict):
             raise ValueError("ctx must be provided")
         return self.ctx
+
+    @staticmethod
+    def _stringify_result_value(value):
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return value
 
     @staticmethod
     def _get_record_key(sample: dict[str, Any]):
