@@ -2,7 +2,7 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
@@ -90,6 +90,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "extra": "ignored",
             },
             output_data=result[0],
+            started_at=ANY,
         )
 
     def test_generates_record_key_from_sample_without_internal_fields(self):
@@ -133,6 +134,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 RECORD_KEY_FIELD: "existing-key",
             },
             output_data=result,
+            started_at=ANY,
         )
 
     def test_missing_source_field_uses_none_value(self):
@@ -197,6 +199,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             record_key=second_result[RECORD_KEY_FIELD],
             input_data={"query": "second"},
             output_data=second_result,
+            started_at=ANY,
         )
 
     def test_config_loads_operator_name_without_record_key_field(self):

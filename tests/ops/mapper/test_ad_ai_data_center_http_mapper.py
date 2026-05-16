@@ -2,7 +2,7 @@ import json
 import os
 import unittest
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
@@ -209,6 +209,7 @@ process:
                 RECORD_KEY_FIELD: "record-1",
             },
             output_data=result[0],
+            started_at=ANY,
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
@@ -370,6 +371,7 @@ process:
                 RECORD_KEY_FIELD: "record-2",
             },
             output_data=second_result,
+            started_at=ANY,
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
@@ -493,6 +495,7 @@ process:
             },
             error_message="bad",
             output_data=sample,
+            started_at=ANY,
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")

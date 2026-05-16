@@ -12,6 +12,7 @@ from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
+    current_time_millis,
 )
 
 OP_NAME = "ad_test_processing_timestamp_mapper"
@@ -22,8 +23,6 @@ TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 @OPERATORS.register_module(OP_NAME)
 class AdTestProcessingTimestampMapper(Mapper):
     """Add the current processing timestamp to each sample."""
-
-    _batched_op = True
 
     def __init__(
         self,
@@ -47,32 +46,26 @@ class AdTestProcessingTimestampMapper(Mapper):
         self.ctx = ctx
         self._operator_execution_callback_client = None
 
-    def process_batched(self, samples):
-        first_key = next(iter(samples.keys()))
-        sample_count = len(samples[first_key])
-        input_samples = [
-            self._build_sample_from_batch(samples, index)
-            for index in range(sample_count)
-        ]
-
-        for input_sample in input_samples:
-            self._try_send_test_card_notification(
-                stage="开始",
-                content=input_sample,
-                err_msg="",
-            )
-
-        samples[self.field_name] = [time.time() for _ in range(sample_count)]
-
-        for index, input_sample in enumerate(input_samples):
-            output_sample = self._build_sample_from_batch(samples, index)
-            self._try_send_test_card_notification(
-                stage="结束",
-                content=output_sample,
-                err_msg="",
-            )
-            self._report_record_success(input_sample, output_sample)
-        return samples
+    def process_single(self, sample):
+        record_started_at = current_time_millis()
+        input_sample = copy.deepcopy(sample)
+        self._try_send_test_card_notification(
+            stage="开始",
+            content=input_sample,
+            err_msg="",
+        )
+        sample[self.field_name] = time.time()
+        self._try_send_test_card_notification(
+            stage="结束",
+            content=sample,
+            err_msg="",
+        )
+        self._report_record_success(
+            input_sample,
+            sample,
+            record_started_at,
+        )
+        return sample
 
     def _try_send_test_card_notification(self, stage: str, content: dict[str, Any], err_msg: str):
         if not isinstance(self.ctx, dict):
@@ -91,7 +84,7 @@ class AdTestProcessingTimestampMapper(Mapper):
         except Exception as exc:
             logger.warning("Failed to send test card notification: {}", exc)
 
-    def _report_record_success(self, input_sample, output_sample):
+    def _report_record_success(self, input_sample, output_sample, started_at):
         if not isinstance(self.ctx, dict) or not output_sample.get(RECORD_KEY_FIELD):
             return
         try:
@@ -99,6 +92,7 @@ class AdTestProcessingTimestampMapper(Mapper):
                 record_key=self._get_record_key(output_sample),
                 input_data=input_sample,
                 output_data=copy.deepcopy(output_sample),
+                started_at=started_at,
             )
         except Exception as exc:
             logger.warning("Failed to report record success callback: {}", exc)
@@ -133,13 +127,6 @@ class AdTestProcessingTimestampMapper(Mapper):
             )
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
-
-    @staticmethod
-    def _build_sample_from_batch(samples, index):
-        return {
-            key: values[index]
-            for key, values in samples.items()
-        }
 
     @staticmethod
     def _get_record_key(sample):

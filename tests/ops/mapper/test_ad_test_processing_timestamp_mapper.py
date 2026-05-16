@@ -1,6 +1,6 @@
 import time
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import ANY, call, patch
 
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops.mapper.ad_ai_data_center.ad_test_processing_timestamp_mapper import (
@@ -97,11 +97,13 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
             record_key="record-1",
             input_data={"text": "first", RECORD_KEY_FIELD: "record-1"},
             output_data=result[0],
+            started_at=ANY,
         )
         self.mock_callback.report_record_success.assert_any_call(
             record_key="record-2",
             input_data={"text": "second", RECORD_KEY_FIELD: "record-2"},
             output_data=result[1],
+            started_at=ANY,
         )
         self.assertEqual(self.mock_send_test_card_notification.call_count, 4)
         self.mock_send_test_card_notification.assert_has_calls([
@@ -125,7 +127,7 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
                 },
                 ctx=self._ctx(),
             ),
-        ])
+        ], any_order=True)
 
     def test_observation_failure_does_not_block_timestamp(self):
         self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")
@@ -162,13 +164,13 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
         self.mock_callback.start.side_effect = [RuntimeError("start down"), 10001]
         op = AdTestProcessingTimestampMapper(ctx=self._ctx(), auto_op_parallelism=False)
 
-        first_result = op.process_batched({
-            "text": ["first"],
-            RECORD_KEY_FIELD: ["record-1"],
+        first_result = op.process_single({
+            "text": "first",
+            RECORD_KEY_FIELD: "record-1",
         })
-        second_result = op.process_batched({
-            "text": ["second"],
-            RECORD_KEY_FIELD: ["record-2"],
+        second_result = op.process_single({
+            "text": "second",
+            RECORD_KEY_FIELD: "record-2",
         })
 
         self.assertIn("processing_timestamp", first_result)
@@ -180,8 +182,9 @@ class AdTestProcessingTimestampMapperTest(DataJuicerTestCaseBase):
             output_data={
                 "text": "second",
                 RECORD_KEY_FIELD: "record-2",
-                "processing_timestamp": second_result["processing_timestamp"][0],
+                "processing_timestamp": second_result["processing_timestamp"],
             },
+            started_at=ANY,
         )
 
 

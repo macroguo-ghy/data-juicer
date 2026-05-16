@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from enum import IntEnum
 from typing import Any
 
@@ -7,6 +8,10 @@ from data_juicer.utils.http_utils import HttpClient
 
 OPERATOR_EXECUTION_API_PREFIX = "/openapi/synthesis/operator-execution"
 RECORD_KEY_FIELD = "__adc_record_key"
+
+
+def current_time_millis() -> int:
+    return int(time.time() * 1000)
 
 
 class OperatorExecutionStatus(IntEnum):
@@ -50,6 +55,8 @@ class OperatorExecutionCallbackClient:
         properties: dict[str, Any] | None = None,
     ) -> int:
         """Start the operator execution row and cache its ID."""
+        if started_at is None:
+            started_at = current_time_millis()
         payload = {
             "synthesisInstanceId": self._get_ctx_required_value("synthesisInstanceId"),
             "taskId": self._get_ctx_required_value("taskId"),
@@ -79,6 +86,8 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
+        if started_at is not None and finished_at is None:
+            finished_at = current_time_millis()
         return self.report_record(
             record_key=record_key,
             status=OperatorExecutionStatus.SUCCESS,
@@ -100,6 +109,8 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
+        if started_at is not None and finished_at is None:
+            finished_at = current_time_millis()
         return self.report_record(
             record_key=record_key,
             status=OperatorExecutionStatus.FAILED,

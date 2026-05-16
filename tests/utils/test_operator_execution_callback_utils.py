@@ -96,6 +96,33 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             }],
         )
 
+    @patch("data_juicer.utils.operator_execution_callback_utils.time.time")
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_start_defaults_started_at_to_current_millis(self, mock_client_cls, mock_time):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {
+                "code": 0,
+                "data": {
+                    "success": True,
+                    "operatorExecutionId": 10001,
+                },
+            },
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        mock_time.return_value = 1710000000.123
+        client = OperatorExecutionCallbackClient(self._ctx())
+
+        client.start(operator_config={"sheet_url": "https://xxx"})
+
+        self.assertEqual(
+            fake_client.requests[0]["json_body"]["startedAt"],
+            1710000000123,
+        )
+
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_report_record_success_uses_saved_operator_execution_id(self, mock_client_cls):
         fake_client = FakeHttpClient({
@@ -144,6 +171,34 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             }],
         )
 
+    @patch("data_juicer.utils.operator_execution_callback_utils.time.time")
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_defaults_finished_at_when_started_at_is_set(self, mock_client_cls, mock_time):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        mock_time.return_value = 1710000001.456
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            started_at=1710000000123,
+        )
+
+        self.assertEqual(
+            fake_client.requests[0]["json_body"]["startedAt"],
+            1710000000123,
+        )
+        self.assertEqual(
+            fake_client.requests[0]["json_body"]["finishedAt"],
+            1710000001456,
+        )
+
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_report_record_failure_does_not_report_operator_failed_status(self, mock_client_cls):
         fake_client = FakeHttpClient({
@@ -178,6 +233,35 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "outputData": {"http_error": "process failed"},
                 "errorMessage": "process failed",
             },
+        )
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.time.time")
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_failure_defaults_finished_at_when_started_at_is_set(self, mock_client_cls, mock_time):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        mock_time.return_value = 1710000002.789
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_failure(
+            record_key="adc-record-001",
+            error_message="process failed",
+            started_at=1710000000123,
+        )
+
+        self.assertEqual(
+            fake_client.requests[0]["json_body"]["startedAt"],
+            1710000000123,
+        )
+        self.assertEqual(
+            fake_client.requests[0]["json_body"]["finishedAt"],
+            1710000002789,
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")

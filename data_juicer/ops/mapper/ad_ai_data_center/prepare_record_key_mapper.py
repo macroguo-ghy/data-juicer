@@ -11,6 +11,7 @@ from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
+    current_time_millis,
 )
 
 OP_NAME = "prepare_record_key_mapper"
@@ -47,6 +48,7 @@ class PrepareRecordKeyMapper(Mapper):
         self._operator_execution_callback_client = None
 
     def process_single(self, sample: dict[str, Any]):
+        record_started_at = current_time_millis()
         original_sample = copy.deepcopy(sample)
         try:
             if not self.overwrite and sample.get(RECORD_KEY_FIELD):
@@ -56,23 +58,33 @@ class PrepareRecordKeyMapper(Mapper):
                 sample[RECORD_KEY_FIELD] = self._stable_hash(source)
                 output_sample = sample
         except Exception as exc:
-            self._report_record_failure(original_sample, sample, exc)
+            self._report_record_failure(
+                original_sample,
+                sample,
+                exc,
+                record_started_at,
+            )
             raise
-        self._report_record_success(original_sample, output_sample)
+        self._report_record_success(
+            original_sample,
+            output_sample,
+            record_started_at,
+        )
         return output_sample
 
-    def _report_record_success(self, input_sample, output_sample):
+    def _report_record_success(self, input_sample, output_sample, started_at):
         try:
             callback_client = self._get_operator_execution_callback_client()
             callback_client.report_record_success(
                 record_key=output_sample[RECORD_KEY_FIELD],
                 input_data=input_sample,
                 output_data=copy.deepcopy(output_sample),
+                started_at=started_at,
             )
         except Exception as exc:
             logger.warning("Failed to report record success callback: {}", exc)
 
-    def _report_record_failure(self, input_sample, output_sample, exc):
+    def _report_record_failure(self, input_sample, output_sample, exc, started_at):
         try:
             record_key = output_sample.get(RECORD_KEY_FIELD)
             if not record_key:
@@ -82,6 +94,7 @@ class PrepareRecordKeyMapper(Mapper):
                 record_key=record_key,
                 input_data=input_sample,
                 error_message=str(exc),
+                started_at=started_at,
             )
         except Exception as callback_exc:
             logger.warning("Failed to report record failure callback: {}", callback_exc)

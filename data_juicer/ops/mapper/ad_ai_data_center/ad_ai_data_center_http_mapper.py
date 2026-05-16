@@ -9,6 +9,7 @@ from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
+    current_time_millis,
 )
 
 OP_NAME = "ad_ai_data_center_http_mapper"
@@ -70,6 +71,7 @@ class AdAiDataCenterHttpMapper(Mapper):
 
     def process_single(self, sample):
         ctx = self._get_notification_ctx()
+        record_started_at = current_time_millis()
         original_sample = copy.deepcopy(sample)
         try:
             self._try_send_test_card_notification(
@@ -102,13 +104,27 @@ class AdAiDataCenterHttpMapper(Mapper):
                 ctx=ctx,
             )
         except Exception as exc:
-            self._report_record_failure(original_sample, sample, str(exc))
+            self._report_record_failure(
+                original_sample,
+                sample,
+                str(exc),
+                record_started_at,
+            )
             raise
         if result["ok"]:
-            self._report_record_success(original_sample, sample)
+            self._report_record_success(
+                original_sample,
+                sample,
+                record_started_at,
+            )
         else:
             error_message = self._extract_error_message(result)
-            self._report_record_failure(original_sample, sample, error_message)
+            self._report_record_failure(
+                original_sample,
+                sample,
+                error_message,
+                record_started_at,
+            )
             raise ValueError(f"HTTP mapper request failed: {error_message}")
         return sample
 
@@ -188,23 +204,25 @@ class AdAiDataCenterHttpMapper(Mapper):
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
 
-    def _report_record_success(self, input_sample, output_sample):
+    def _report_record_success(self, input_sample, output_sample, started_at):
         try:
             self._get_operator_execution_callback_client().report_record_success(
                 record_key=self._get_record_key(output_sample),
                 input_data=input_sample,
                 output_data=copy.deepcopy(output_sample),
+                started_at=started_at,
             )
         except Exception as exc:
             logger.warning("Failed to report record success callback: {}", exc)
 
-    def _report_record_failure(self, input_sample, output_sample, error_message):
+    def _report_record_failure(self, input_sample, output_sample, error_message, started_at):
         try:
             self._get_operator_execution_callback_client().report_record_failure(
                 record_key=self._get_record_key(output_sample),
                 input_data=input_sample,
                 error_message=error_message,
                 output_data=copy.deepcopy(output_sample),
+                started_at=started_at,
             )
         except Exception as exc:
             logger.warning("Failed to report record failure callback: {}", exc)
