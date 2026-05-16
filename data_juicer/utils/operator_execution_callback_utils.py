@@ -14,6 +14,10 @@ def current_time_millis() -> int:
     return int(time.time() * 1000)
 
 
+def current_finished_time_millis(started_at: int) -> int:
+    return max(current_time_millis(), int(started_at) + 1)
+
+
 class OperatorExecutionStatus(IntEnum):
     RUNNING = 1
     SUCCESS = 2
@@ -87,7 +91,7 @@ class OperatorExecutionCallbackClient:
         finished_at: int | None = None,
     ) -> dict[str, Any]:
         if started_at is not None and finished_at is None:
-            finished_at = current_time_millis()
+            finished_at = current_finished_time_millis(started_at)
         return self.report_record(
             record_key=record_key,
             status=OperatorExecutionStatus.SUCCESS,
@@ -110,7 +114,7 @@ class OperatorExecutionCallbackClient:
         finished_at: int | None = None,
     ) -> dict[str, Any]:
         if started_at is not None and finished_at is None:
-            finished_at = current_time_millis()
+            finished_at = current_finished_time_millis(started_at)
         return self.report_record(
             record_key=record_key,
             status=OperatorExecutionStatus.FAILED,
