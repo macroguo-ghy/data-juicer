@@ -43,7 +43,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         )
         self.mock_callback_cls = self.callback_patcher.start()
         self.mock_callback = self.mock_callback_cls.return_value
-        self.mock_callback.upsert.return_value = 10001
+        self.mock_callback.start.return_value = 10001
 
     def tearDown(self):
         self.callback_patcher.stop()
@@ -65,7 +65,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             "apiBase": "https://ai-data-center.bytedance.net/api",
         }
 
-    def test_before_operator_started_upserts_running_once(self):
+    def test_before_operator_started_starts_running_once(self):
         op = ExternalEvalDataImportMapper(
             sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
             data_type="eval_data",
@@ -77,12 +77,29 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         op.before_operator_started()
         op.before_operator_started()
 
-        self.mock_callback.upsert.assert_called_once_with(
+        self.mock_callback.start.assert_called_once_with(
             operator_config={
                 "sheet_url": "https://bytedance.feishu.cn/sheets/xxxx",
                 "data_type": "eval_data",
                 "output_field": "externalDataSet",
             }
+        )
+
+    def test_after_operator_finished_finalizes_success_or_failure(self):
+        op = ExternalEvalDataImportMapper(
+            sheet_url="https://bytedance.feishu.cn/sheets/xxxx",
+            data_type="eval_data",
+            ctx=self._ctx(),
+            python_code="def process(data, context):\n    return data",
+            auto_op_parallelism=False,
+        )
+
+        op.after_operator_finished(error=None)
+        op.after_operator_finished(error=RuntimeError("consume failed"))
+
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_callback.failed.assert_called_once_with(
+            error_message="consume failed"
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper.HttpClient")

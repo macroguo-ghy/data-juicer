@@ -20,7 +20,7 @@ INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
 
 @OPERATORS.register_module(OP_NAME)
 class PrepareRecordKeyMapper(Mapper):
-    """Prepare a stable internal record key for downstream ADC status upserts."""
+    """Prepare a stable internal record key for downstream ADC status callbacks."""
 
     def __init__(
         self,
@@ -90,12 +90,22 @@ class PrepareRecordKeyMapper(Mapper):
         try:
             self._get_operator_execution_callback_client()
         except Exception as exc:
-            logger.warning("Failed to upsert operator execution callback: {}", exc)
+            logger.warning("Failed to start operator execution callback: {}", exc)
+
+    def after_operator_finished(self, dataset=None, context=None, error=None):
+        try:
+            callback_client = self._get_operator_execution_callback_client()
+            if error is None:
+                callback_client.finalize()
+            else:
+                callback_client.failed(error_message=str(error))
+        except Exception as exc:
+            logger.warning("Failed to finish operator execution callback: {}", exc)
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)
-            callback_client.upsert(
+            callback_client.start(
                 operator_config={
                     "source_fields": self.source_fields,
                     "overwrite": self.overwrite,

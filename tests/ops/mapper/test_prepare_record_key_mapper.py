@@ -38,7 +38,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         )
         self.mock_callback_cls = self.callback_patcher.start()
         self.mock_callback = self.mock_callback_cls.return_value
-        self.mock_callback.upsert.return_value = 10001
+        self.mock_callback.start.return_value = 10001
 
     def tearDown(self):
         self.callback_patcher.stop()
@@ -81,7 +81,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "query": "hello",
             }),
         )
-        self.mock_callback.upsert.assert_called_once()
+        self.mock_callback.start.assert_called_once()
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key=result[0][RECORD_KEY_FIELD],
             input_data={
@@ -159,21 +159,32 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             stable_hash({"query": "hello"}),
         )
 
-    def test_before_operator_started_upserts_running_once(self):
+    def test_before_operator_started_starts_running_once(self):
         op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
 
         op.before_operator_started()
         op.before_operator_started()
 
-        self.mock_callback.upsert.assert_called_once_with(
+        self.mock_callback.start.assert_called_once_with(
             operator_config={
                 "source_fields": ["query"],
                 "overwrite": False,
             }
         )
 
-    def test_upsert_failure_does_not_cache_uninitialized_callback_client(self):
-        self.mock_callback.upsert.side_effect = [RuntimeError("upsert down"), 10001]
+    def test_after_operator_finished_finalizes_success_or_failure(self):
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
+
+        op.after_operator_finished(error=None)
+        op.after_operator_finished(error=RuntimeError("consume failed"))
+
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_callback.failed.assert_called_once_with(
+            error_message="consume failed"
+        )
+
+    def test_start_failure_does_not_cache_uninitialized_callback_client(self):
+        self.mock_callback.start.side_effect = [RuntimeError("start down"), 10001]
         op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
 
         first_result = op.process_single({"query": "first"})
@@ -181,7 +192,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
 
         self.assertEqual(first_result[RECORD_KEY_FIELD], stable_hash({"query": "first"}))
         self.assertEqual(second_result[RECORD_KEY_FIELD], stable_hash({"query": "second"}))
-        self.assertEqual(self.mock_callback.upsert.call_count, 2)
+        self.assertEqual(self.mock_callback.start.call_count, 2)
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key=second_result[RECORD_KEY_FIELD],
             input_data={"query": "second"},

@@ -14,7 +14,7 @@ from data_juicer.core.data import DJDataset
 from data_juicer.core.data.schema import Schema
 from data_juicer.core.tracer import should_trace_op
 from data_juicer.ops import Deduplicator, Filter, Mapper, Pipeline
-from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE, TAGGING_OPS
+from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE, OP, TAGGING_OPS
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.file_utils import is_remote_path
 from data_juicer.utils.webdataset_utils import _custom_default_decoder
@@ -441,7 +441,10 @@ class RayDataset(DJDataset):
 
         for op in operators:
             original_data = self.data
-            if not plan_only:
+            if (
+                not plan_only
+                and type(op).before_operator_started is not OP.before_operator_started
+            ):
                 op.before_operator_started(
                     dataset=self,
                     context={
@@ -472,19 +475,40 @@ class RayDataset(DJDataset):
                             plan_only=plan_only,
                             materialize_after_each_op=materialize_after_each_op,
                         )
+                    except Exception as fallback_e:
+                        self._call_after_operator_finished(op, error=fallback_e)
+                        raise
                     finally:
                         op.runtime_env = original_runtime_env
                 else:
+                    self._call_after_operator_finished(op, error=e)
                     raise e
-            if materialize_after_each_op and not plan_only:
-                op.after_all_records_processed(
-                    dataset=self,
-                    context={
-                        "executor_type": "ray",
-                        "op_name": op._name,
-                    },
-                )
+            if (
+                materialize_after_each_op
+                and not plan_only
+                and type(op).after_operator_finished is not OP.after_operator_finished
+            ):
+                self._call_after_operator_finished(op, error=None)
         return self
+
+    def _call_after_operator_finished(self, op, error=None):
+        if type(op).after_operator_finished is OP.after_operator_finished:
+            return
+        try:
+            op.after_operator_finished(
+                dataset=self,
+                context={
+                    "executor_type": "ray",
+                    "op_name": op._name,
+                },
+                error=error,
+            )
+        except Exception as hook_exc:
+            logger.warning(
+                "Failed to run after_operator_finished hook for Op [{}]: {}",
+                op._name,
+                hook_exc,
+            )
 
     def _run_single_op_with_optional_materialize(
         self,

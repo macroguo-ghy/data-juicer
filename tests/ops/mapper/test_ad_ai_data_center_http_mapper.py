@@ -55,7 +55,7 @@ class AdAiDataCenterHttpMapperTest(unittest.TestCase):
         )
         self.mock_callback_cls = self.callback_patcher.start()
         self.mock_callback = self.mock_callback_cls.return_value
-        self.mock_callback.upsert.return_value = 10001
+        self.mock_callback.start.return_value = 10001
 
     def tearDown(self):
         self.callback_patcher.stop()
@@ -200,7 +200,7 @@ process:
         self.assertEqual(result[0]["extra"], "keep")
         self.assertEqual(json.loads(result[0]["http_result"]), {"answer": "hello"})
         self.assertNotIn("http_error", result[0])
-        self.mock_callback.upsert.assert_called_once()
+        self.mock_callback.start.assert_called_once()
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key="record-1",
             input_data={
@@ -238,7 +238,7 @@ process:
         self.assertEqual(json.loads(result["http_result"]), {"answer": "hello"})
         self.assertNotIn("http_error", result)
 
-    def test_before_operator_started_upserts_running_once(self):
+    def test_before_operator_started_starts_running_once(self):
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
@@ -250,7 +250,7 @@ process:
         op.before_operator_started()
         op.before_operator_started()
 
-        self.mock_callback.upsert.assert_called_once_with(
+        self.mock_callback.start.assert_called_once_with(
             operator_config={
                 "endpoint": "http://example.test/invoke",
                 "input_fields": ["prompt"],
@@ -259,6 +259,23 @@ process:
                 "method": "POST",
                 "headers": {},
             }
+        )
+
+    def test_after_operator_finished_finalizes_success_or_failure(self):
+        op = AdAiDataCenterHttpMapper(
+            endpoint="http://example.test/invoke",
+            input_fields=["prompt"],
+            output_field="http_result",
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+
+        op.after_operator_finished(error=None)
+        op.after_operator_finished(error=RuntimeError("consume failed"))
+
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_callback.failed.assert_called_once_with(
+            error_message="consume failed"
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
@@ -316,7 +333,7 @@ process:
         self.assertEqual(self.mock_send_test_card_notification.call_count, 2)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.ad_ai_data_center_http_mapper.HttpClient")
-    def test_upsert_failure_does_not_cache_uninitialized_callback_client(self, mock_client_cls):
+    def test_start_failure_does_not_cache_uninitialized_callback_client(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
             "status_code": 200,
@@ -325,7 +342,7 @@ process:
             "error": None,
         })
         mock_client_cls.return_value = fake_client
-        self.mock_callback.upsert.side_effect = [RuntimeError("upsert down"), 10001]
+        self.mock_callback.start.side_effect = [RuntimeError("start down"), 10001]
         op = AdAiDataCenterHttpMapper(
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
@@ -345,7 +362,7 @@ process:
 
         self.assertEqual(json.loads(first_result["http_result"]), {"answer": "hello"})
         self.assertEqual(json.loads(second_result["http_result"]), {"answer": "hello"})
-        self.assertEqual(self.mock_callback.upsert.call_count, 2)
+        self.assertEqual(self.mock_callback.start.call_count, 2)
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key="record-2",
             input_data={

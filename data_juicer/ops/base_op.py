@@ -470,8 +470,8 @@ class OP(metaclass=OPMetaClass):
         """Hook called before an executor starts this OP."""
         pass
 
-    def after_all_records_processed(self, dataset=None, context=None):
-        """Hook called after an executor confirms this OP processed all records."""
+    def after_operator_finished(self, dataset=None, context=None, error=None):
+        """Hook called when an executor confirms this OP finished or failed."""
         pass
 
     def use_cuda(self):

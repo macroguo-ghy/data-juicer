@@ -19,15 +19,15 @@ class OperatorExecutionCallbackClient:
     """Client for data synthesis operator execution callback APIs.
 
     Intended usage:
-    - Business operators with ``NEED_CTX = True`` call ``upsert`` before
+    - Business operators with ``NEED_CTX = True`` call ``start`` before
       processing records and keep the returned ``operatorExecutionId``.
     - Business operators call ``report_record_success`` or
       ``report_record_failure`` after each record. A failed record is only a
       record-level failure and does not imply operator-level FAILED.
     - Execution engines call ``finalize`` only after the current operator output
       is fully consumed. Business operators should not infer that by themselves.
-    - Operator-level FAILED is reported through ``report_status`` when the
-      operator as a whole fails, not for ordinary single-record failures.
+    - Execution engines call ``failed`` when the operator as a whole fails, not
+      for ordinary single-record failures.
     """
 
     def __init__(
@@ -42,15 +42,14 @@ class OperatorExecutionCallbackClient:
         self.api_base = self._get_api_base()
         self.user_account = self._get_ctx_required_value("userAccount")
 
-    def upsert(
+    def start(
         self,
         *,
         operator_config: dict[str, Any] | None = None,
-        status: OperatorExecutionStatus | int = OperatorExecutionStatus.RUNNING,
         started_at: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> int:
-        """Create or update the operator execution row and cache its ID."""
+        """Start the operator execution row and cache its ID."""
         payload = {
             "synthesisInstanceId": self._get_ctx_required_value("synthesisInstanceId"),
             "taskId": self._get_ctx_required_value("taskId"),
@@ -58,7 +57,6 @@ class OperatorExecutionCallbackClient:
             "operatorIndex": self._get_ctx_required_value("operatorIndex"),
             "operatorName": self._get_ctx_required_value("operatorName"),
             "operatorConfig": operator_config or {},
-            "status": int(status),
         }
         self._add_optional_ctx_value(payload, "flowInstanceId")
         self._add_optional_ctx_value(payload, "flowNodeId")
@@ -66,7 +64,7 @@ class OperatorExecutionCallbackClient:
         self._add_optional_value(payload, "startedAt", started_at)
         self._add_optional_value(payload, "properties", properties)
 
-        result = self._post("upsert", payload)
+        result = self._post("start", payload)
         operator_execution_id = self._extract_operator_execution_id(result)
         self.operator_execution_id = operator_execution_id
         return operator_execution_id
@@ -143,27 +141,22 @@ class OperatorExecutionCallbackClient:
         self._add_optional_value(payload, "finishedAt", finished_at)
         return self._post("record", payload)
 
-    def report_status(
+    def failed(
         self,
-        status: OperatorExecutionStatus | int,
         *,
         finished_at: int | None = None,
         error_message: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Report an operator-level status transition.
+        """Finalize operator failure after the execution engine observes it."""
 
-        Do not call this with FAILED for ordinary single-record failures; use
-        ``report_record_failure`` instead.
-        """
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
-            "status": int(status),
         }
         self._add_optional_value(payload, "finishedAt", finished_at)
         self._add_optional_value(payload, "errorMessage", error_message)
         self._add_optional_value(payload, "properties", properties)
-        return self._post("status", payload)
+        return self._post("failed", payload)
 
     def finalize(
         self,
@@ -261,5 +254,5 @@ class OperatorExecutionCallbackClient:
         if isinstance(data, dict) and isinstance(data.get("data"), dict):
             data = data["data"]
         if not isinstance(data, dict) or data.get("operatorExecutionId") in (None, ""):
-            raise ValueError("upsert response must contain operatorExecutionId")
+            raise ValueError("start response must contain operatorExecutionId")
         return int(data["operatorExecutionId"])

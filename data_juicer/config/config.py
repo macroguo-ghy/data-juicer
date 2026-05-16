@@ -658,7 +658,7 @@ def build_base_parser() -> ArgumentParser:
         type=bool,
         default=False,
         help="Whether RayExecutor should materialize the Ray Dataset after each "
-        "operator and call the operator after_all_records_processed hook. Disabled "
+        "operator and call the operator after_operator_finished hook. Disabled "
         "by default to preserve Ray Data lazy pipeline optimization.",
     )
     parser.add_argument(

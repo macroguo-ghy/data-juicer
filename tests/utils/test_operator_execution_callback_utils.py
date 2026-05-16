@@ -38,7 +38,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         }
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
-    def test_upsert_builds_operator_payload_and_stores_execution_id(self, mock_client_cls):
+    def test_start_builds_operator_payload_and_stores_execution_id(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
             "status_code": 200,
@@ -55,7 +55,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         mock_client_cls.return_value = fake_client
         client = OperatorExecutionCallbackClient(self._ctx())
 
-        operator_execution_id = client.upsert(
+        operator_execution_id = client.start(
             operator_config={"sheet_url": "https://xxx"},
             started_at=1710000000000,
             properties={"source": "unit-test"},
@@ -66,7 +66,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         mock_client_cls.assert_called_once_with(
             endpoint=(
                 "https://ai-data-center.bytedance.net/api"
-                "/openapi/synthesis/operator-execution/upsert"
+                "/openapi/synthesis/operator-execution/start"
             ),
             method="POST",
             headers={
@@ -90,7 +90,6 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                     "operatorName": "load_external_dataset",
                     "operatorType": "Mapper",
                     "operatorConfig": {"sheet_url": "https://xxx"},
-                    "status": 1,
                     "startedAt": 1710000000000,
                     "properties": {"source": "unit-test"},
                 }
@@ -182,7 +181,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
-    def test_report_status_failed_uses_status_endpoint(self, mock_client_cls):
+    def test_failed_uses_failed_endpoint_for_execution_engine(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
             "status_code": 200,
@@ -193,21 +192,19 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         mock_client_cls.return_value = fake_client
         client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
 
-        client.report_status(
-            OperatorExecutionStatus.FAILED,
+        client.failed(
             finished_at=1710000010000,
             error_message="operator failed",
         )
 
         self.assertIn(
-            "/openapi/synthesis/operator-execution/status",
+            "/openapi/synthesis/operator-execution/failed",
             mock_client_cls.call_args.kwargs["endpoint"],
         )
         self.assertEqual(
             fake_client.requests[0]["json_body"],
             {
                 "operatorExecutionId": 10001,
-                "status": 3,
                 "finishedAt": 1710000010000,
                 "errorMessage": "operator failed",
             },
@@ -245,7 +242,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "userAccount": "wangjianda.667",
             })
 
-    def test_rejects_record_report_before_upsert(self):
+    def test_rejects_record_report_before_start(self):
         client = OperatorExecutionCallbackClient(self._ctx())
 
         with self.assertRaisesRegex(ValueError, "operatorExecutionId must be provided"):
