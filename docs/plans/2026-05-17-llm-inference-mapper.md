@@ -154,7 +154,7 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 | `prompt_field` | `str` | No | `None` | Field name that stores the prompt in each sample. |
 | `model` | `str` | No | `""` | Model name. Empty string is sent when not configured. |
 | `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output` as a string. Object and array outputs are JSON-stringified. |
-| `metadata_field` | `str` | No | `"llm_metadata"` | Field used to store JSON-stringified task metadata such as `taskId`, `conversationId`, and `requestId`. |
+| `metadata_field` | `str` | No | `None` | Optional field used to store JSON-stringified task metadata such as `taskId`, `conversationId`, and `requestId`. If omitted or set to `null`, metadata is not written. |
 | `poll_interval_seconds` | `float` | No | `2.0` | Sleep time between result polling requests. |
 | `max_poll_attempts` | `int` | No | `60` | Maximum result polling attempts before timeout. |
 | `timeout` | `float` | No | `30.0` | HTTP request timeout in seconds. |
@@ -353,15 +353,15 @@ For a successful inference, the mapper returns the full sample with:
 
 ```json
 {
-  "llm_output": "这里是生成结果",
-  "llm_metadata": "{\"taskId\": \"task-xxx\", \"conversationId\": \"conv-xxx\", \"requestId\": \"req-xxx\", \"resultStatus\": \"SUCCESS\", \"status\": \"success\"}"
+  "llm_output": "这里是生成结果"
 }
 ```
 
 The operator stores the server `output` as a string to avoid Lance/PyArrow dynamic struct schema issues. If `output`
 is already a string, it is preserved. If `output` is a `dict`, `list`, number, or boolean, it is serialized with
-`json.dumps(..., ensure_ascii=False)`. `llm_metadata` is always stored as a JSON string. This avoids PyArrow struct
-field-order failures when writing to Lance/Magnus tables.
+`json.dumps(..., ensure_ascii=False)`. By default, the mapper does not write metadata. If `metadata_field` is
+explicitly configured, task metadata is stored in that field as a JSON string. This avoids PyArrow struct field-order
+failures when writing to Lance/Magnus tables.
 
 ### YAML Example
 
@@ -382,7 +382,6 @@ process:
       prompt_template: "请根据以下内容生成摘要：{text}"
       model: "doubao"
       output_field: "llm_output"
-      metadata_field: "llm_metadata"
       poll_interval_seconds: 2
       max_poll_attempts: 60
 ```
@@ -403,7 +402,8 @@ Cover:
 - prompt can be built from `prompt_template`
 - submit request posts `prompt` and `model`
 - result polling retries while `resultStatus = RUNNING`
-- success writes `output_field` and `metadata_field` as strings
+- success writes `output_field` as a string
+- success writes `metadata_field` as a string only when `metadata_field` is explicitly configured
 - failed result raises `ValueError` with response `message`
 - missing `taskId` raises a clear `ValueError`
 - timeout after `max_poll_attempts` raises a clear `TimeoutError`
@@ -430,7 +430,8 @@ Expected: fail because `llm_inference_mapper` is not implemented.
 
 Validate:
 - at least one prompt source is configured
-- `output_field` and `metadata_field` are not empty
+- `output_field` is not empty
+- `metadata_field` is either omitted / `null`, or a non-empty string
 - `poll_interval_seconds >= 0`
 - `max_poll_attempts > 0`
 

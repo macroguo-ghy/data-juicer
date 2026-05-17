@@ -18,6 +18,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "llm_inference_mapper"
+CONFIG_PAGE_KEY = "llm_state_generator"
 NEED_CTX = True
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 SUBMIT_PATH = "/openapi/synthesis/llm-inference/submit"
@@ -35,7 +36,7 @@ class LLMInferenceMapper(Mapper):
         prompt_field: str | None = None,
         model: str = "",
         output_field: str = "llm_output",
-        metadata_field: str = "llm_metadata",
+        metadata_field: str | None = None,
         poll_interval_seconds: float = 2.0,
         max_poll_attempts: int = 60,
         ctx: dict | None = None,
@@ -51,7 +52,7 @@ class LLMInferenceMapper(Mapper):
         :param prompt_field: sample field that stores the prompt.
         :param model: model name sent to the server. Empty string means default.
         :param output_field: field used to store the server output.
-        :param metadata_field: field used to store task metadata.
+        :param metadata_field: field used to store task metadata. None means no metadata output.
         :param poll_interval_seconds: seconds to wait between result polling.
         :param max_poll_attempts: maximum result polling attempts.
         :param ctx: platform context injected by backend when NEED_CTX is True.
@@ -64,7 +65,7 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("one of prompt, prompt_template, or prompt_field must be provided")
         if not output_field:
             raise ValueError("output_field must be provided")
-        if not metadata_field:
+        if metadata_field == "":
             raise ValueError("metadata_field must be provided")
         if poll_interval_seconds < 0:
             raise ValueError("poll_interval_seconds must be >= 0")
@@ -96,7 +97,8 @@ class LLMInferenceMapper(Mapper):
             self._ensure_json_serializable(output)
 
             sample[self.output_field] = self._stringify_storage_value(output)
-            sample[self.metadata_field] = self._stringify_storage_value(self._build_metadata(result_data))
+            if self.metadata_field is not None:
+                sample[self.metadata_field] = self._stringify_storage_value(self._build_metadata(result_data))
         except Exception as exc:
             self._report_record_failure(
                 input_sample,

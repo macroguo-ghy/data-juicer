@@ -139,8 +139,9 @@ print(f"Write Success. Snapshot: {snapshot}")
 
 ## 3. Create Output Table
 
-For this smoke test, define both `llm_output` and `llm_metadata` as `string`. `llm_inference_mapper` writes the LLM
-result as text and writes metadata as a JSON string to avoid Lance/PyArrow struct field-order issues.
+For this smoke test, define `llm_output` as `string`. `llm_inference_mapper` writes the LLM result as text. It does
+not write metadata by default, so the output table does not need an `llm_metadata` column unless you explicitly set
+`metadata_field`.
 
 ```python
 import pyarrow as pa
@@ -173,7 +174,6 @@ output_schema = pa.schema([
         ]),
     ),
     pa.field("llm_output", pa.string()),
-    pa.field("llm_metadata", pa.string()),
 ])
 
 output_table = magnus_client.create_table(
@@ -214,7 +214,6 @@ process:
         指标数值：{metrics[].value}
       model: "doubao"
       output_field: "llm_output"
-      metadata_field: "llm_metadata"
       poll_interval_seconds: 2
       max_poll_attempts: 60
       timeout: 30
@@ -246,11 +245,10 @@ After the operator succeeds, each output row should keep the original fields and
 
 ```json
 {
-  "llm_output": "上海通勤提醒指出明天早高峰可能有小雨，建议提前出门并携带雨具。",
-  "llm_metadata": "{\"taskId\": \"task-xxx\", \"conversationId\": \"conv-xxx\", \"requestId\": \"req-xxx\", \"resultStatus\": \"SUCCESS\", \"status\": \"success\"}"
+  "llm_output": "上海通勤提醒指出明天早高峰可能有小雨，建议提前出门并携带雨具。"
 }
 ```
 
-`llm_metadata` normally includes task metadata such as `taskId`, `conversationId`, `requestId`, `resultStatus`, and
-`status`, stored as a JSON string. If the LLM service returns object output in another scenario, the mapper also
-stringifies it before writing to `llm_output`.
+If you explicitly configure `metadata_field`, the mapper writes task metadata such as `taskId`, `conversationId`,
+`requestId`, `resultStatus`, and `status` as a JSON string. If the LLM service returns object output in another
+scenario, the mapper also stringifies it before writing to `llm_output`.

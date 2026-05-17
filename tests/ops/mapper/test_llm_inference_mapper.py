@@ -7,6 +7,7 @@ from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper import (
+    CONFIG_PAGE_KEY,
     NEED_CTX,
     OP_NAME,
     LLMInferenceMapper,
@@ -107,6 +108,7 @@ class LLMInferenceMapperTest(unittest.TestCase):
 
     def test_declares_operator_metadata(self):
         self.assertEqual(OP_NAME, "llm_inference_mapper")
+        self.assertEqual(CONFIG_PAGE_KEY, "llm_state_generator")
         self.assertEqual(NEED_CTX, True)
 
     def test_config_loads_operator_name_without_ad_ai_data_center_prefix(self):
@@ -144,6 +146,7 @@ process:
 
         self.assertIsInstance(ops[0], LLMInferenceMapper)
         self.assertEqual(ops[0].ctx["userAccount"], "wangjianda.667")
+        self.assertIsNone(ops[0].metadata_field)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_submits_prompt_from_template_polls_result_and_writes_output(self, mock_client_cls):
@@ -223,13 +226,7 @@ process:
         self.assertEqual(running_client.requests, [{"json_body": {"taskId": "task-001"}}])
         self.assertEqual(success_client.requests, [{"json_body": {"taskId": "task-001"}}])
         self.assertEqual(result[0]["llm_output"], '{"summary": "hello summary"}')
-        self.assertEqual(
-            result[0]["llm_metadata"],
-            (
-                '{"taskId": "task-001", "conversationId": "conv-001", '
-                '"requestId": "req-001", "resultStatus": "SUCCESS", "status": "success"}'
-            ),
-        )
+        self.assertNotIn("llm_metadata", result[0])
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key="record-1",
             input_data={
@@ -272,6 +269,25 @@ process:
         mock_client_cls.side_effect = [submit_client, success_client]
         op = LLMInferenceMapper(
             prompt="static prompt",
+            ctx=self._ctx(),
+            poll_interval_seconds=0,
+        )
+
+        result = op.process_single({RECORD_KEY_FIELD: "record-1"})
+
+        self.assertEqual(result["llm_output"], "plain text summary")
+        self.assertNotIn("llm_metadata", result)
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
+    def test_writes_metadata_only_when_metadata_field_is_configured(self, mock_client_cls):
+        submit_client = FakeHttpClient(success_envelope(self._submit_data()))
+        success_data = self._success_result_data()
+        success_data["output"] = "plain text summary"
+        success_client = FakeHttpClient(success_envelope(success_data))
+        mock_client_cls.side_effect = [submit_client, success_client]
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            metadata_field="llm_metadata",
             ctx=self._ctx(),
             poll_interval_seconds=0,
         )
