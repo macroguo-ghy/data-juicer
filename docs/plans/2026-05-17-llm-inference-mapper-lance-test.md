@@ -68,6 +68,75 @@ Use these two rows to test template variable rendering:
 {"__adc_record_key":"record-002","article":{"title":"上海通勤提醒","body":"明天上海早高峰可能有小雨，建议提前出门并携带雨具。"},"metrics":[{"name":"曝光","value":980},{"name":"点击","value":73}],"unused":{"raw":"这个字段也不会被引用"}}
 ```
 
+After creating the source table, write the two rows into it:
+
+```python
+import collections
+import collections.abc
+
+from pyiceberg.magnus import MagnusClient
+
+# Python 3.11+ compatibility patch for older writer dependencies.
+collections.Iterable = collections.abc.Iterable
+
+magnus_client = MagnusClient()
+
+table = magnus_client.load_table("zsy_test.default.wjd_test_llm_test_source")
+
+data = [
+    {
+        "__adc_record_key": "record-001",
+        "article": {
+            "title": "北京周末出行",
+            "body": "今天北京天气晴朗，气温适宜，公园和郊区都适合户外活动。",
+        },
+        "metrics": [
+            {
+                "name": "曝光",
+                "value": 1200,
+            },
+            {
+                "name": "点击",
+                "value": 86,
+            },
+        ],
+        "unused": {
+            "raw": "这个字段不会被 prompt_template 引用",
+        },
+    },
+    {
+        "__adc_record_key": "record-002",
+        "article": {
+            "title": "上海通勤提醒",
+            "body": "明天上海早高峰可能有小雨，建议提前出门并携带雨具。",
+        },
+        "metrics": [
+            {
+                "name": "曝光",
+                "value": 980,
+            },
+            {
+                "name": "点击",
+                "value": 73,
+            },
+        ],
+        "unused": {
+            "raw": "这个字段也不会被引用",
+        },
+    },
+]
+
+writer = table.get_writer(
+    operation="OVERWRITE",
+    snapshot_summary={
+        "message": "Prepare LLM mapper test source data",
+    },
+)
+writer.write(data)
+snapshot = writer.close()
+print(f"Write Success. Snapshot: {snapshot}")
+```
+
 ## 3. Create Output Table
 
 For this smoke test, define LLM result fields as `struct` because `llm_inference_mapper` writes the server `output`
