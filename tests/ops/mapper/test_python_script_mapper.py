@@ -7,6 +7,7 @@ from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.ad_ai_data_center.python_script_mapper import (
+    CONFIG_PAGE_KEY,
     NEED_CTX,
     OP_NAME,
     PythonScriptMapper,
@@ -272,6 +273,7 @@ process:
         ops = load_ops(cfg.process)
 
         self.assertEqual(OP_NAME, "python_script_mapper")
+        self.assertEqual(CONFIG_PAGE_KEY, "python_script_builder")
         self.assertEqual(NEED_CTX, True)
         self.assertIsInstance(ops[0], PythonScriptMapper)
         self.assertEqual(ops[0].ctx["userAccount"], "wangjianda.667")
