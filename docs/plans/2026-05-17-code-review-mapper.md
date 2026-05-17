@@ -1,10 +1,10 @@
-# State Review Mapper Implementation Plan
+# Code Review Mapper Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add an ADC business mapper that reviews one configured sample field with trusted Python code and writes review status and reason fields back to each sample.
 
-**Architecture:** Implement a focused mapper under `data_juicer/ops/mapper/ad_ai_data_center` and register it as `state_review_mapper`, without the `ad_ai_data_center` name prefix. Reuse `PythonScriptRunner` for trusted `compile` / `exec` behavior, but wrap it with a review-specific contract so users write `review(value, row, context)` instead of a generic `process(sample, context)`. The mapper remains one-input-one-output; downstream pipeline/export logic can split all/pass/fail datasets by the configured status field.
+**Architecture:** Implement a focused mapper under `data_juicer/ops/mapper/ad_ai_data_center` and register it as `code_review_mapper`, without the `ad_ai_data_center` name prefix. Reuse `PythonScriptRunner` for trusted `compile` / `exec` behavior, but wrap it with a review-specific contract so users write `review(value, row, context)` instead of a generic `process(sample, context)`. The mapper remains one-input-one-output; downstream pipeline/export logic can split all/pass/fail datasets by the configured status field.
 
 **Critical Assumptions & Early Checks:** The review script is trusted and runs in the current Python process, not a sandbox. The backend injects `ctx` because this operator declares `NEED_CTX = True`. The frontend custom page can send the configured field names and `python_code` as plain YAML parameters. The earliest implementation check is config loading through `load_ops(cfg.process)`, because this validates that the frontend-shaped YAML maps to the actual operator constructor.
 
@@ -17,15 +17,15 @@
 Metadata:
 
 ```python
-OP_NAME = "state_review_mapper"
-CONFIG_PAGE_KEY = "state_review_builder"
+OP_NAME = "code_review_mapper"
+CONFIG_PAGE_KEY = "code_review_builder"
 NEED_CTX = True
 ```
 
 File:
 
 ```text
-data_juicer/ops/mapper/ad_ai_data_center/state_review_mapper.py
+data_juicer/ops/mapper/ad_ai_data_center/code_review_mapper.py
 ```
 
 Parameters:
@@ -33,8 +33,8 @@ Parameters:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `input_field` | `str` | Yes | `None` | Field in each sample to review, for example `state`. |
-| `status_field` | `str` | No | `"state_review_status"` | Output field for pass/fail result. |
-| `reason_field` | `str` | No | `"state_review_reason"` | Output field for failure reason or empty string. |
+| `status_field` | `str` | No | `"review_status"` | Output field for pass/fail result. |
+| `reason_field` | `str` | No | `"review_reason"` | Output field for failure reason or empty string. |
 | `python_code` | `str` | Yes | `None` | Trusted Python script that defines the review entrypoint. |
 | `entrypoint` | `str` | No | `"review"` | Function name to call from `python_code`. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
@@ -50,7 +50,7 @@ Arguments:
 
 - `value`: `copy.deepcopy(sample[input_field])`
 - `row`: `copy.deepcopy(sample)`
-- `context`: `{"ctx": ctx, "operator": "state_review_mapper", "input_field": input_field}`
+- `context`: `{"ctx": ctx, "operator": "code_review_mapper", "input_field": input_field}`
 
 Supported return shapes:
 
@@ -98,7 +98,7 @@ Script compile errors, missing entrypoint, missing input field, invalid return s
 
 ```yaml
 process:
-  - state_review_mapper:
+  - code_review_mapper:
       ctx:
         userAccount: "wangjianda.667"
         x-tt-env: "ppe_sirius2"
@@ -108,7 +108,7 @@ process:
         taskId: 30001
         taskVersion: 1
         operatorIndex: 0
-        operatorName: "state_review_mapper"
+        operatorName: "code_review_mapper"
         operatorType: "business"
       input_field: "state"
       status_field: "state_review_status"
@@ -148,7 +148,7 @@ def test_run_with_args_supports_review_entrypoint(self):
     result = runner.run_with_args(
         {"scene": "feed"},
         {"state": {"scene": "feed"}},
-        {"operator": "state_review_mapper"},
+        {"operator": "code_review_mapper"},
     )
 
     self.assertEqual(result, (True, ""))
@@ -200,17 +200,17 @@ git add data_juicer/utils/python_script_utils.py tests/utils/test_python_script_
 git commit -m "Extend Python script runner arguments"
 ```
 
-### Task 2: State Review Mapper
+### Task 2: Code Review Mapper
 
 **Files:**
-- Create: `data_juicer/ops/mapper/ad_ai_data_center/state_review_mapper.py`
-- Test: `tests/ops/mapper/test_state_review_mapper.py`
+- Create: `data_juicer/ops/mapper/ad_ai_data_center/code_review_mapper.py`
+- Test: `tests/ops/mapper/test_code_review_mapper.py`
 
 **Step 1: Write failing tests**
 
 Cover:
 - metadata constants: `OP_NAME`, `CONFIG_PAGE_KEY`, `NEED_CTX`
-- config loading can instantiate `state_review_mapper`
+- config loading can instantiate `code_review_mapper`
 - valid tuple return writes `status_field=True` and `reason_field=""`
 - valid dict return writes `status_field=False` and `reason_field`
 - missing `input_field` in sample reports record failure and raises
@@ -225,18 +225,18 @@ Cover:
 Run:
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_review_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_code_review_mapper
 ```
 
-Expected: fail because `state_review_mapper` is not implemented.
+Expected: fail because `code_review_mapper` is not implemented.
 
 **Step 3: Implement minimal mapper**
 
 Implement:
 
 ```python
-OP_NAME = "state_review_mapper"
-CONFIG_PAGE_KEY = "state_review_builder"
+OP_NAME = "code_review_mapper"
+CONFIG_PAGE_KEY = "code_review_builder"
 NEED_CTX = True
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 ```
@@ -307,7 +307,7 @@ Lifecycle, notification, record callbacks should follow `PythonScriptMapper` pat
 Run:
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_review_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_code_review_mapper
 ```
 
 Expected: pass.
@@ -315,14 +315,14 @@ Expected: pass.
 **Step 5: Commit**
 
 ```bash
-git add data_juicer/ops/mapper/ad_ai_data_center/state_review_mapper.py tests/ops/mapper/test_state_review_mapper.py
-git commit -m "Add state review mapper"
+git add data_juicer/ops/mapper/ad_ai_data_center/code_review_mapper.py tests/ops/mapper/test_code_review_mapper.py
+git commit -m "Add code review mapper"
 ```
 
 ### Task 3: Documentation
 
 **Files:**
-- Create: `docs/plans/2026-05-17-state-review-mapper-usage.md`
+- Create: `docs/plans/2026-05-17-code-review-mapper-usage.md`
 
 **Step 1: Write operator usage doc**
 
@@ -340,7 +340,7 @@ Document:
 Run:
 
 ```bash
-rg -n "state_review_mapper|state_review_builder|state_review_status" docs/plans data_juicer/ops/mapper/ad_ai_data_center tests/ops/mapper
+rg -n "code_review_mapper|code_review_builder|review_status" docs/plans data_juicer/ops/mapper/ad_ai_data_center tests/ops/mapper
 ```
 
 Expected: references are consistent.
@@ -348,8 +348,8 @@ Expected: references are consistent.
 **Step 3: Commit**
 
 ```bash
-git add docs/plans/2026-05-17-state-review-mapper-usage.md
-git commit -m "Document state review mapper"
+git add docs/plans/2026-05-17-code-review-mapper-usage.md
+git commit -m "Document code review mapper"
 ```
 
 ### Task 4: Verification
@@ -357,9 +357,9 @@ git commit -m "Document state review mapper"
 Run:
 
 ```bash
-python3 -m py_compile data_juicer/utils/python_script_utils.py data_juicer/ops/mapper/ad_ai_data_center/state_review_mapper.py tests/utils/test_python_script_utils.py tests/ops/mapper/test_state_review_mapper.py
+python3 -m py_compile data_juicer/utils/python_script_utils.py data_juicer/ops/mapper/ad_ai_data_center/code_review_mapper.py tests/utils/test_python_script_utils.py tests/ops/mapper/test_code_review_mapper.py
 git diff --check
-./.venv/bin/python -m unittest tests.utils.test_python_script_utils tests.ops.mapper.test_state_review_mapper tests.ops.mapper.test_python_script_mapper
+./.venv/bin/python -m unittest tests.utils.test_python_script_utils tests.ops.mapper.test_code_review_mapper tests.ops.mapper.test_python_script_mapper
 ```
 
 Expected: all pass.
@@ -367,7 +367,7 @@ Expected: all pass.
 Run ADC mapper regression if time allows:
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_review_mapper tests.ops.mapper.test_python_script_mapper tests.ops.mapper.test_llm_inference_mapper tests.ops.mapper.test_state_template_mapper tests.ops.mapper.test_prepare_record_key_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_code_review_mapper tests.ops.mapper.test_python_script_mapper tests.ops.mapper.test_llm_inference_mapper tests.ops.mapper.test_state_template_mapper tests.ops.mapper.test_prepare_record_key_mapper
 ```
 
 Expected: all pass.
