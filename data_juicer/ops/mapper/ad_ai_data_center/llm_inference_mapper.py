@@ -145,7 +145,7 @@ class LLMInferenceMapper(Mapper):
             prompt = sample.get(self.prompt_field)
         elif self.prompt_template:
             try:
-                prompt = self.prompt_template.format(**sample)
+                prompt = self.prompt_template.format(**self._normalize_template_values(sample))
             except KeyError as exc:
                 missing_field = exc.args[0]
                 raise ValueError(f"prompt_template missing field: {missing_field}") from exc
@@ -236,6 +236,16 @@ class LLMInferenceMapper(Mapper):
             if value is not None:
                 metadata[key] = value
         return metadata
+
+    @staticmethod
+    def _normalize_template_values(sample: dict[str, Any]) -> dict[str, Any]:
+        values = {}
+        for key, value in sample.items():
+            if isinstance(value, (dict, list)):
+                values[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                values[key] = value
+        return values
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:

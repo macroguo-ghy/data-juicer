@@ -166,11 +166,15 @@ Prompt source precedence:
 2. `prompt_template`
 3. `prompt`
 
-At least one prompt source must be configured. Empty prompt after rendering is invalid.
+At least one prompt source must be configured. Empty prompt after rendering is invalid. `prompt_field` and
+`prompt_template` both read values from the current sample. `prompt_field` treats one sample field as the complete
+prompt. `prompt_template` reads one or more sample fields and renders them into a prompt.
 
 ### Prompt Template Syntax
 
 `prompt_template` uses Python `str.format` style placeholders. A placeholder name must match a field in the current sample.
+Placeholders read top-level sample fields only; nested paths such as `{ctx.userAccount}` are not supported in the
+first version.
 
 Sample:
 
@@ -214,6 +218,80 @@ prompt_template: "请输出 JSON：{{\"summary\": \"...\"}}，内容：{text}"
 ```
 
 This renders literal JSON braces while still replacing `{text}` from the sample.
+
+If a placeholder value is a `dict` or `list`, the mapper serializes it with `json.dumps(..., ensure_ascii=False)`
+before rendering. This keeps object and array fields as standard JSON text instead of Python `dict` / `list` repr.
+
+Sample:
+
+```json
+{
+  "content": {
+    "city": "北京",
+    "weather": "晴朗"
+  },
+  "tags": ["天气", "户外"]
+}
+```
+
+Template:
+
+```yaml
+prompt_template: "请总结对象：{content}；标签：{tags}"
+```
+
+Rendered prompt:
+
+```text
+请总结对象：{"city": "北京", "weather": "晴朗"}；标签：["天气", "户外"]
+```
+
+If the prompt is already prepared in a sample field, use `prompt_field`:
+
+```yaml
+prompt_field: "llm_prompt"
+```
+
+This reads `sample["llm_prompt"]` as the full prompt and does not render `prompt_template`.
+
+### Polling Status Logic
+
+The mapper polls `/result` until the task reaches a terminal state or exceeds `max_poll_attempts`.
+
+Running condition:
+
+```text
+finished = false OR resultStatus = RUNNING
+```
+
+Success condition:
+
+```text
+success is not false
+AND finished = true
+AND (success = true OR resultStatus = SUCCESS)
+```
+
+Failure condition:
+
+```text
+success = false
+OR resultStatus = FAILED
+OR any non-running, non-success terminal response
+```
+
+The error message is selected from `message`, then `resultStatus`, then `status`, then the default
+`LLM inference failed`.
+
+With the default configuration:
+
+```yaml
+poll_interval_seconds: 2
+max_poll_attempts: 60
+```
+
+the normal polling window is about two minutes. The HTTP `timeout` parameter is still applied to each individual
+request, so a stuck request can add extra wait time up to the configured per-request timeout.
 
 ### Output
 
@@ -311,7 +389,8 @@ Validate:
 
 Rules:
 - `prompt_field`: read string from sample
-- `prompt_template`: render with `prompt_template.format(**sample)`
+- `prompt_template`: render with normalized sample fields
+- `dict` and `list` template values are serialized as JSON strings before rendering
 - `prompt`: use static string
 - missing template field should raise `ValueError` with the missing field name
 

@@ -275,6 +275,26 @@ process:
         with self.assertRaisesRegex(ValueError, "missing"):
             op.process_single({RECORD_KEY_FIELD: "record-1"})
 
+    def test_prompt_template_renders_dict_and_list_fields_as_json(self):
+        op = LLMInferenceMapper(
+            prompt_template="请总结对象：{content}；标签：{tags}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "content": {
+                "city": "北京",
+                "weather": "晴朗",
+            },
+            "tags": ["天气", "户外"],
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(
+            prompt,
+            '请总结对象：{"city": "北京", "weather": "晴朗"}；标签：["天气", "户外"]',
+        )
+
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_failed_result_reports_record_failure_and_raises(self, mock_client_cls):
         submit_client = FakeHttpClient(success_envelope(self._submit_data()))
