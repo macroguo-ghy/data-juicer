@@ -28,7 +28,10 @@ class PythonScriptRunner:
         self.process_func = self._compile_process_func(python_code, entrypoint)
 
     def run(self, data: Any, context: dict[str, Any] | None = None):
-        result = self.process_func(data, context or {})
+        return self.run_with_args(data, context or {})
+
+    def run_with_args(self, *args):
+        result = self.process_func(*args)
         if self.require_dict_result and not isinstance(result, dict):
             raise ValueError(
                 "python_code result must be a dictionary, "

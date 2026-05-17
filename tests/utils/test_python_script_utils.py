@@ -43,9 +43,44 @@ def process(sample, context):
 
         self.assertIsInstance(result["ts"], int)
 
+    def test_run_with_args_supports_review_entrypoint(self):
+        runner = PythonScriptRunner(
+            python_code=(
+                "def review(value, row, context):\n"
+                "    return value == row['state'], ''\n"
+            ),
+            entrypoint="review",
+            require_dict_result=False,
+        )
+
+        result = runner.run_with_args(
+            {"scene": "feed"},
+            {"state": {"scene": "feed"}},
+            {"operator": "code_review_mapper"},
+        )
+
+        self.assertEqual(result, (True, ""))
+
+    def test_run_with_args_keeps_runtime_exception_message(self):
+        runner = PythonScriptRunner(
+            python_code=(
+                "def review(value, row, context):\n"
+                "    raise ValueError('review failed')\n"
+            ),
+            entrypoint="review",
+            require_dict_result=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "review failed"):
+            runner.run_with_args("value", {}, {})
+
     def test_rejects_missing_entrypoint(self):
         with self.assertRaisesRegex(ValueError, "python_code must define a callable process"):
             PythonScriptRunner("x = 1")
+
+    def test_rejects_missing_review_entrypoint(self):
+        with self.assertRaisesRegex(ValueError, "python_code must define a callable review"):
+            PythonScriptRunner("x = 1", entrypoint="review", require_dict_result=False)
 
     def test_rejects_non_dict_result(self):
         runner = PythonScriptRunner(
