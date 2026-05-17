@@ -222,16 +222,13 @@ process:
         }])
         self.assertEqual(running_client.requests, [{"json_body": {"taskId": "task-001"}}])
         self.assertEqual(success_client.requests, [{"json_body": {"taskId": "task-001"}}])
-        self.assertEqual(result[0]["llm_output"], {"summary": "hello summary"})
+        self.assertEqual(result[0]["llm_output"], '{"summary": "hello summary"}')
         self.assertEqual(
             result[0]["llm_metadata"],
-            {
-                "taskId": "task-001",
-                "conversationId": "conv-001",
-                "requestId": "req-001",
-                "resultStatus": "SUCCESS",
-                "status": "success",
-            },
+            (
+                '{"taskId": "task-001", "conversationId": "conv-001", '
+                '"requestId": "req-001", "resultStatus": "SUCCESS", "status": "success"}'
+            ),
         )
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key="record-1",
@@ -265,6 +262,30 @@ process:
             "prompt": "direct prompt",
             "model": "",
         })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
+    def test_string_output_is_preserved_and_metadata_is_stringified(self, mock_client_cls):
+        submit_client = FakeHttpClient(success_envelope(self._submit_data()))
+        success_data = self._success_result_data()
+        success_data["output"] = "plain text summary"
+        success_client = FakeHttpClient(success_envelope(success_data))
+        mock_client_cls.side_effect = [submit_client, success_client]
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            poll_interval_seconds=0,
+        )
+
+        result = op.process_single({RECORD_KEY_FIELD: "record-1"})
+
+        self.assertEqual(result["llm_output"], "plain text summary")
+        self.assertEqual(
+            result["llm_metadata"],
+            (
+                '{"taskId": "task-001", "conversationId": "conv-001", '
+                '"requestId": "req-001", "resultStatus": "SUCCESS", "status": "success"}'
+            ),
+        )
 
     def test_rejects_missing_prompt_template_field(self):
         op = LLMInferenceMapper(

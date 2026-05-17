@@ -139,9 +139,8 @@ print(f"Write Success. Snapshot: {snapshot}")
 
 ## 3. Create Output Table
 
-For this smoke test, define `llm_output` as `string` because the current LLM service can return plain text output,
-for example `"上海通勤提醒指出明天早高峰可能有小雨..."`. `llm_metadata` is still a dictionary, so define it as a
-struct.
+For this smoke test, define both `llm_output` and `llm_metadata` as `string`. `llm_inference_mapper` writes the LLM
+result as text and writes metadata as a JSON string to avoid Lance/PyArrow struct field-order issues.
 
 ```python
 import pyarrow as pa
@@ -174,16 +173,7 @@ output_schema = pa.schema([
         ]),
     ),
     pa.field("llm_output", pa.string()),
-    pa.field(
-        "llm_metadata",
-        pa.struct([
-            pa.field("taskId", pa.string()),
-            pa.field("conversationId", pa.string()),
-            pa.field("requestId", pa.string()),
-            pa.field("resultStatus", pa.string()),
-            pa.field("status", pa.string()),
-        ]),
-    ),
+    pa.field("llm_metadata", pa.string()),
 ])
 
 output_table = magnus_client.create_table(
@@ -257,16 +247,10 @@ After the operator succeeds, each output row should keep the original fields and
 ```json
 {
   "llm_output": "上海通勤提醒指出明天早高峰可能有小雨，建议提前出门并携带雨具。",
-  "llm_metadata": {
-    "taskId": "task-xxx",
-    "conversationId": "conv-xxx",
-    "requestId": "req-xxx",
-    "resultStatus": "SUCCESS",
-    "status": "success"
-  }
+  "llm_metadata": "{\"taskId\": \"task-xxx\", \"conversationId\": \"conv-xxx\", \"requestId\": \"req-xxx\", \"resultStatus\": \"SUCCESS\", \"status\": \"success\"}"
 }
 ```
 
 `llm_metadata` normally includes task metadata such as `taskId`, `conversationId`, `requestId`, `resultStatus`, and
-`status`. If the LLM service returns object output in another scenario, adjust `llm_output` in the output table schema
-to match the actual response, or add a downstream step that stringifies the object before writing to a string column.
+`status`, stored as a JSON string. If the LLM service returns object output in another scenario, the mapper also
+stringifies it before writing to `llm_output`.

@@ -95,8 +95,8 @@ class LLMInferenceMapper(Mapper):
             output = result_data.get("output")
             self._ensure_json_serializable(output)
 
-            sample[self.output_field] = output
-            sample[self.metadata_field] = self._build_metadata(result_data)
+            sample[self.output_field] = self._stringify_storage_value(output)
+            sample[self.metadata_field] = self._stringify_storage_value(self._build_metadata(result_data))
         except Exception as exc:
             self._report_record_failure(
                 input_sample,
@@ -351,6 +351,12 @@ class LLMInferenceMapper(Mapper):
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False)
         return value
+
+    @staticmethod
+    def _stringify_storage_value(value):
+        if value is None or isinstance(value, str):
+            return value
+        return json.dumps(value, ensure_ascii=False)
 
     @staticmethod
     def _ensure_json_serializable(value):

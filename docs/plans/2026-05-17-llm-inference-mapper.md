@@ -153,8 +153,8 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 | `prompt_template` | `str` | No | `None` | Prompt template formatted with sample fields, for example `请总结：{text}`. |
 | `prompt_field` | `str` | No | `None` | Field name that stores the prompt in each sample. |
 | `model` | `str` | No | `""` | Model name. Empty string is sent when not configured. |
-| `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output`. |
-| `metadata_field` | `str` | No | `"llm_metadata"` | Field used to store task metadata such as `taskId`, `conversationId`, and `requestId`. |
+| `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output` as a string. Object and array outputs are JSON-stringified. |
+| `metadata_field` | `str` | No | `"llm_metadata"` | Field used to store JSON-stringified task metadata such as `taskId`, `conversationId`, and `requestId`. |
 | `poll_interval_seconds` | `float` | No | `2.0` | Sleep time between result polling requests. |
 | `max_poll_attempts` | `int` | No | `60` | Maximum result polling attempts before timeout. |
 | `timeout` | `float` | No | `30.0` | HTTP request timeout in seconds. |
@@ -353,20 +353,15 @@ For a successful inference, the mapper returns the full sample with:
 
 ```json
 {
-  "llm_output": {
-    "summary": "这里是生成结果"
-  },
-  "llm_metadata": {
-    "taskId": "task-xxx",
-    "conversationId": "conv-xxx",
-    "requestId": "req-xxx",
-    "resultStatus": "SUCCESS",
-    "status": "success"
-  }
+  "llm_output": "这里是生成结果",
+  "llm_metadata": "{\"taskId\": \"task-xxx\", \"conversationId\": \"conv-xxx\", \"requestId\": \"req-xxx\", \"resultStatus\": \"SUCCESS\", \"status\": \"success\"}"
 }
 ```
 
-The operator stores the server `output` value as-is. It must be JSON serializable so the downstream Lance/Magnus writer can persist it safely.
+The operator stores the server `output` as a string to avoid Lance/PyArrow dynamic struct schema issues. If `output`
+is already a string, it is preserved. If `output` is a `dict`, `list`, number, or boolean, it is serialized with
+`json.dumps(..., ensure_ascii=False)`. `llm_metadata` is always stored as a JSON string. This avoids PyArrow struct
+field-order failures when writing to Lance/Magnus tables.
 
 ### YAML Example
 
@@ -408,7 +403,7 @@ Cover:
 - prompt can be built from `prompt_template`
 - submit request posts `prompt` and `model`
 - result polling retries while `resultStatus = RUNNING`
-- success writes `output_field` and `metadata_field`
+- success writes `output_field` and `metadata_field` as strings
 - failed result raises `ValueError` with response `message`
 - missing `taskId` raises a clear `ValueError`
 - timeout after `max_poll_attempts` raises a clear `TimeoutError`
@@ -479,7 +474,7 @@ Flow:
 2. require returned `data.taskId`
 3. loop result call
 4. if `resultStatus = RUNNING` or `finished = false`, sleep and continue
-5. if `resultStatus = SUCCESS` and `success is True`, write output and metadata
+5. if `resultStatus = SUCCESS` and `success is True`, write stringified output and metadata
 6. if `resultStatus = FAILED` or `success is False`, raise `ValueError(message)`
 7. after `max_poll_attempts`, raise `TimeoutError`
 
