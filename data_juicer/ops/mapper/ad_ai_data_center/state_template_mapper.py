@@ -17,7 +17,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 OP_NAME = "state_template_mapper"
 CONFIG_PAGE_KEY = "state_template_builder"
 NEED_CTX = True
-GENERATE_JSON_PATH = "/state-meta/generate-json"
+GENERATE_JSON_PATH = "/openapi/state-meta/generate-json"
 
 
 @OPERATORS.register_module(OP_NAME)

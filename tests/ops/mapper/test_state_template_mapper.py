@@ -103,6 +103,7 @@ class StateTemplateMapperTest(unittest.TestCase):
         self.assertEqual(OP_NAME, "state_template_mapper")
         self.assertEqual(CONFIG_PAGE_KEY, "state_template_builder")
         self.assertEqual(NEED_CTX, True)
+        self.assertEqual(GENERATE_JSON_PATH, "/openapi/state-meta/generate-json")
 
     def test_config_loads_operator_name_without_ad_ai_data_center_prefix(self):
         config_path = Path("/private/tmp/state_template_mapper_config_test.yaml")
@@ -168,8 +169,8 @@ process:
 
         mock_client_cls.assert_called_once_with(
             endpoint=(
-                "https://ai-data-center.bytedance.net/api"
-                f"{GENERATE_JSON_PATH}"
+                "https://ai-data-center.bytedance.net/api/"
+                "openapi/state-meta/generate-json"
             ),
             method="POST",
             headers={

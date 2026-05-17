@@ -48,7 +48,7 @@ The operator does not distinguish attribute IDs from operator IDs. It passes the
 The operator calls:
 
 ```http
-POST {ctx.apiBase}/state-meta/generate-json
+POST {ctx.apiBase}/openapi/state-meta/generate-json
 Content-Type: application/json
 ```
 
