@@ -295,6 +295,49 @@ process:
             '请总结对象：{"city": "北京", "weather": "晴朗"}；标签：["天气", "户外"]',
         )
 
+    def test_prompt_template_resolves_nested_object_and_array_paths(self):
+        op = LLMInferenceMapper(
+            prompt_template="城市：{a.b.d}；指标：{items[*].metric}；名称：{items[].name}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "a": {
+                "b": {
+                    "d": "北京",
+                },
+            },
+            "items": [
+                {
+                    "metric": 1,
+                    "name": "曝光",
+                },
+                {
+                    "metric": 2,
+                    "name": "点击",
+                },
+            ],
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, '城市：北京；指标：[1, 2]；名称：["曝光", "点击"]')
+
+    def test_prompt_template_only_serializes_referenced_fields(self):
+        op = LLMInferenceMapper(
+            prompt_template="请总结：{text}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "text": "hello",
+            "unused": {
+                "raw": b"abc",
+            },
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, "请总结：hello")
+
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_failed_result_reports_record_failure_and_raises(self, mock_client_cls):
         submit_client = FakeHttpClient(success_envelope(self._submit_data()))

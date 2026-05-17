@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import string
 import time
 from typing import Any
 
@@ -145,7 +146,7 @@ class LLMInferenceMapper(Mapper):
             prompt = sample.get(self.prompt_field)
         elif self.prompt_template:
             try:
-                prompt = self.prompt_template.format(**self._normalize_template_values(sample))
+                prompt = _SamplePromptFormatter(sample).format(self.prompt_template)
             except KeyError as exc:
                 missing_field = exc.args[0]
                 raise ValueError(f"prompt_template missing field: {missing_field}") from exc
@@ -236,16 +237,6 @@ class LLMInferenceMapper(Mapper):
             if value is not None:
                 metadata[key] = value
         return metadata
-
-    @staticmethod
-    def _normalize_template_values(sample: dict[str, Any]) -> dict[str, Any]:
-        values = {}
-        for key, value in sample.items():
-            if isinstance(value, (dict, list)):
-                values[key] = json.dumps(value, ensure_ascii=False)
-            else:
-                values[key] = value
-        return values
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
@@ -367,3 +358,69 @@ class LLMInferenceMapper(Mapper):
             json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"LLM inference output must be JSON serializable: {exc}") from exc
+
+
+class _SamplePromptFormatter(string.Formatter):
+    """Render prompt placeholders from sample fields with limited path support."""
+
+    def __init__(self, sample: dict[str, Any]):
+        super().__init__()
+        self.sample = sample
+
+    def get_field(self, field_name, args, kwargs):
+        value = self._resolve_path(self.sample, self._parse_path(field_name), field_name)
+        return self._stringify_template_value(field_name, value), field_name
+
+    @staticmethod
+    def _parse_path(field_name: str) -> list[tuple[str, bool]]:
+        segments = []
+        for segment in field_name.split("."):
+            if not segment:
+                raise ValueError(f"prompt_template invalid field path: {field_name}")
+            if segment.endswith("[*]"):
+                name = segment[:-3]
+                wildcard = True
+            elif segment.endswith("[]"):
+                name = segment[:-2]
+                wildcard = True
+            elif "[" in segment or "]" in segment:
+                raise ValueError(
+                    f"prompt_template unsupported array index in field path: {field_name}"
+                )
+            else:
+                name = segment
+                wildcard = False
+            if not name:
+                raise ValueError(f"prompt_template invalid field path: {field_name}")
+            segments.append((name, wildcard))
+        return segments
+
+    @classmethod
+    def _resolve_path(cls, value, segments: list[tuple[str, bool]], field_name: str):
+        if not segments:
+            return value
+
+        name, wildcard = segments[0]
+        child = cls._get_child_value(value, name, field_name)
+        if wildcard:
+            if not isinstance(child, list):
+                raise ValueError(f"prompt_template field must be a list: {field_name}")
+            return [cls._resolve_path(item, segments[1:], field_name) for item in child]
+        return cls._resolve_path(child, segments[1:], field_name)
+
+    @staticmethod
+    def _get_child_value(value, name: str, field_name: str):
+        if isinstance(value, dict) and name in value:
+            return value[name]
+        raise KeyError(field_name)
+
+    @staticmethod
+    def _stringify_template_value(field_name: str, value):
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"prompt_template field is not JSON serializable: {field_name}"
+                ) from exc
+        return value

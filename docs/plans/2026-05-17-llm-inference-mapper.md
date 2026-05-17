@@ -172,9 +172,8 @@ prompt. `prompt_template` reads one or more sample fields and renders them into 
 
 ### Prompt Template Syntax
 
-`prompt_template` uses Python `str.format` style placeholders. A placeholder name must match a field in the current sample.
-Placeholders read top-level sample fields only; nested paths such as `{ctx.userAccount}` are not supported in the
-first version.
+`prompt_template` uses Python `str.format` style placeholders. A placeholder name must match a field path in the
+current sample.
 
 Sample:
 
@@ -221,6 +220,8 @@ This renders literal JSON braces while still replacing `{text}` from the sample.
 
 If a placeholder value is a `dict` or `list`, the mapper serializes it with `json.dumps(..., ensure_ascii=False)`
 before rendering. This keeps object and array fields as standard JSON text instead of Python `dict` / `list` repr.
+The mapper only resolves and serializes fields referenced by placeholders, so unrelated complex fields in the sample
+do not affect prompt rendering.
 
 Sample:
 
@@ -244,6 +245,59 @@ Rendered prompt:
 
 ```text
 请总结对象：{"city": "北京", "weather": "晴朗"}；标签：["天气", "户外"]
+```
+
+Object fields can be addressed with dot paths:
+
+```json
+{
+  "a": {
+    "b": {
+      "d": "北京"
+    }
+  }
+}
+```
+
+Template:
+
+```yaml
+prompt_template: "城市：{a.b.d}"
+```
+
+Rendered prompt:
+
+```text
+城市：北京
+```
+
+Array-object fields support whole-array expansion with `[]` or `[*]`. Specific numeric indexes are not supported.
+
+```json
+{
+  "items": [
+    {
+      "metric": 1,
+      "name": "曝光"
+    },
+    {
+      "metric": 2,
+      "name": "点击"
+    }
+  ]
+}
+```
+
+Template:
+
+```yaml
+prompt_template: "指标：{items[*].metric}；名称：{items[].name}"
+```
+
+Rendered prompt:
+
+```text
+指标：[1, 2]；名称：["曝光", "点击"]
 ```
 
 If the prompt is already prepared in a sample field, use `prompt_field`:
@@ -390,6 +444,9 @@ Validate:
 Rules:
 - `prompt_field`: read string from sample
 - `prompt_template`: render with normalized sample fields
+- only referenced placeholders are resolved and serialized
+- nested object paths use dot syntax, for example `{a.b.d}`
+- array-object paths support `[]` and `[*]` as whole-array expansion, for example `{items[*].name}`
 - `dict` and `list` template values are serialized as JSON strings before rendering
 - `prompt`: use static string
 - missing template field should raise `ValueError` with the missing field name
