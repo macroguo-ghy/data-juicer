@@ -22,7 +22,7 @@ GENERATE_JSON_PATH = "/state-meta/generate-json"
 
 @OPERATORS.register_module(OP_NAME)
 class StateTemplateMapper(Mapper):
-    """Generate a state_template object from selected State metadata IDs."""
+    """Generate a state_template string from selected State metadata IDs."""
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class StateTemplateMapper(Mapper):
         Initialization method.
 
         :param state_meta_group_items: group name to selected attribute/operator IDs.
-        :param output_field: field used to store the generated state template object.
+        :param output_field: field used to store the generated state template string.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
         :param args: extra args.
@@ -53,6 +53,7 @@ class StateTemplateMapper(Mapper):
         self.output_field = output_field
         self.ctx = ctx
         self.timeout = timeout
+        self._state_template_cache = None
         self._operator_execution_callback_client = None
 
     def process_single(self, sample):
@@ -60,7 +61,7 @@ class StateTemplateMapper(Mapper):
         record_started_at = current_time_millis()
         input_sample = copy.deepcopy(sample)
         try:
-            state_template = self._generate_state_template(ctx)
+            state_template = self._get_state_template(ctx)
             sample[self.output_field] = state_template
         except Exception as exc:
             self._report_record_failure(
@@ -94,7 +95,12 @@ class StateTemplateMapper(Mapper):
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
 
-    def _generate_state_template(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    def _get_state_template(self, ctx: dict[str, Any]) -> str:
+        if self._state_template_cache is None:
+            self._state_template_cache = self._generate_state_template(ctx)
+        return self._state_template_cache
+
+    def _generate_state_template(self, ctx: dict[str, Any]) -> str:
         client = HttpClient(
             endpoint=self._build_openapi_url(ctx, GENERATE_JSON_PATH),
             method="POST",
@@ -123,7 +129,7 @@ class StateTemplateMapper(Mapper):
         return data
 
     @staticmethod
-    def _parse_state_template(data) -> dict[str, Any]:
+    def _parse_state_template(data) -> str:
         if isinstance(data, str):
             try:
                 data = json.loads(data)
@@ -131,7 +137,7 @@ class StateTemplateMapper(Mapper):
                 raise ValueError("state template response data must be a JSON object string") from exc
         if not isinstance(data, dict):
             raise ValueError("state template response data must be a dictionary")
-        return data
+        return json.dumps(data, ensure_ascii=False)
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:

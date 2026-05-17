@@ -4,7 +4,7 @@
 
 Add an ADC business mapper that generates `state_template` from selected State metadata. Users configure selected
 State groups and IDs in the frontend; the operator calls AD AI Data Center OpenAPI at runtime and writes the generated
-template into each sample.
+template JSON string into each sample.
 
 ## Operator Metadata
 
@@ -28,7 +28,7 @@ and is not passed to `@OPERATORS.register_module(...)`.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `state_meta_group_items` | `dict[str, list[int]]` | Yes | `None` | State group English name to selected attribute/operator ID list. |
-| `output_field` | `str` | No | `"state_template"` | Field used to store the generated template object. |
+| `output_field` | `str` | No | `"state_template"` | Field used to store the generated template JSON string. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
 | `timeout` | `float` | No | `30.0` | HTTP request timeout in seconds. |
 
@@ -79,26 +79,25 @@ Headers:
 
 ## Output
 
-The backend may return either a JSON object or a JSON object string. The mapper normalizes both into a Python object
-and writes it to `output_field`.
+The backend may return either a JSON object or a JSON object string. The mapper validates the value as a JSON object
+and writes a normalized JSON string to `output_field`.
 
 Example output sample:
 
 ```json
 {
-  "state_template": {
-    "ad_state": {
-      "ad_material_clicks": {
-        "cn_name": "素材点击数",
-        "description": "素材每日点击数 14日序列",
-        "format_requirement": "14个元素的整数数组，非负"
-      }
-    }
-  }
+  "state_template": "{\"ad_state\": {\"ad_material_clicks\": {\"cn_name\": \"素材点击数\", \"description\": \"素材每日点击数 14日序列\", \"format_requirement\": \"14个元素的整数数组，非负\"}}}"
 }
 ```
 
 If the backend returns a non-object JSON value or a malformed JSON string, the mapper raises `ValueError`.
+
+The generated template only depends on operator configuration, not on each sample. The mapper caches it inside the
+operator instance after the first successful API call. In Ray execution, each worker can have its own operator
+instance, so the API may be called once per worker, but not once per record in the same worker.
+
+The string output is intentional. Downstream LLM prompt templates can use `{state_template}` directly, and Lance/Magnus
+output tables can use a simple string column instead of a dynamic struct schema.
 
 ## YAML Example
 
@@ -153,4 +152,3 @@ Broader ADC mapper regression:
 ```bash
 ./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper tests.ops.mapper.test_llm_inference_mapper tests.ops.mapper.test_ad_ai_data_center_http_mapper tests.ops.mapper.test_python_script_mapper tests.ops.mapper.test_prepare_record_key_mapper tests.ops.mapper.test_external_eval_data_import_mapper
 ```
-

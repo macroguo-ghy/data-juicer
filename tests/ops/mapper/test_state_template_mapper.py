@@ -188,13 +188,7 @@ process:
         }])
         self.assertEqual(
             result[0]["state_template"],
-            {
-                "ad_state": {
-                    "ad_material_clicks": {
-                        "cn_name": "素材点击数",
-                    }
-                }
-            },
+            '{"ad_state": {"ad_material_clicks": {"cn_name": "素材点击数"}}}',
         )
         self.mock_callback.report_record_success.assert_called_once_with(
             record_key="record-1",
@@ -219,7 +213,46 @@ process:
             RECORD_KEY_FIELD: "record-1",
         })
 
-        self.assertEqual(result["state_template"], self._state_template())
+        self.assertEqual(
+            result["state_template"],
+            (
+                '{"ad_state": {"ad_material_clicks": {"cn_name": "素材点击数", '
+                '"description": "素材每日点击数 14日序列", '
+                '"format_requirement": "14个元素的整数数组，非负"}}}'
+            ),
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_template_mapper.HttpClient")
+    def test_caches_generated_state_template_in_operator_instance(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope(
+            '{"ad_state": {"ad_material_clicks": {"cn_name": "素材点击数"}}}'
+        ))
+        mock_client_cls.return_value = fake_client
+        op = StateTemplateMapper(
+            state_meta_group_items=self._state_meta_group_items(),
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+        dataset = Dataset.from_list([
+            {
+                "text": "row-1",
+                RECORD_KEY_FIELD: "record-1",
+            },
+            {
+                "text": "row-2",
+                RECORD_KEY_FIELD: "record-2",
+            },
+        ])
+
+        result = op.run(dataset).to_list()
+
+        mock_client_cls.assert_called_once()
+        self.assertEqual(len(fake_client.requests), 1)
+        self.assertEqual(
+            result[0]["state_template"],
+            '{"ad_state": {"ad_material_clicks": {"cn_name": "素材点击数"}}}',
+        )
+        self.assertEqual(result[1]["state_template"], result[0]["state_template"])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_template_mapper.HttpClient")
     def test_http_failure_reports_record_failure_and_raises(self, mock_client_cls):
