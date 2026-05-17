@@ -168,6 +168,53 @@ Prompt source precedence:
 
 At least one prompt source must be configured. Empty prompt after rendering is invalid.
 
+### Prompt Template Syntax
+
+`prompt_template` uses Python `str.format` style placeholders. A placeholder name must match a field in the current sample.
+
+Sample:
+
+```json
+{
+  "title": "文章标题",
+  "text": "这是一段长文本"
+}
+```
+
+Template:
+
+```yaml
+prompt_template: "请总结文章《{title}》：{text}"
+```
+
+Rendered prompt:
+
+```text
+请总结文章《文章标题》：这是一段长文本
+```
+
+For multiline prompts, use a YAML block scalar:
+
+```yaml
+prompt_template: |
+  请根据以下信息生成摘要：
+
+  标题：{title}
+
+  正文：
+  {text}
+```
+
+If a placeholder field is missing from the sample, the mapper should raise a clear `ValueError` that includes the missing field name.
+
+To include a literal `{` or `}` in the prompt, escape it with double braces:
+
+```yaml
+prompt_template: "请输出 JSON：{{\"summary\": \"...\"}}，内容：{text}"
+```
+
+This renders literal JSON braces while still replacing `{text}` from the sample.
+
 ### Output
 
 For a successful inference, the mapper returns the full sample with:
