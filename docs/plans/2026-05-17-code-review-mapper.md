@@ -68,7 +68,7 @@ return {
 Normalize return values as:
 
 - `passed`: `bool`
-- `reason`: `str`, default `""` when passed and no reason is returned
+- `reason`: `str`, return `""` when there is no failure reason
 
 The mapper output keeps the original sample fields and adds / overwrites `status_field` and `reason_field`.
 
@@ -293,10 +293,8 @@ def _normalize_review_result(self, result):
         raise ValueError("review result must be (passed, reason) or a dictionary")
     if not isinstance(passed, bool):
         raise ValueError("review passed must be a boolean")
-    if reason is None:
-        reason = ""
     if not isinstance(reason, str):
-        reason = str(reason)
+        raise ValueError("review reason must be a string")
     return passed, reason
 ```
 

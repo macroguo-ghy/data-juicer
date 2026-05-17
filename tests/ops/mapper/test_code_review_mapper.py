@@ -197,6 +197,21 @@ process:
 
         self.mock_callback.report_record_failure.assert_called_once()
 
+    def test_non_string_reason_reports_record_failure_and_raises(self):
+        op = CodeReviewMapper(
+            input_field="state",
+            python_code="def review(value, row, context):\n    return False, 123",
+            ctx=self._ctx(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "review reason must be a string"):
+            op.process_single({
+                RECORD_KEY_FIELD: "record-1",
+                "state": {},
+            })
+
+        self.mock_callback.report_record_failure.assert_called_once()
+
     def test_script_runtime_exception_reports_record_failure_and_raises(self):
         op = CodeReviewMapper(
             input_field="state",

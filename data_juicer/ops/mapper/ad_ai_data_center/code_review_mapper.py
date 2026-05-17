@@ -165,10 +165,8 @@ class CodeReviewMapper(Mapper):
 
         if not isinstance(passed, bool):
             raise ValueError("review passed must be a boolean")
-        if reason is None:
-            reason = ""
         if not isinstance(reason, str):
-            reason = str(reason)
+            raise ValueError("review reason must be a string")
         return passed, reason
 
     def _try_send_test_card_notification(self, stage: str, content: dict[str, Any], err_msg: str):

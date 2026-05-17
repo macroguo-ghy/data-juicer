@@ -75,7 +75,7 @@ return {
 }
 ```
 
-`passed` must be a boolean. `reason` is normalized to a string; `None` becomes `""`.
+`passed` must be a boolean. `reason` must be a string; return `""` when there is no failure reason.
 
 ## Output
 
