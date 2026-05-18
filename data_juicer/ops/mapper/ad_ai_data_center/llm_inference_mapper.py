@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import string
 import time
 from typing import Any
@@ -148,7 +149,10 @@ class LLMInferenceMapper(Mapper):
             prompt = sample.get(self.prompt_field)
         elif self.prompt_template:
             try:
-                prompt = _SamplePromptFormatter(sample).format(self.prompt_template)
+                prompt_template = _SamplePromptFormatter.normalize_template(
+                    self.prompt_template
+                )
+                prompt = _SamplePromptFormatter(sample).format(prompt_template)
             except KeyError as exc:
                 missing_field = exc.args[0]
                 raise ValueError(f"prompt_template missing field: {missing_field}") from exc
@@ -371,9 +375,18 @@ class LLMInferenceMapper(Mapper):
 class _SamplePromptFormatter(string.Formatter):
     """Render prompt placeholders from sample fields with limited path support."""
 
+    JINJA_FIELD_PATTERN = re.compile(
+        r"{{\s*([A-Za-z_][A-Za-z0-9_]*(?:\[\*\]|\[\])?"
+        r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\*\]|\[\])?)*)\s*}}"
+    )
+
     def __init__(self, sample: dict[str, Any]):
         super().__init__()
         self.sample = sample
+
+    @classmethod
+    def normalize_template(cls, template: str) -> str:
+        return cls.JINJA_FIELD_PATTERN.sub(r"{\1}", template)
 
     def get_field(self, field_name, args, kwargs):
         value = self._resolve_path(self.sample, self._parse_path(field_name), field_name)

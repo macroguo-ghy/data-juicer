@@ -361,6 +361,43 @@ process:
 
         self.assertEqual(prompt, '城市：北京；指标：[1, 2]；名称：["曝光", "点击"]')
 
+    def test_prompt_template_supports_jinja_style_placeholders(self):
+        op = LLMInferenceMapper(
+            prompt_template=(
+                "模板：{{ state_template }}；"
+                "城市：{{a.b.d}}；"
+                "指标：{{ items[*].metric }}"
+            ),
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "state_template": {
+                "ad_state": {
+                    "click_rate": "点击率",
+                },
+            },
+            "a": {
+                "b": {
+                    "d": "北京",
+                },
+            },
+            "items": [
+                {
+                    "metric": 1,
+                },
+                {
+                    "metric": 2,
+                },
+            ],
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(
+            prompt,
+            '模板：{"ad_state": {"click_rate": "点击率"}}；城市：北京；指标：[1, 2]',
+        )
+
     def test_prompt_template_only_serializes_referenced_fields(self):
         op = LLMInferenceMapper(
             prompt_template="请总结：{text}",

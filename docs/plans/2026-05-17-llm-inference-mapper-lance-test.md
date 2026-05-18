@@ -1,14 +1,15 @@
 # LLM Inference Mapper Lance Test Guide
 
 This guide shows how to test `llm_inference_mapper` with Lance source and output tables. The test focuses on
-`prompt_template` variable rendering, including nested object fields and array-object expansion.
+`prompt_template` variable rendering, including Jinja-style placeholders, nested object fields, and array-object
+expansion.
 
 ## Test Goal
 
 Verify that the mapper can render prompts from source samples like:
 
-- object path: `{article.title}`, `{article.body}`
-- array-object path: `{metrics[*].name}`, `{metrics[].value}`
+- object path: `{{ article.title }}`, `{{ article.body }}`
+- array-object path: `{{ metrics[*].name }}`, `{{ metrics[].value }}`
 - unrelated fields are ignored when they are not referenced by the prompt template
 
 ## 1. Create Source Table
@@ -189,7 +190,7 @@ output_table = magnus_client.create_table(
 
 ## 4. Operator YAML
 
-Configure `prompt_template` with nested object paths and array-object expansion.
+Configure `prompt_template` with Jinja-style nested object paths and array-object expansion.
 
 ```yaml
 process:
@@ -208,10 +209,10 @@ process:
       prompt_template: |
         请根据以下内容生成一句话摘要。
 
-        标题：{article.title}
-        正文：{article.body}
-        指标名称：{metrics[*].name}
-        指标数值：{metrics[].value}
+        标题：{{ article.title }}
+        正文：{{ article.body }}
+        指标名称：{{ metrics[*].name }}
+        指标数值：{{ metrics[].value }}
       model: "doubao"
       output_field: "llm_output"
       poll_interval_seconds: 2

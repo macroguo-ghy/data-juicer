@@ -172,8 +172,8 @@ prompt. `prompt_template` reads one or more sample fields and renders them into 
 
 ### Prompt Template Syntax
 
-`prompt_template` uses Python `str.format` style placeholders. A placeholder name must match a field path in the
-current sample.
+`prompt_template` supports both Python `str.format` style placeholders and Jinja-style field placeholders. A
+placeholder name must match a field path in the current sample.
 
 Sample:
 
@@ -188,6 +188,12 @@ Template:
 
 ```yaml
 prompt_template: "请总结文章《{title}》：{text}"
+```
+
+Equivalent Jinja-style template:
+
+```yaml
+prompt_template: "请总结文章《{{ title }}》：{{ text }}"
 ```
 
 Rendered prompt:
@@ -217,6 +223,17 @@ prompt_template: "请输出 JSON：{{\"summary\": \"...\"}}，内容：{text}"
 ```
 
 This renders literal JSON braces while still replacing `{text}` from the sample.
+
+Jinja-style placeholders support the same field paths as single-brace placeholders:
+
+```yaml
+prompt_template: |
+  State 模板：
+  {{ state_template }}
+
+  城市：{{ a.b.d }}
+  指标：{{ items[*].metric }}
+```
 
 If a placeholder value is a `dict` or `list`, the mapper serializes it with `json.dumps(..., ensure_ascii=False)`
 before rendering. This keeps object and array fields as standard JSON text instead of Python `dict` / `list` repr.
