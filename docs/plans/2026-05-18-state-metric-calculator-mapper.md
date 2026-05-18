@@ -84,6 +84,10 @@ If a required parameter cannot be resolved, that metric output is marked as `suc
 those unused parameter definitions. Invalid JSON strings in `sample[state_key]` are recorded as metric failures and do
 not require every metric script to parse JSON by itself.
 
+If `calculate(...)` returns a `dict` or `list`, the mapper serializes that metric `value` with
+`json.dumps(..., ensure_ascii=False)` before writing it back to the sample. This avoids unstable nested Arrow schemas
+when different records return complex values or failures.
+
 ## Output
 
 The mapper writes an object to `output_key`:

@@ -143,6 +143,10 @@ success, value, error, operator_id, operator_name_cn
 
 Define one nested struct field per expected `operatorNameEn`.
 
+The schema below is for numeric metric values. If a selected metric returns a `dict` or `list`, the mapper stores that
+metric `value` as a JSON string, so define that metric result's `value` field as `pa.string()` instead of
+`pa.float64()`.
+
 ```python
 import pyarrow as pa
 from pyiceberg.magnus import MagnusClient

@@ -185,7 +185,7 @@ class StateMetricCalculatorMapper(Mapper):
         value = runner.run_with_args(*args)
         return {
             "success": True,
-            "value": value,
+            "value": self._stringify_complex_metric_value(value),
             "error": "",
             "operator_id": operator_id,
             "operator_name_cn": detail.get("operatorNameCn") or "",
@@ -258,6 +258,12 @@ class StateMetricCalculatorMapper(Mapper):
         if self._is_missing_state_value(value, missing):
             raise ValueError(f"sample.{self.state_key} must be provided")
         return self._normalize_state_value(value)
+
+    @staticmethod
+    def _stringify_complex_metric_value(value):
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return value
 
     @staticmethod
     def _is_missing_state_value(value, missing) -> bool:

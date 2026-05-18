@@ -343,6 +343,41 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_complex_metric_value_is_json_stringified(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 204,
+                    "operatorNameEn": "ad_roi_trend",
+                    "operatorNameCn": "ROI趋势",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(state):\n"
+                        "    return {'first': 0.28, 'latest': 0.91, 'trend': 'up'}\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 204,
+                "parameter_mapping": {},
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "state": "{}",
+        })
+
+        self.assertEqual(
+            result["query_metric_data_outputs"]["ad_roi_trend"]["value"],
+            '{"first": 0.28, "latest": 0.91, "trend": "up"}',
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_default_value_param_is_passed_to_calculate(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
