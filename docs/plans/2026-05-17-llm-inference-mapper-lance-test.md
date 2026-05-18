@@ -215,7 +215,7 @@ process:
       model: "doubao"
       output_field: "llm_output"
       poll_interval_seconds: 2
-      max_poll_attempts: 60
+      max_poll_attempts: 300
       timeout: 30
 ```
 

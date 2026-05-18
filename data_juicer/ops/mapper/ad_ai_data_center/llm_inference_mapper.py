@@ -38,7 +38,7 @@ class LLMInferenceMapper(Mapper):
         output_field: str = "llm_output",
         metadata_field: str | None = None,
         poll_interval_seconds: float = 2.0,
-        max_poll_attempts: int = 60,
+        max_poll_attempts: int = 300,
         ctx: dict | None = None,
         timeout: float = 30.0,
         *args,

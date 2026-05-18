@@ -156,7 +156,7 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 | `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output` as a string. Object and array outputs are JSON-stringified. |
 | `metadata_field` | `str` | No | `None` | Optional field used to store JSON-stringified task metadata such as `taskId`, `conversationId`, and `requestId`. If omitted or set to `null`, metadata is not written. |
 | `poll_interval_seconds` | `float` | No | `2.0` | Sleep time between result polling requests. |
-| `max_poll_attempts` | `int` | No | `60` | Maximum result polling attempts before timeout. |
+| `max_poll_attempts` | `int` | No | `300` | Maximum result polling attempts before timeout. |
 | `timeout` | `float` | No | `30.0` | HTTP request timeout in seconds. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
 
@@ -341,10 +341,10 @@ With the default configuration:
 
 ```yaml
 poll_interval_seconds: 2
-max_poll_attempts: 60
+max_poll_attempts: 300
 ```
 
-the normal polling window is about two minutes. The HTTP `timeout` parameter is still applied to each individual
+the normal polling window is about ten minutes. The HTTP `timeout` parameter is still applied to each individual
 request, so a stuck request can add extra wait time up to the configured per-request timeout.
 
 ### Output
@@ -383,7 +383,7 @@ process:
       model: "doubao"
       output_field: "llm_output"
       poll_interval_seconds: 2
-      max_poll_attempts: 60
+      max_poll_attempts: 300
 ```
 
 ---

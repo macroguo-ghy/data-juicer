@@ -147,6 +147,8 @@ process:
         self.assertIsInstance(ops[0], LLMInferenceMapper)
         self.assertEqual(ops[0].ctx["userAccount"], "wangjianda.667")
         self.assertIsNone(ops[0].metadata_field)
+        self.assertEqual(ops[0].poll_interval_seconds, 2.0)
+        self.assertEqual(ops[0].max_poll_attempts, 300)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_submits_prompt_from_template_polls_result_and_writes_output(self, mock_client_cls):
