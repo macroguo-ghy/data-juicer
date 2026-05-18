@@ -150,7 +150,7 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `prompt` | `str` | No | `None` | Static prompt. |
-| `prompt_template` | `str` | No | `None` | Prompt template formatted with sample fields, for example `请总结：{text}`. |
+| `prompt_template` | `str` | No | `None` | Prompt template rendered from Jinja-style sample field placeholders, for example `请总结：{{ text }}`. |
 | `prompt_field` | `str` | No | `None` | Field name that stores the prompt in each sample. |
 | `model` | `str` | No | `""` | Model name. Empty string is sent when not configured. |
 | `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output` as a string. Object and array outputs are JSON-stringified. |
@@ -172,8 +172,7 @@ prompt. `prompt_template` reads one or more sample fields and renders them into 
 
 ### Prompt Template Syntax
 
-`prompt_template` supports both Python `str.format` style placeholders and Jinja-style field placeholders. A
-placeholder name must match a field path in the current sample.
+`prompt_template` only treats Jinja-style `{{ field }}` placeholders as variables. A placeholder name must match a field path in the current sample. Single-brace text such as `{field}` is kept as ordinary prompt text.
 
 Sample:
 
@@ -187,14 +186,9 @@ Sample:
 Template:
 
 ```yaml
-prompt_template: "请总结文章《{title}》：{text}"
-```
-
-Equivalent Jinja-style template:
-
-```yaml
 prompt_template: "请总结文章《{{ title }}》：{{ text }}"
 ```
+
 
 Rendered prompt:
 
@@ -208,23 +202,15 @@ For multiline prompts, use a YAML block scalar:
 prompt_template: |
   请根据以下信息生成摘要：
 
-  标题：{title}
+  标题：{{ title }}
 
   正文：
-  {text}
+  {{ text }}
 ```
 
 If a placeholder field is missing from the sample, the mapper should raise a clear `ValueError` that includes the missing field name.
 
-To include a literal `{` or `}` in the prompt, escape it with double braces:
-
-```yaml
-prompt_template: "请输出 JSON：{{\"summary\": \"...\"}}，内容：{text}"
-```
-
-This renders literal JSON braces while still replacing `{text}` from the sample.
-
-Jinja-style placeholders support the same field paths as single-brace placeholders:
+Jinja-style placeholders support object paths and array expansion:
 
 ```yaml
 prompt_template: |
@@ -255,7 +241,7 @@ Sample:
 Template:
 
 ```yaml
-prompt_template: "请总结对象：{content}；标签：{tags}"
+prompt_template: "请总结对象：{{ content }}；标签：{{ tags }}"
 ```
 
 Rendered prompt:
@@ -279,7 +265,7 @@ Object fields can be addressed with dot paths:
 Template:
 
 ```yaml
-prompt_template: "城市：{a.b.d}"
+prompt_template: "城市：{{ a.b.d }}"
 ```
 
 Rendered prompt:
@@ -308,7 +294,7 @@ Array-object fields support whole-array expansion with `[]` or `[*]`. Specific n
 Template:
 
 ```yaml
-prompt_template: "指标：{items[*].metric}；名称：{items[].name}"
+prompt_template: "指标：{{ items[*].metric }}；名称：{{ items[].name }}"
 ```
 
 Rendered prompt:
@@ -396,7 +382,7 @@ process:
         operatorIndex: 3
         operatorName: "llm_inference_mapper"
         operatorType: "Mapper"
-      prompt_template: "请根据以下内容生成摘要：{text}"
+      prompt_template: "请根据以下内容生成摘要：{{ text }}"
       model: "doubao"
       output_field: "llm_output"
       poll_interval_seconds: 2
@@ -456,10 +442,10 @@ Validate:
 
 Rules:
 - `prompt_field`: read string from sample
-- `prompt_template`: render with normalized sample fields
+- `prompt_template`: render only Jinja-style `{{ field }}` placeholders from sample fields
 - only referenced placeholders are resolved and serialized
-- nested object paths use dot syntax, for example `{a.b.d}`
-- array-object paths support `[]` and `[*]` as whole-array expansion, for example `{items[*].name}`
+- nested object paths use dot syntax, for example `{{ a.b.d }}`
+- array-object paths support `[]` and `[*]` as whole-array expansion, for example `{{ items[*].name }}`
 - `dict` and `list` template values are serialized as JSON strings before rendering
 - `prompt`: use static string
 - missing template field should raise `ValueError` with the missing field name

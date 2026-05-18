@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import re
-import string
 import time
 from typing import Any
 
@@ -49,7 +48,7 @@ class LLMInferenceMapper(Mapper):
         Initialization method.
 
         :param prompt: static prompt for every sample.
-        :param prompt_template: Python str.format template rendered by sample fields.
+        :param prompt_template: template rendered from Jinja-style sample field placeholders.
         :param prompt_field: sample field that stores the prompt.
         :param model: model name sent to the server. Empty string means default.
         :param output_field: field used to store the server output.
@@ -149,10 +148,7 @@ class LLMInferenceMapper(Mapper):
             prompt = sample.get(self.prompt_field)
         elif self.prompt_template:
             try:
-                prompt_template = _SamplePromptFormatter.normalize_template(
-                    self.prompt_template
-                )
-                prompt = _SamplePromptFormatter(sample).format(prompt_template)
+                prompt = _SamplePromptRenderer(sample).render(self.prompt_template)
             except KeyError as exc:
                 missing_field = exc.args[0]
                 raise ValueError(f"prompt_template missing field: {missing_field}") from exc
@@ -372,8 +368,8 @@ class LLMInferenceMapper(Mapper):
             raise ValueError(f"LLM inference output must be JSON serializable: {exc}") from exc
 
 
-class _SamplePromptFormatter(string.Formatter):
-    """Render prompt placeholders from sample fields with limited path support."""
+class _SamplePromptRenderer:
+    """Render Jinja-style prompt placeholders from sample fields."""
 
     JINJA_FIELD_PATTERN = re.compile(
         r"{{\s*([A-Za-z_][A-Za-z0-9_]*(?:\[\*\]|\[\])?"
@@ -381,16 +377,19 @@ class _SamplePromptFormatter(string.Formatter):
     )
 
     def __init__(self, sample: dict[str, Any]):
-        super().__init__()
         self.sample = sample
 
-    @classmethod
-    def normalize_template(cls, template: str) -> str:
-        return cls.JINJA_FIELD_PATTERN.sub(r"{\1}", template)
+    def render(self, template: str) -> str:
+        def replace(match):
+            field_name = match.group(1)
+            value = self._resolve_path(
+                self.sample,
+                self._parse_path(field_name),
+                field_name,
+            )
+            return self._stringify_template_value(field_name, value)
 
-    def get_field(self, field_name, args, kwargs):
-        value = self._resolve_path(self.sample, self._parse_path(field_name), field_name)
-        return self._stringify_template_value(field_name, value), field_name
+        return self.JINJA_FIELD_PATTERN.sub(replace, template)
 
     @staticmethod
     def _parse_path(field_name: str) -> list[tuple[str, bool]]:

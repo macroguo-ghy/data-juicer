@@ -129,7 +129,7 @@ process:
         operatorName: "llm_inference_mapper"
         operatorType: "business"
         apiBase: "https://ai-data-center.bytedance.net/api"
-      prompt_template: "请总结：{text}"
+      prompt_template: "请总结：{{ text }}"
       model: "doubao"
 """,
             encoding="utf-8",
@@ -171,7 +171,7 @@ process:
             RECORD_KEY_FIELD: "record-1",
         }])
         op = LLMInferenceMapper(
-            prompt_template="请总结：{text}",
+            prompt_template="请总结：{{ text }}",
             model="doubao",
             ctx=self._ctx(),
             poll_interval_seconds=0,
@@ -246,7 +246,7 @@ process:
         mock_client_cls.side_effect = [submit_client, success_client]
         op = LLMInferenceMapper(
             prompt_field="prompt",
-            prompt_template="ignored {text}",
+            prompt_template="ignored {{ text }}",
             ctx=self._ctx(),
             poll_interval_seconds=0,
         )
@@ -307,7 +307,7 @@ process:
 
     def test_rejects_missing_prompt_template_field(self):
         op = LLMInferenceMapper(
-            prompt_template="请总结：{missing}",
+            prompt_template="请总结：{{ missing }}",
             ctx=self._ctx(),
         )
 
@@ -316,7 +316,7 @@ process:
 
     def test_prompt_template_renders_dict_and_list_fields_as_json(self):
         op = LLMInferenceMapper(
-            prompt_template="请总结对象：{content}；标签：{tags}",
+            prompt_template="请总结对象：{{ content }}；标签：{{ tags }}",
             ctx=self._ctx(),
         )
 
@@ -336,7 +336,7 @@ process:
 
     def test_prompt_template_resolves_nested_object_and_array_paths(self):
         op = LLMInferenceMapper(
-            prompt_template="城市：{a.b.d}；指标：{items[*].metric}；名称：{items[].name}",
+            prompt_template="城市：{{ a.b.d }}；指标：{{ items[*].metric }}；名称：{{ items[].name }}",
             ctx=self._ctx(),
         )
 
@@ -398,9 +398,22 @@ process:
             '模板：{"ad_state": {"click_rate": "点击率"}}；城市：北京；指标：[1, 2]',
         )
 
+    def test_prompt_template_keeps_single_brace_text_literal(self):
+        op = LLMInferenceMapper(
+            prompt_template="请保留：{state_template}；替换：{{ state_template }}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "state_template": "STATE",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, "请保留：{state_template}；替换：STATE")
+
     def test_prompt_template_only_serializes_referenced_fields(self):
         op = LLMInferenceMapper(
-            prompt_template="请总结：{text}",
+            prompt_template="请总结：{{ text }}",
             ctx=self._ctx(),
         )
 
@@ -514,7 +527,7 @@ process:
 
     def test_before_operator_started_sends_start_callback_and_notification(self):
         op = LLMInferenceMapper(
-            prompt_template="请总结：{text}",
+            prompt_template="请总结：{{ text }}",
             model="doubao",
             output_field="out",
             metadata_field="meta",
