@@ -203,8 +203,16 @@ class StateMetricCalculatorMapper(Mapper):
 
         if source == "state":
             value = sample.get(self.state_key, missing)
+            if self._is_missing_state_value(value, missing):
+                value = missing
+            else:
+                value = self._normalize_state_value(value)
         elif source == "attribute":
-            state = sample.get(self.state_key)
+            state = sample.get(self.state_key, missing)
+            if self._is_missing_state_value(state, missing):
+                state = None
+            else:
+                state = self._normalize_state_value(state)
             value = self._get_attribute_value(state, parameter)
             if value is None:
                 value = missing
@@ -219,6 +227,22 @@ class StateMetricCalculatorMapper(Mapper):
             if required:
                 raise ValueError(f"missing required parameter: {name}")
             return None
+        return value
+
+    @staticmethod
+    def _is_missing_state_value(value, missing) -> bool:
+        return value is missing or value is None or value == ""
+
+    @staticmethod
+    def _normalize_state_value(value):
+        if isinstance(value, str):
+            try:
+                parsed_value = json.loads(value)
+            except ValueError as exc:
+                raise ValueError("state must be a valid JSON object string") from exc
+            if not isinstance(parsed_value, (dict, list)):
+                raise ValueError("state JSON string must decode to an object or array")
+            return parsed_value
         return value
 
     def _get_operator_details(self) -> dict[int, dict[str, Any]]:

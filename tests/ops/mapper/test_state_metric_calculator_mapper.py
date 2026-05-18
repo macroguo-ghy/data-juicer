@@ -289,6 +289,82 @@ process:
         self.mock_callback.report_record_success.assert_called_once()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_json_string_state_is_parsed_before_calculate(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 203,
+                    "operatorNameEn": "ad_roi_trend",
+                    "operatorNameCn": "ROI趋势",
+                    "inputParameter": (
+                        '{"parameters": ['
+                        '{"name": "state", "required": true, "source": "state"}'
+                        ']}'
+                    ),
+                    "operatorCode": (
+                        "def calculate(state):\n"
+                        "    values = state['adv_state'][0]['adv_roi']\n"
+                        "    return round(float(values[-1]) - float(values[0]), 4)\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 203,
+                "parameter_mapping": {},
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "state": (
+                '{"world_state": {"query_time": "2026-06-10 15:22:34"}, '
+                '"adv_state": [{"adv_id": "9876543210987654", '
+                '"adv_roi": [0.28, 0.35, 0.42, 0.78, 0.59, 0.72, 0.31, '
+                '0.6, 0.83, 0.24, 0.55, 0.69, 0.46, 0.91]}]}'
+            ),
+        })
+
+        self.assertEqual(
+            result["query_metric_data_outputs"]["ad_roi_trend"],
+            {
+                "success": True,
+                "value": 0.63,
+                "error": "",
+                "operator_id": 203,
+                "operator_name_cn": "ROI趋势",
+            },
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_attribute_source_reads_from_json_string_state(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope(self._operator_details()))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[self._operators()[1]],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "state": '{"world_state": {"quality": 8}}',
+        })
+
+        self.assertEqual(
+            result["query_metric_data_outputs"]["quality_score"],
+            {
+                "success": True,
+                "value": 9,
+                "error": "",
+                "operator_id": 202,
+                "operator_name_cn": "质量得分",
+            },
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_http_failure_records_each_metric_failure_without_raising(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": False,

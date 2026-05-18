@@ -24,7 +24,7 @@ data_juicer/ops/mapper/ad_ai_data_center/state_metric_calculator_mapper.py
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `state_key` | `str` | No | `"state"` | Sample field containing the State object. |
+| `state_key` | `str` | No | `"state"` | Sample field containing the State object. The value can be a JSON object/array or a JSON string decoded to an object/array. |
 | `output_key` | `str` | No | `"query_metric_data_outputs"` | Sample field used to store metric outputs. |
 | `result_mode` | `str` | No | `"object"` | First version supports object output only. |
 | `fail_policy` | `str` | No | `"continue"` | Single metric failures are written to that metric result and other metrics continue. |
@@ -76,6 +76,10 @@ For every `inputParameter.parameters[]` item:
 | `constant` | Not supported in the first version. |
 
 If a required parameter cannot be resolved, that metric output is marked as `success=false`.
+
+If `sample[state_key]` is a string, the mapper parses it with `json.loads(...)` before passing it to `calculate(...)` or
+before resolving `source=attribute` parameters. Metric scripts can therefore treat `state` as a decoded object. Invalid
+JSON strings are recorded as metric failures and do not require every metric script to parse JSON by itself.
 
 ## Output
 

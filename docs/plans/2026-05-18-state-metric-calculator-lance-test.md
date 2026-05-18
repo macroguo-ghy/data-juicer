@@ -47,7 +47,8 @@ The output table schema must use the returned `operatorNameEn` values as nested 
 
 This source table contains:
 
-- `state`: State object used by `source=state` and `source=attribute`
+- `state`: State object used by `source=state` and `source=attribute`. It may also be stored as a JSON string; the mapper
+  decodes JSON-string state values before running metric code.
 - `bench_roi`: dataset field used by `source=field`
 
 ```python
