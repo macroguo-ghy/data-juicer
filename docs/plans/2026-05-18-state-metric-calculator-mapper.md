@@ -87,11 +87,13 @@ The mapper writes an object to `output_key`:
     "bench_roi_score": {
       "success": true,
       "value": 0.82,
+      "error": "",
       "operator_id": 201,
       "operator_name_cn": "行业基准 ROI 得分"
     },
     "quality_score": {
       "success": false,
+      "value": null,
       "error": "missing required parameter: bench_roi",
       "operator_id": 202,
       "operator_name_cn": "质量得分"

@@ -185,6 +185,7 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "success": True,
             "value": value,
+            "error": "",
             "operator_id": operator_id,
             "operator_name_cn": detail.get("operatorNameCn") or "",
         }
@@ -413,6 +414,7 @@ class StateMetricCalculatorMapper(Mapper):
     ) -> dict[str, Any]:
         return {
             "success": False,
+            "value": None,
             "error": error,
             "operator_id": operator_id,
             "operator_name_cn": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
@@ -422,6 +424,7 @@ class StateMetricCalculatorMapper(Mapper):
         if not isinstance(self.ctx, dict):
             raise ValueError("ctx must be provided")
         self._get_ctx_required_value(self.ctx, "apiBase")
+        self._get_ctx_required_value(self.ctx, "userAccount")
         return self.ctx
 
     @staticmethod

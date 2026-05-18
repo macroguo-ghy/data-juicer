@@ -239,6 +239,7 @@ process:
             {
                 "success": True,
                 "value": 0.82,
+                "error": "",
                 "operator_id": 201,
                 "operator_name_cn": "行业基准 ROI 得分",
             },
@@ -278,6 +279,7 @@ process:
             result["query_metric_data_outputs"]["bench_roi_score"],
             {
                 "success": False,
+                "value": None,
                 "error": "missing required parameter: bench_roi",
                 "operator_id": 201,
                 "operator_name_cn": "行业基准 ROI 得分",
@@ -314,6 +316,7 @@ process:
             ["operator_201", "operator_202"],
         )
         self.assertFalse(result["query_metric_data_outputs"]["operator_201"]["success"])
+        self.assertIsNone(result["query_metric_data_outputs"]["operator_201"]["value"])
         self.assertIn(
             "Failed to fetch state metric operators",
             result["query_metric_data_outputs"]["operator_201"]["error"],
@@ -340,6 +343,29 @@ process:
             input_data=sample,
             output_data=sample,
             error_message="sample.state must be provided",
+            started_at=ANY,
+        )
+
+    def test_missing_user_account_fails_record(self):
+        ctx = self._ctx()
+        ctx.pop("userAccount")
+        op = StateMetricCalculatorMapper(
+            operators=self._operators(),
+            ctx=ctx,
+        )
+        sample = {
+            RECORD_KEY_FIELD: "record-1",
+            "state": {},
+        }
+
+        with self.assertRaisesRegex(ValueError, "ctx.userAccount must be provided"):
+            op.process_single(sample)
+
+        self.mock_callback.report_record_failure.assert_called_once_with(
+            record_key="record-1",
+            input_data=sample,
+            output_data=sample,
+            error_message="ctx.userAccount must be provided",
             started_at=ANY,
         )
 
