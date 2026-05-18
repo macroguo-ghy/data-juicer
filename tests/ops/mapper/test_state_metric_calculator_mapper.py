@@ -104,16 +104,15 @@ class StateMetricCalculatorMapperTest(unittest.TestCase):
                     "operatorNameEn": "bench_roi_score",
                     "operatorNameCn": "行业基准 ROI 得分",
                     "inputParameter": (
-                        '{"parameters": ['
-                        '{"name": "state", "type": "object", "required": true, "source": "state"},'
-                        '{"name": "ad_material_click_rate", "type": "float", "required": true, '
-                        '"source": "attribute", "attributeId": 101},'
-                        '{"name": "bench_roi", "type": "float", "required": true, "source": "field"}'
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_cn": "行业基准 ROI", '
+                        '"key_name_en": "bench_roi", "default_or_placeholder_value": "bench_roi"}'
                         ']}'
                     ),
                     "relatedAttributes": '{"attributes": [{"id": 101}]}',
                     "operatorCode": (
-                        "def calculate(state, ad_material_click_rate, bench_roi):\n"
+                        "def calculate(state, bench_roi):\n"
+                        "    ad_material_click_rate = state.get('ad_material_click_rate') or state.get('101')\n"
                         "    return round(ad_material_click_rate / bench_roi, 2)\n"
                     ),
                 },
@@ -122,14 +121,15 @@ class StateMetricCalculatorMapperTest(unittest.TestCase):
                     "operatorNameEn": "quality_score",
                     "operatorNameCn": "质量得分",
                     "inputParameter": (
-                        '{"parameters": ['
-                        '{"name": "state", "required": true, "source": "state"},'
-                        '{"name": "quality", "required": true, "source": "attribute", "attributeId": 102}'
+                        '{"params": ['
+                        '{"data_type": "defaultValue", "key_name_cn": "偏移量", '
+                        '"key_name_en": "offset", "default_or_placeholder_value": 1}'
                         ']}'
                     ),
                     "operatorCode": (
-                        "def calculate(state, quality):\n"
-                        "    return quality + 1\n"
+                        "def calculate(state, offset):\n"
+                        "    quality = state.get('quality') or state.get('102')\n"
+                        "    return quality + offset\n"
                     ),
                 },
             ]
@@ -297,8 +297,9 @@ process:
                     "operatorNameEn": "ad_roi_trend",
                     "operatorNameCn": "ROI趋势",
                     "inputParameter": (
-                        '{"parameters": ['
-                        '{"name": "state", "required": true, "source": "state"}'
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_cn": "开始时间", '
+                        '"key_name_en": "start_time", "default_or_placeholder_value": "start_time"}'
                         ']}'
                     ),
                     "operatorCode": (
@@ -313,7 +314,9 @@ process:
         op = StateMetricCalculatorMapper(
             operators=[{
                 "operator_id": 203,
-                "parameter_mapping": {},
+                "parameter_mapping": {
+                    "start_time": "source_table_start_time",
+                },
             }],
             ctx=self._ctx(),
         )
@@ -340,7 +343,7 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_attribute_source_reads_from_json_string_state(self, mock_client_cls):
+    def test_default_value_param_is_passed_to_calculate(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
@@ -350,7 +353,7 @@ process:
 
         result = op.process_single({
             RECORD_KEY_FIELD: "record-1",
-            "state": '{"world_state": {"quality": 8}}',
+            "state": '{"quality": 8}',
         })
 
         self.assertEqual(

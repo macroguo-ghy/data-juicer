@@ -37,12 +37,14 @@ data_juicer/ops/mapper/ad_ai_data_center/state_metric_calculator_mapper.py
 {
   "operator_id": 201,
   "parameter_mapping": {
-    "bench_roi": "bench_roi"
+    "start_time": "source_table_start_time"
   }
 }
 ```
 
-`parameter_mapping` maps Python parameter names with `source=field` to sample field names.
+`parameter_mapping` maps derived metric parameter keys to source table field names. The mapping key is
+`inputParameter.params[].key_name_en`; the mapping value is the selected source table field name. Pass `{}` when no
+placeholder parameter needs a source table field.
 
 ## OpenAPI
 
@@ -66,20 +68,21 @@ Operator details are cached in the mapper instance. The same `operator_id` is re
 
 ## Parameter Resolution
 
-For every `inputParameter.parameters[]` item:
+The State object is an implicit runtime parameter. If `calculate(...)` declares a `state` parameter, the mapper reads
+`sample[state_key]`, decodes it when it is a JSON string, and passes the decoded object to `calculate`.
 
-| `source` | Resolution |
+For every `inputParameter.params[]` item used by the `calculate(...)` function signature:
+
+| `data_type` | Resolution |
 | --- | --- |
-| `state` | Reads `sample[state_key]`. |
-| `attribute` | Searches the State object by `attributeId`, then by attribute English/name fields. |
-| `field` | Uses `parameter_mapping[name]` to read a sample field. |
-| `constant` | Not supported in the first version. |
+| `placeholder` | Uses `parameter_mapping[key_name_en]` to read a source table field from the sample. |
+| `defaultValue` | Uses `default_or_placeholder_value` from `inputParameter.params[]`. |
 
 If a required parameter cannot be resolved, that metric output is marked as `success=false`.
 
-If `sample[state_key]` is a string, the mapper parses it with `json.loads(...)` before passing it to `calculate(...)` or
-before resolving `source=attribute` parameters. Metric scripts can therefore treat `state` as a decoded object. Invalid
-JSON strings are recorded as metric failures and do not require every metric script to parse JSON by itself.
+`inputParameter.params[]` may contain parameters not declared by the current `calculate(...)` function. The mapper ignores
+those unused parameter definitions. Invalid JSON strings in `sample[state_key]` are recorded as metric failures and do
+not require every metric script to parse JSON by itself.
 
 ## Output
 
@@ -120,11 +123,9 @@ process:
       operators:
         - operator_id: 201
           parameter_mapping:
-            bench_roi: "bench_roi"
+            start_time: "source_table_start_time"
         - operator_id: 202
-          parameter_mapping:
-            industry: "industry"
-            target_roi: "target_roi"
+          parameter_mapping: {}
       ctx:
         userAccount: "wangjianda.667"
         x-tt-env: "ppe_sirius2"

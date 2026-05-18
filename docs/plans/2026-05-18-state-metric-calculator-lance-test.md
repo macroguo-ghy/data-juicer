@@ -3,7 +3,7 @@
 This guide shows how to test `state_metric_calculator` with Lance source and output tables. The test focuses on:
 
 - loading selected State derived metric definitions through OpenAPI
-- resolving `state`, `attribute`, and `field` parameters from each sample
+- resolving implicit `state`, `placeholder`, and `defaultValue` parameters from each sample
 - writing stable object output for both successful and failed metric results
 
 ## Test Goal
@@ -36,7 +36,7 @@ Expected operator shape:
   "id": 201,
   "operatorNameEn": "bench_roi_score",
   "operatorNameCn": "行业基准 ROI 得分",
-  "inputParameter": "{\"parameters\":[...]}",
+  "inputParameter": "{\"params\":[...]}",
   "operatorCode": "def calculate(...): ..."
 }
 ```
@@ -47,9 +47,9 @@ The output table schema must use the returned `operatorNameEn` values as nested 
 
 This source table contains:
 
-- `state`: State object used by `source=state` and `source=attribute`. It may also be stored as a JSON string; the mapper
-  decodes JSON-string state values before running metric code.
-- `bench_roi`: dataset field used by `source=field`
+- `state`: State object passed to `calculate(state, ...)`. It may also be stored as a JSON string; the mapper decodes
+  JSON-string state values before running metric code.
+- `bench_roi`: source table field used by `parameter_mapping` for a `data_type=placeholder` parameter.
 
 ```python
 import pyarrow as pa
@@ -223,8 +223,9 @@ process:
 Notes:
 
 - Replace `operator_id` values with real derived metric IDs.
-- `parameter_mapping` only maps `source=field` parameters.
-- `state` and `attribute` parameters do not need `parameter_mapping`.
+- `parameter_mapping` only maps `inputParameter.params[]` items with `data_type=placeholder`.
+- `state_key` controls the State field name and does not enter `parameter_mapping`.
+- `inputParameter.params[]` items with `data_type=defaultValue` do not enter `parameter_mapping`.
 
 ## 5. Expected Output Shape
 

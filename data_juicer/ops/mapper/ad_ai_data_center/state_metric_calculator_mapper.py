@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 from typing import Any
 
@@ -157,16 +158,14 @@ class StateMetricCalculatorMapper(Mapper):
         if all_depend_on_state:
             raise ValueError(f"sample.{self.state_key} must be provided")
 
-    @classmethod
-    def _detail_depends_on_state(cls, detail: dict[str, Any]) -> bool:
+    def _detail_depends_on_state(self, detail: dict[str, Any]) -> bool:
         try:
-            parameters = cls._parse_input_parameters(detail)
+            signature = inspect.signature(
+                self._get_calculate_runner(int(detail["id"]), detail).process_func
+            )
         except Exception:
             return False
-        return any(
-            parameter.get("source") == "state" and bool(parameter.get("required"))
-            for parameter in parameters
-        )
+        return "state" in signature.parameters
 
     def _calculate_one_metric(
         self,
@@ -176,11 +175,13 @@ class StateMetricCalculatorMapper(Mapper):
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
         parameters = self._parse_input_parameters(detail)
-        args = [
-            self._resolve_parameter_value(sample, operator_config, parameter)
-            for parameter in parameters
-        ]
         runner = self._get_calculate_runner(operator_id, detail)
+        args = self._resolve_calculate_args(
+            sample,
+            operator_config,
+            parameters,
+            inspect.signature(runner.process_func),
+        )
         value = runner.run_with_args(*args)
         return {
             "success": True,
@@ -190,44 +191,73 @@ class StateMetricCalculatorMapper(Mapper):
             "operator_name_cn": detail.get("operatorNameCn") or "",
         }
 
+    def _resolve_calculate_args(
+        self,
+        sample: dict[str, Any],
+        operator_config: dict[str, Any],
+        parameters: list[dict[str, Any]],
+        signature: inspect.Signature,
+    ) -> list[Any]:
+        parameters_by_name = {
+            parameter["key_name_en"]: parameter
+            for parameter in parameters
+        }
+        args = []
+        for func_parameter in signature.parameters.values():
+            if func_parameter.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                raise ValueError("calculate does not support *args or **kwargs")
+            if func_parameter.kind == inspect.Parameter.KEYWORD_ONLY:
+                raise ValueError("calculate does not support keyword-only parameters")
+
+            name = func_parameter.name
+            if name == "state":
+                args.append(self._resolve_state_value(sample))
+            elif name in parameters_by_name:
+                args.append(
+                    self._resolve_parameter_value(
+                        sample,
+                        operator_config,
+                        parameters_by_name[name],
+                    )
+                )
+            elif func_parameter.default is not inspect.Parameter.empty:
+                args.append(func_parameter.default)
+            else:
+                raise ValueError(f"inputParameter.params missing parameter: {name}")
+        return args
+
     def _resolve_parameter_value(
         self,
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         parameter: dict[str, Any],
     ):
-        name = parameter.get("name")
-        source = parameter.get("source")
-        required = bool(parameter.get("required"))
+        name = parameter.get("key_name_en")
+        data_type = parameter.get("data_type")
         missing = object()
 
-        if source == "state":
-            value = sample.get(self.state_key, missing)
-            if self._is_missing_state_value(value, missing):
-                value = missing
-            else:
-                value = self._normalize_state_value(value)
-        elif source == "attribute":
-            state = sample.get(self.state_key, missing)
-            if self._is_missing_state_value(state, missing):
-                state = None
-            else:
-                state = self._normalize_state_value(state)
-            value = self._get_attribute_value(state, parameter)
-            if value is None:
-                value = missing
-        elif source == "field":
+        if data_type == "placeholder":
             mapping = operator_config.get("parameter_mapping") or {}
             field_name = mapping.get(name)
             value = sample.get(field_name, missing) if field_name else missing
+        elif data_type == "defaultValue":
+            value = parameter.get("default_or_placeholder_value", missing)
         else:
-            value = missing
+            raise ValueError(f"unsupported inputParameter data_type: {data_type}")
 
         if value is missing:
-            if required:
-                raise ValueError(f"missing required parameter: {name}")
-            return None
+            raise ValueError(f"missing required parameter: {name}")
         return value
+
+    def _resolve_state_value(self, sample: dict[str, Any]):
+        missing = object()
+        value = sample.get(self.state_key, missing)
+        if self._is_missing_state_value(value, missing):
+            raise ValueError(f"sample.{self.state_key} must be provided")
+        return self._normalize_state_value(value)
 
     @staticmethod
     def _is_missing_state_value(value, missing) -> bool:
@@ -311,48 +341,13 @@ class StateMetricCalculatorMapper(Mapper):
                 raise ValueError("inputParameter must be a valid JSON object string") from exc
         if not isinstance(input_parameter, dict):
             raise ValueError("inputParameter must be a dictionary")
-        parameters = input_parameter.get("parameters")
+        parameters = input_parameter.get("params")
         if not isinstance(parameters, list):
-            raise ValueError("inputParameter.parameters must be a list")
+            raise ValueError("inputParameter.params must be a list")
         for parameter in parameters:
-            if not isinstance(parameter, dict) or not parameter.get("name"):
-                raise ValueError("inputParameter.parameters item must contain name")
+            if not isinstance(parameter, dict) or not parameter.get("key_name_en"):
+                raise ValueError("inputParameter.params item must contain key_name_en")
         return parameters
-
-    @staticmethod
-    def _get_attribute_value(state, parameter: dict[str, Any]):
-        candidates = []
-        attribute_id = parameter.get("attributeId")
-        if attribute_id is not None:
-            candidates.extend([attribute_id, str(attribute_id)])
-        for key in ("attributeNameEn", "nameEn", "name"):
-            value = parameter.get(key)
-            if value:
-                candidates.append(value)
-        for candidate in candidates:
-            value = StateMetricCalculatorMapper._find_value_by_key(state, candidate)
-            if value is not None:
-                return value
-        return None
-
-    @staticmethod
-    def _find_value_by_key(value, target_key):
-        if isinstance(value, dict):
-            if target_key in value:
-                return value[target_key]
-            target_key_str = str(target_key)
-            if target_key_str in value:
-                return value[target_key_str]
-            for child in value.values():
-                found = StateMetricCalculatorMapper._find_value_by_key(child, target_key)
-                if found is not None:
-                    return found
-        elif isinstance(value, list):
-            for child in value:
-                found = StateMetricCalculatorMapper._find_value_by_key(child, target_key)
-                if found is not None:
-                    return found
-        return None
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
