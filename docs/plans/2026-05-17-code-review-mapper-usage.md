@@ -31,7 +31,7 @@ and is not passed to `@OPERATORS.register_module(...)`.
 | `status_field` | `str` | No | `"review_status"` | Output field for boolean review result. |
 | `reason_field` | `str` | No | `"review_reason"` | Output field for review failure reason. |
 | `python_code` | `str` | Yes | `None` | Trusted Python script that defines the review function. |
-| `entrypoint` | `str` | No | `"review"` | Function name to call from `python_code`. |
+| `entrypoint` | `str` | No | `"review_row"` | Function name to call from `python_code`. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
 
 ## Script Contract
@@ -39,7 +39,7 @@ and is not passed to `@OPERATORS.register_module(...)`.
 Default entrypoint:
 
 ```python
-def review(value, row, context):
+def review_row(value, row, context):
     return True, ""
 ```
 
@@ -136,7 +136,7 @@ process:
       status_field: "state_review_status"
       reason_field: "state_review_reason"
       python_code: |
-        def review(value, row, context):
+        def review_row(value, row, context):
             if not value:
                 return False, "state 为空"
             if not isinstance(value, dict):

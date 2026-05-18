@@ -4,7 +4,7 @@
 
 **Goal:** Add an ADC business mapper that reviews one configured sample field with trusted Python code and writes review status and reason fields back to each sample.
 
-**Architecture:** Implement a focused mapper under `data_juicer/ops/mapper/ad_ai_data_center` and register it as `code_review_mapper`, without the `ad_ai_data_center` name prefix. Reuse `PythonScriptRunner` for trusted `compile` / `exec` behavior, but wrap it with a review-specific contract so users write `review(value, row, context)` instead of a generic `process(sample, context)`. The mapper remains one-input-one-output; downstream pipeline/export logic can split all/pass/fail datasets by the configured status field.
+**Architecture:** Implement a focused mapper under `data_juicer/ops/mapper/ad_ai_data_center` and register it as `code_review_mapper`, without the `ad_ai_data_center` name prefix. Reuse `PythonScriptRunner` for trusted `compile` / `exec` behavior, but wrap it with a review-specific contract so users write `review_row(value, row, context)` instead of a generic `process(sample, context)`. The mapper remains one-input-one-output; downstream pipeline/export logic can split all/pass/fail datasets by the configured status field.
 
 **Critical Assumptions & Early Checks:** The review script is trusted and runs in the current Python process, not a sandbox. The backend injects `ctx` because this operator declares `NEED_CTX = True`. The frontend custom page can send the configured field names and `python_code` as plain YAML parameters. The earliest implementation check is config loading through `load_ops(cfg.process)`, because this validates that the frontend-shaped YAML maps to the actual operator constructor.
 
@@ -36,13 +36,13 @@ Parameters:
 | `status_field` | `str` | No | `"review_status"` | Output field for pass/fail result. |
 | `reason_field` | `str` | No | `"review_reason"` | Output field for failure reason or empty string. |
 | `python_code` | `str` | Yes | `None` | Trusted Python script that defines the review entrypoint. |
-| `entrypoint` | `str` | No | `"review"` | Function name to call from `python_code`. |
+| `entrypoint` | `str` | No | `"review_row"` | Function name to call from `python_code`. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
 
 Script contract:
 
 ```python
-def review(value, row, context):
+def review_row(value, row, context):
     return True, ""
 ```
 
@@ -114,7 +114,7 @@ process:
       status_field: "state_review_status"
       reason_field: "state_review_reason"
       python_code: |
-        def review(value, row, context):
+        def review_row(value, row, context):
             if not value:
                 return False, "state 为空"
             if not isinstance(value, dict):
@@ -138,10 +138,10 @@ Add tests for review-style functions while preserving existing `process(sample, 
 def test_run_with_args_supports_review_entrypoint(self):
     runner = PythonScriptRunner(
         python_code=(
-            "def review(value, row, context):\n"
+            "def review_row(value, row, context):\n"
             "    return value == row['state'], ''\n"
         ),
-        entrypoint="review",
+        entrypoint="review_row",
         require_dict_result=False,
     )
 

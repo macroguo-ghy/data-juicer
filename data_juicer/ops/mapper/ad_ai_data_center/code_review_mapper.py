@@ -31,7 +31,7 @@ class CodeReviewMapper(Mapper):
         status_field: str = "review_status",
         reason_field: str = "review_reason",
         python_code: str | None = None,
-        entrypoint: str = "review",
+        entrypoint: str = "review_row",
         ctx: dict | None = None,
         *args,
         **kwargs,

@@ -85,7 +85,7 @@ process:
       input_field: "state"
       status_field: "state_review_status"
       reason_field: "state_review_reason"
-      python_code: "def review(value, row, context):\\n    return True, ''"
+      python_code: "def review_row(value, row, context):\\n    return True, ''"
 """,
             encoding="utf-8",
         )
@@ -109,7 +109,7 @@ process:
             status_field="state_review_status",
             reason_field="state_review_reason",
             python_code=(
-                "def review(value, row, context):\n"
+                "def review_row(value, row, context):\n"
                 "    return value['scene'] == row['state']['scene'], ''\n"
             ),
             ctx=self._ctx(),
@@ -144,7 +144,7 @@ process:
             status_field="state_review_status",
             reason_field="state_review_reason",
             python_code=(
-                "def review(value, row, context):\n"
+                "def review_row(value, row, context):\n"
                 "    return {'passed': False, 'reason': '缺少 scene 字段'}\n"
             ),
             ctx=self._ctx(),
@@ -162,7 +162,7 @@ process:
     def test_missing_input_field_reports_record_failure_and_raises(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return True, ''",
+            python_code="def review_row(value, row, context):\n    return True, ''",
             ctx=self._ctx(),
         )
         sample = {
@@ -185,7 +185,7 @@ process:
     def test_invalid_review_result_reports_record_failure_and_raises(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return 'bad'",
+            python_code="def review_row(value, row, context):\n    return 'bad'",
             ctx=self._ctx(),
         )
 
@@ -200,7 +200,7 @@ process:
     def test_non_string_reason_reports_record_failure_and_raises(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return False, 123",
+            python_code="def review_row(value, row, context):\n    return False, 123",
             ctx=self._ctx(),
         )
 
@@ -215,7 +215,7 @@ process:
     def test_script_runtime_exception_reports_record_failure_and_raises(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    raise ValueError('script failed')",
+            python_code="def review_row(value, row, context):\n    raise ValueError('script failed')",
             ctx=self._ctx(),
         )
 
@@ -231,7 +231,7 @@ process:
         self.mock_callback.report_record_success.side_effect = RuntimeError("callback down")
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return True, ''",
+            python_code="def review_row(value, row, context):\n    return True, ''",
             ctx=self._ctx(),
         )
 
@@ -246,7 +246,7 @@ process:
     def test_before_operator_started_starts_running_once(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return True, ''",
+            python_code="def review_row(value, row, context):\n    return True, ''",
             ctx=self._ctx(),
         )
 
@@ -258,14 +258,14 @@ process:
                 "input_field": "state",
                 "status_field": "review_status",
                 "reason_field": "review_reason",
-                "entrypoint": "review",
+                "entrypoint": "review_row",
             }
         )
 
     def test_after_operator_finished_finalizes_success_or_failure(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return True, ''",
+            python_code="def review_row(value, row, context):\n    return True, ''",
             ctx=self._ctx(),
         )
 
@@ -280,7 +280,7 @@ process:
     def test_sends_test_card_notification_on_operator_start_and_finish(self):
         op = CodeReviewMapper(
             input_field="state",
-            python_code="def review(value, row, context):\n    return True, ''",
+            python_code="def review_row(value, row, context):\n    return True, ''",
             ctx=self._ctx(),
         )
 
@@ -297,7 +297,7 @@ process:
                         "stage": "开始",
                         "content": (
                             '{"input_field": "state", "status_field": "review_status", '
-                            '"reason_field": "review_reason", "entrypoint": "review"}'
+                            '"reason_field": "review_reason", "entrypoint": "review_row"}'
                         ),
                         "errMsg": "",
                     },
