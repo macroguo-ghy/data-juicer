@@ -41,7 +41,7 @@ Expected operator shape:
 }
 ```
 
-The output table schema must use the returned `operatorNameEn` values as nested result keys.
+The output table schema stores all metric items in `query_metric_data_outputs.metrics[]`.
 
 ## 1. Create Source Table
 
@@ -135,17 +135,13 @@ print(f"Write Success. Snapshot: {snapshot}")
 
 ## 3. Create Output Table
 
-For Lance stability, each metric result object uses the same field shape:
+For Lance stability, the output object uses the same field shape:
 
 ```text
-success, value, error, operator_id, operator_name_cn
+id, metrics
 ```
 
-Define one nested struct field per expected `operatorNameEn`.
-
-The schema below is for numeric metric values. If a selected metric returns a `dict` or `list`, the mapper stores that
-metric `value` as a JSON string, so define that metric result's `value` field as `pa.string()` instead of
-`pa.float64()`.
+Successful metric `output` values are JSON strings, so the schema below stores `output` as `pa.string()`.
 
 ```python
 import pyarrow as pa
@@ -153,12 +149,11 @@ from pyiceberg.magnus import MagnusClient
 
 magnus_client = MagnusClient()
 
-metric_result_schema = pa.struct([
-    pa.field("success", pa.bool_()),
-    pa.field("value", pa.float64()),
+metric_item_schema = pa.struct([
+    pa.field("metricCode", pa.string()),
+    pa.field("metricName", pa.string()),
+    pa.field("output", pa.string()),
     pa.field("error", pa.string()),
-    pa.field("operator_id", pa.int64()),
-    pa.field("operator_name_cn", pa.string()),
 ])
 
 output_schema = pa.schema([
@@ -176,8 +171,8 @@ output_schema = pa.schema([
     pa.field(
         "query_metric_data_outputs",
         pa.struct([
-            pa.field("bench_roi_score", metric_result_schema),
-            pa.field("quality_score", metric_result_schema),
+            pa.field("id", pa.string()),
+            pa.field("metrics", pa.list_(metric_item_schema)),
         ]),
     ),
 ])
@@ -193,8 +188,7 @@ output_table = magnus_client.create_table(
 )
 ```
 
-If your selected operators return different `operatorNameEn` values, replace `bench_roi_score` and `quality_score` in
-the output schema.
+If a metric item fails, `output` is null and `error` contains the failure message.
 
 ## 4. Operator YAML
 
@@ -239,20 +233,21 @@ The first row should contain successful metric results:
 {
   "__adc_record_key": "record-001",
   "query_metric_data_outputs": {
-    "bench_roi_score": {
-      "success": true,
-      "value": 0.82,
-      "error": "",
-      "operator_id": 201,
-      "operator_name_cn": "行业基准 ROI 得分"
-    },
-    "quality_score": {
-      "success": true,
-      "value": 9.0,
-      "error": "",
-      "operator_id": 202,
-      "operator_name_cn": "质量得分"
-    }
+    "id": "1854168911595796",
+    "metrics": [
+      {
+        "metricCode": "bench_roi_score",
+        "metricName": "行业基准 ROI 得分",
+        "output": "0.82",
+        "error": ""
+      },
+      {
+        "metricCode": "quality_score",
+        "metricName": "质量得分",
+        "output": "9.0",
+        "error": ""
+      }
+    ]
   }
 }
 ```
@@ -263,28 +258,31 @@ The second row can contain a failed result for metrics that require `bench_roi`:
 {
   "__adc_record_key": "record-002",
   "query_metric_data_outputs": {
-    "bench_roi_score": {
-      "success": false,
-      "value": null,
-      "error": "missing required parameter: bench_roi",
-      "operator_id": 201,
-      "operator_name_cn": "行业基准 ROI 得分"
-    }
+    "id": "1854168911595796",
+    "metrics": [
+      {
+        "metricCode": "bench_roi_score",
+        "metricName": "行业基准 ROI 得分",
+        "output": null,
+        "error": "missing required parameter: bench_roi"
+      }
+    ]
   }
 }
 ```
 
-The exact `error` text depends on the current operator definition. The important part is that failed results still
-contain `value: null` and successful results still contain `error: ""`.
+The exact `error` text depends on the current operator definition. The important part is that failed metric items still
+contain `output: null` and an `error` message.
 
 ## 6. Validation Checklist
 
 - The Ray/Data-Juicer task can load `state_metric_calculator`.
 - The mapper calls `/openapi/state-meta/operators/batch-get`.
 - `query_metric_data_outputs` exists in every output row.
-- Every metric result contains `success`, `value`, `error`, `operator_id`, and `operator_name_cn`.
-- At least one row has `success=true`.
-- At least one row has `success=false` if the chosen operator can be tested with missing or invalid input.
+- Every output object contains `id` and `metrics`.
+- Every successful metric item contains `metricCode`, `metricName`, and `output`.
+- At least one failed metric item contains `output: null` and `error` if the chosen operator can be tested with missing
+  or invalid input.
 - No Lance/PyArrow struct field-order error appears during write.
 
 ## Notes
@@ -292,5 +290,5 @@ contain `value: null` and successful results still contain `error: ""`.
 - The mapper executes trusted Python code returned by the platform. It is not a sandbox.
 - The mapper caches operator details inside one mapper instance. Ray may create multiple worker-side instances, so each
   worker can call the batch-get API once.
-- If `value` types vary heavily across selected operators, consider changing the output table schema or later switching
-  metric result storage to JSON strings.
+- Successful `output` values are JSON strings. Consumers should parse them when they need the original scalar, array, or
+  object value.

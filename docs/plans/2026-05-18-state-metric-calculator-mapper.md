@@ -78,15 +78,18 @@ For every `inputParameter.params[]` item used by the `calculate(...)` function s
 | `placeholder` | Uses `parameter_mapping[key_name_en]` to read a source table field from the sample. |
 | `defaultValue` | Uses `default_or_placeholder_value` from `inputParameter.params[]`. |
 
-If a required parameter cannot be resolved, that metric output is marked as `success=false`.
+If a required parameter cannot be resolved, that metric item is written with `output=null` and an `error` message.
 
 `inputParameter.params[]` may contain parameters not declared by the current `calculate(...)` function. The mapper ignores
 those unused parameter definitions. Invalid JSON strings in `sample[state_key]` are recorded as metric failures and do
 not require every metric script to parse JSON by itself.
 
-If `calculate(...)` returns a `dict` or `list`, the mapper serializes that metric `value` with
-`json.dumps(..., ensure_ascii=False)` before writing it back to the sample. This avoids unstable nested Arrow schemas
-when different records return complex values or failures.
+Successful metric `output` is always a JSON string produced by `json.dumps(..., ensure_ascii=False)`. For example, a
+numeric result `0.82` is written as `"0.82"`, and an array result `[0.14, 0.28]` is written as `"[0.14, 0.28]"`.
+
+The output `id` is resolved from actual input values of ID-like parameters. The priority is `ids`, then `id`, then other
+parameter names ending with `id`, such as `task_id`. If multiple operators provide different IDs at the same priority,
+the first one in `operators` order wins. If no ID-like parameter can be resolved, `id` is written as `"unknown"`.
 
 ## Output
 
@@ -95,25 +98,26 @@ The mapper writes an object to `output_key`:
 ```json
 {
   "query_metric_data_outputs": {
-    "bench_roi_score": {
-      "success": true,
-      "value": 0.82,
-      "error": "",
-      "operator_id": 201,
-      "operator_name_cn": "行业基准 ROI 得分"
-    },
-    "quality_score": {
-      "success": false,
-      "value": null,
-      "error": "missing required parameter: bench_roi",
-      "operator_id": 202,
-      "operator_name_cn": "质量得分"
-    }
+    "id": "1854168911595796",
+    "metrics": [
+      {
+        "metricCode": "bench_roi_score",
+        "metricName": "行业基准 ROI 得分",
+        "output": "0.82",
+        "error": ""
+      },
+      {
+        "metricCode": "quality_score",
+        "metricName": "质量得分",
+        "output": null,
+        "error": "missing required parameter: bench_roi"
+      }
+    ]
   }
 }
 ```
 
-The result key is `operatorNameEn`; if missing, it falls back to `operator_{operator_id}`.
+`metricCode` is `operatorNameEn`; if missing, it falls back to `operator_{operator_id}`.
 
 ## YAML Example
 

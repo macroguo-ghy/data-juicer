@@ -115,28 +115,30 @@ class StateMetricCalculatorMapper(Mapper):
     def _calculate_metric_outputs(self, sample: dict[str, Any]) -> dict[str, Any]:
         details = self._get_operator_details()
         self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
-        outputs = {}
+        metrics = []
         for operator_config in self.operators:
             operator_id = operator_config["operator_id"]
             detail = details.get(operator_id)
-            result_key = self._result_key(detail, operator_id)
             try:
                 if self._operator_details_error:
                     raise ValueError(self._operator_details_error)
                 if detail is None:
                     raise ValueError(f"operator detail not found: {operator_id}")
-                outputs[result_key] = self._calculate_one_metric(
+                metrics.append(self._calculate_one_metric(
                     sample,
                     operator_config,
                     detail,
-                )
+                ))
             except Exception as exc:
-                outputs[result_key] = self._metric_failure_result(
+                metrics.append(self._metric_failure_result(
                     operator_id,
                     detail,
                     str(exc),
-                )
-        return outputs
+                ))
+        return {
+            "id": self._resolve_output_id(sample, details),
+            "metrics": metrics,
+        }
 
     def _validate_state_key_when_all_metrics_depend_on_state(
         self,
@@ -184,11 +186,10 @@ class StateMetricCalculatorMapper(Mapper):
         )
         value = runner.run_with_args(*args)
         return {
-            "success": True,
-            "value": self._stringify_complex_metric_value(value),
+            "metricCode": self._result_key(detail, operator_id),
+            "metricName": detail.get("operatorNameCn") or "",
+            "output": self._stringify_metric_output(value),
             "error": "",
-            "operator_id": operator_id,
-            "operator_name_cn": detail.get("operatorNameCn") or "",
         }
 
     def _resolve_calculate_args(
@@ -259,11 +260,64 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError(f"sample.{self.state_key} must be provided")
         return self._normalize_state_value(value)
 
+    def _resolve_output_id(
+        self,
+        sample: dict[str, Any],
+        details: dict[int, dict[str, Any]],
+    ) -> str:
+        candidates = []
+        for operator_index, operator_config in enumerate(self.operators):
+            operator_id = operator_config["operator_id"]
+            detail = details.get(operator_id)
+            if not isinstance(detail, dict):
+                continue
+            try:
+                parameters = self._parse_input_parameters(detail)
+            except Exception:
+                continue
+            for parameter_index, parameter in enumerate(parameters):
+                priority = self._id_parameter_priority(parameter.get("key_name_en"))
+                if priority is None:
+                    continue
+                try:
+                    value = self._resolve_parameter_value(sample, operator_config, parameter)
+                except Exception:
+                    continue
+                if value is None or value == "":
+                    continue
+                candidates.append((
+                    priority,
+                    operator_index,
+                    parameter_index,
+                    self._stringify_output_id(value),
+                ))
+        if not candidates:
+            return "unknown"
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return candidates[0][3]
+
     @staticmethod
-    def _stringify_complex_metric_value(value):
+    def _id_parameter_priority(name: str | None):
+        if not name:
+            return None
+        normalized = name.lower().replace("_", "")
+        if normalized == "ids":
+            return 0
+        if normalized == "id":
+            return 1
+        if normalized.endswith("id"):
+            return 2
+        return None
+
+    @staticmethod
+    def _stringify_output_id(value) -> str:
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False)
-        return value
+        return str(value)
+
+    @staticmethod
+    def _stringify_metric_output(value) -> str:
+        return json.dumps(value, ensure_ascii=False)
 
     @staticmethod
     def _is_missing_state_value(value, missing) -> bool:
@@ -438,11 +492,10 @@ class StateMetricCalculatorMapper(Mapper):
         error: str,
     ) -> dict[str, Any]:
         return {
-            "success": False,
-            "value": None,
+            "metricCode": StateMetricCalculatorMapper._result_key(detail, operator_id),
+            "metricName": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
+            "output": None,
             "error": error,
-            "operator_id": operator_id,
-            "operator_name_cn": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
         }
 
     def _get_ctx(self):
