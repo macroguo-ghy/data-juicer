@@ -443,4 +443,6 @@ class _SamplePromptRenderer:
                 raise ValueError(
                     f"prompt_template field is not JSON serializable: {field_name}"
                 ) from exc
-        return value
+        if value is None:
+            return ""
+        return str(value)

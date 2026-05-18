@@ -411,6 +411,21 @@ process:
 
         self.assertEqual(prompt, "请保留：{state_template}；替换：STATE")
 
+    def test_prompt_template_stringifies_scalar_values(self):
+        op = LLMInferenceMapper(
+            prompt_template="数量：{{ count }}；是否有效：{{ enabled }}；空值：{{ empty }}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "count": 123,
+            "enabled": True,
+            "empty": None,
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, "数量：123；是否有效：True；空值：")
+
     def test_prompt_template_only_serializes_referenced_fields(self):
         op = LLMInferenceMapper(
             prompt_template="请总结：{{ text }}",

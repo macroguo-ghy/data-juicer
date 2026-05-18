@@ -172,7 +172,8 @@ prompt. `prompt_template` reads one or more sample fields and renders them into 
 
 ### Prompt Template Syntax
 
-`prompt_template` only treats Jinja-style `{{ field }}` placeholders as variables. A placeholder name must match a field path in the current sample. Single-brace text such as `{field}` is kept as ordinary prompt text.
+`prompt_template` only treats Jinja-style `{{ field }}` placeholders as variables. A placeholder name must match a
+field path in the current sample. Single-brace text such as `{field}` is kept as ordinary prompt text.
 
 Sample:
 
@@ -188,7 +189,6 @@ Template:
 ```yaml
 prompt_template: "请总结文章《{{ title }}》：{{ text }}"
 ```
-
 
 Rendered prompt:
 
