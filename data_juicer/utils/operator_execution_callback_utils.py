@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import time
+from datetime import date, datetime
+from decimal import Decimal
 from enum import IntEnum
 from typing import Any
 
@@ -67,7 +70,7 @@ class OperatorExecutionCallbackClient:
             "taskVersion": self._get_ctx_required_value("taskVersion"),
             "operatorIndex": self._get_ctx_required_value("operatorIndex"),
             "operatorName": self._get_ctx_required_value("operatorName"),
-            "operatorConfig": operator_config or {},
+            "operatorConfig": self._to_json_safe_value(operator_config or {}),
         }
         self._add_optional_ctx_value(payload, "flowInstanceId")
         self._add_optional_ctx_value(payload, "flowNodeId")
@@ -233,13 +236,86 @@ class OperatorExecutionCallbackClient:
     @staticmethod
     def _add_optional_value(payload: dict[str, Any], key: str, value: Any) -> None:
         if value is not None:
-            payload[key] = value
+            payload[key] = OperatorExecutionCallbackClient._to_json_safe_value(value)
 
     @staticmethod
     def _get_required_value(value: Any, name: str) -> Any:
         if value in (None, ""):
             raise ValueError(f"{name} must be provided")
         return value
+
+    @staticmethod
+    def _to_json_safe_value(value: Any) -> Any:
+        if value is None or isinstance(value, (str, bool, int, float)):
+            return value
+        if hasattr(value, "as_py") and callable(value.as_py):
+            try:
+                converted = value.as_py()
+            except Exception:
+                pass
+            else:
+                if converted is not value:
+                    return OperatorExecutionCallbackClient._to_json_safe_value(converted)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return {
+                "__type__": "bytes",
+                "base64": base64.b64encode(bytes(value)).decode("ascii"),
+            }
+        if isinstance(value, dict):
+            return {
+                OperatorExecutionCallbackClient._json_safe_dict_key(key):
+                OperatorExecutionCallbackClient._to_json_safe_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [OperatorExecutionCallbackClient._to_json_safe_value(item) for item in value]
+        if isinstance(value, (set, frozenset)):
+            items = [OperatorExecutionCallbackClient._to_json_safe_value(item) for item in value]
+            return sorted(items, key=lambda item: str(item))
+        if hasattr(value, "tolist") and callable(value.tolist):
+            try:
+                converted = value.tolist()
+            except Exception:
+                pass
+            else:
+                if converted is not value:
+                    return OperatorExecutionCallbackClient._to_json_safe_value(converted)
+        if hasattr(value, "item") and callable(value.item):
+            try:
+                converted = value.item()
+            except Exception:
+                pass
+            else:
+                if converted is not value:
+                    return OperatorExecutionCallbackClient._to_json_safe_value(converted)
+        if hasattr(value, "__dict__"):
+            return {
+                "__type__": "object",
+                "class": OperatorExecutionCallbackClient._class_name(value),
+                "attrs": OperatorExecutionCallbackClient._to_json_safe_value(vars(value)),
+            }
+        return {
+            "__type__": "object",
+            "class": OperatorExecutionCallbackClient._class_name(value),
+            "repr": repr(value),
+        }
+
+    @staticmethod
+    def _json_safe_dict_key(key: Any) -> str:
+        if isinstance(key, str):
+            return key
+        return str(key)
+
+    @staticmethod
+    def _class_name(value: Any) -> str:
+        cls = type(value)
+        return f"{cls.__module__}.{cls.__qualname__}"
 
     def _get_operator_execution_id(self) -> int:
         if self.operator_execution_id in (None, ""):
