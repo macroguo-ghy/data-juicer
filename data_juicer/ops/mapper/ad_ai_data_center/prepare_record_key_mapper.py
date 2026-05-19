@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
+import math
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from loguru import logger
@@ -17,6 +21,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 OP_NAME = "prepare_record_key_mapper"
 NEED_CTX = True
 INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
+FAILED_RECORD_KEY_PREFIX = "prepare_record_key_failed:"
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -49,8 +54,8 @@ class PrepareRecordKeyMapper(Mapper):
 
     def process_single(self, sample: dict[str, Any]):
         record_started_at = current_time_millis()
-        original_sample = copy.deepcopy(sample)
         try:
+            original_sample = copy.deepcopy(sample)
             if not self.overwrite and sample.get(RECORD_KEY_FIELD):
                 output_sample = sample
             else:
@@ -59,7 +64,7 @@ class PrepareRecordKeyMapper(Mapper):
                 output_sample = sample
         except Exception as exc:
             self._report_record_failure(
-                original_sample,
+                locals().get("original_sample", sample),
                 sample,
                 exc,
                 record_started_at,
@@ -78,7 +83,7 @@ class PrepareRecordKeyMapper(Mapper):
             callback_client.report_record_success(
                 record_key=output_sample[RECORD_KEY_FIELD],
                 input_data=input_sample,
-                output_data=copy.deepcopy(output_sample),
+                output_data=self._safe_deepcopy(output_sample),
                 started_at=started_at,
             )
         except Exception as exc:
@@ -86,13 +91,12 @@ class PrepareRecordKeyMapper(Mapper):
 
     def _report_record_failure(self, input_sample, output_sample, exc, started_at):
         try:
-            record_key = output_sample.get(RECORD_KEY_FIELD)
-            if not record_key:
-                return
+            record_key = output_sample.get(RECORD_KEY_FIELD) or self._fallback_record_key(input_sample)
             callback_client = self._get_operator_execution_callback_client()
             callback_client.report_record_failure(
                 record_key=record_key,
                 input_data=input_sample,
+                output_data=self._safe_deepcopy(output_sample),
                 error_message=str(exc),
                 started_at=started_at,
             )
@@ -141,5 +145,100 @@ class PrepareRecordKeyMapper(Mapper):
 
     @staticmethod
     def _stable_hash(value) -> str:
-        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        normalized_value = PrepareRecordKeyMapper._normalize_for_hash(value)
+        payload = json.dumps(
+            normalized_value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return PrepareRecordKeyMapper._sha256_hex(payload)
+
+    @staticmethod
+    def _fallback_record_key(value) -> str:
+        try:
+            normalized_value = PrepareRecordKeyMapper._normalize_for_hash(value)
+            payload = PrepareRecordKeyMapper._stable_json_payload(normalized_value)
+        except Exception:
+            payload = json.dumps(
+                {
+                    "__type__": "unserializable_sample",
+                    "class": PrepareRecordKeyMapper._class_name(value),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        return FAILED_RECORD_KEY_PREFIX + PrepareRecordKeyMapper._sha256_hex(payload)
+
+    @staticmethod
+    def _normalize_for_hash(value):
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value):
+                return "nan"
+            if math.isinf(value):
+                return "inf" if value > 0 else "-inf"
+            return value
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return base64.b64encode(bytes(value)).decode("ascii")
+        if isinstance(value, dict):
+            if all(isinstance(key, str) for key in value.keys()):
+                return {
+                    key: PrepareRecordKeyMapper._normalize_for_hash(item)
+                    for key, item in value.items()
+                }
+            normalized_items = [
+                [
+                    PrepareRecordKeyMapper._normalize_for_hash(key),
+                    PrepareRecordKeyMapper._normalize_for_hash(item),
+                ]
+                for key, item in value.items()
+            ]
+            return sorted(normalized_items, key=PrepareRecordKeyMapper._stable_json_payload)
+        if isinstance(value, (list, tuple)):
+            return [
+                PrepareRecordKeyMapper._normalize_for_hash(item)
+                for item in value
+            ]
+        if isinstance(value, (set, frozenset)):
+            normalized_items = [
+                PrepareRecordKeyMapper._normalize_for_hash(item)
+                for item in value
+            ]
+            return sorted(normalized_items, key=PrepareRecordKeyMapper._stable_json_payload)
+        if type(value).__str__ is object.__str__ and type(value).__repr__ is object.__repr__:
+            return f"<{PrepareRecordKeyMapper._class_name(value)}>"
+        return str(value)
+
+    @staticmethod
+    def _stable_json_payload(value) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _class_name(value) -> str:
+        value_type = type(value)
+        return f"{value_type.__module__}.{value_type.__qualname__}"
+
+    @staticmethod
+    def _sha256_hex(payload: str) -> str:
+        return hashlib.sha256(memoryview(payload.encode("utf-8"))).hexdigest()
+
+    @staticmethod
+    def _safe_deepcopy(value):
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return value

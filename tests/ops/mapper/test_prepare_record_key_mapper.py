@@ -1,6 +1,8 @@
 import hashlib
 import json
 import unittest
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import ANY, patch
 
@@ -19,6 +21,16 @@ from data_juicer.ops.mapper.ad_ai_data_center.prepare_record_key_mapper import (
 def stable_hash(value):
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class CustomValue:
+    def __str__(self):
+        return "custom-value"
+
+
+class FailingDeepCopyDict(dict):
+    def __deepcopy__(self, memo):
+        raise ValueError("deepcopy failed")
 
 
 class PrepareRecordKeyMapperTest(unittest.TestCase):
@@ -149,6 +161,127 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "query": "hello",
             }),
         )
+
+    def test_generates_record_key_from_date_like_values(self):
+        op = PrepareRecordKeyMapper(
+            source_fields=["query_date", "created_at"],
+            ctx=self._ctx(),
+        )
+        sample = {
+            "query_date": date(2026, 5, 19),
+            "created_at": datetime(2026, 5, 19, 10, 30, 1),
+        }
+
+        result = op.process_single(sample)
+
+        self.assertEqual(
+            result[RECORD_KEY_FIELD],
+            stable_hash({
+                "query_date": "2026-05-19",
+                "created_at": "2026-05-19T10:30:01",
+            }),
+        )
+
+    def test_generates_record_key_from_non_json_values_with_stable_normalization(self):
+        op = PrepareRecordKeyMapper(
+            source_fields=["amount", "payload", "tags", "mapping", "custom"],
+            ctx=self._ctx(),
+        )
+        sample = {
+            "amount": Decimal("12.30"),
+            "payload": b"hello",
+            "tags": {"b", "a"},
+            "mapping": {
+                1: "one",
+                (2, 3): "tuple-key",
+            },
+            "custom": CustomValue(),
+        }
+
+        result = op.process_single(sample)
+
+        self.assertEqual(
+            result[RECORD_KEY_FIELD],
+            stable_hash({
+                "amount": "12.30",
+                "payload": "aGVsbG8=",
+                "tags": ["a", "b"],
+                "mapping": [
+                    [
+                        1,
+                        "one",
+                    ],
+                    [
+                        [
+                            2,
+                            3,
+                        ],
+                        "tuple-key",
+                    ],
+                ],
+                "custom": "custom-value",
+            }),
+        )
+
+    def test_dict_key_types_do_not_collide_when_generating_record_key(self):
+        int_key_result = PrepareRecordKeyMapper._stable_hash({
+            "mapping": {
+                1: "value",
+            },
+        })
+        string_key_result = PrepareRecordKeyMapper._stable_hash({
+            "mapping": {
+                "1": "value",
+            },
+        })
+
+        self.assertNotEqual(int_key_result, string_key_result)
+
+    def test_generates_record_key_from_opaque_objects_without_memory_address(self):
+        op = PrepareRecordKeyMapper(source_fields=["opaque"], ctx=self._ctx())
+
+        first_result = op.process_single({"opaque": object()})
+        second_result = op.process_single({"opaque": object()})
+
+        self.assertEqual(
+            first_result[RECORD_KEY_FIELD],
+            stable_hash({
+                "opaque": "<builtins.object>",
+            }),
+        )
+        self.assertEqual(first_result[RECORD_KEY_FIELD], second_result[RECORD_KEY_FIELD])
+
+    def test_reports_record_failure_with_fallback_key_when_record_key_generation_fails(self):
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
+        sample = {"query": "hello"}
+
+        with patch.object(
+            PrepareRecordKeyMapper,
+            "_stable_hash",
+            side_effect=ValueError("hash failed"),
+        ):
+            with self.assertRaisesRegex(ValueError, "hash failed"):
+                op.process_single(sample)
+
+        self.mock_callback.report_record_failure.assert_called_once()
+        failure_call = self.mock_callback.report_record_failure.call_args.kwargs
+        self.assertTrue(failure_call["record_key"].startswith("prepare_record_key_failed:"))
+        self.assertEqual(failure_call["input_data"], {"query": "hello"})
+        self.assertEqual(failure_call["error_message"], "hash failed")
+        self.assertNotIn(RECORD_KEY_FIELD, sample)
+
+    def test_reports_record_failure_when_initial_deepcopy_fails(self):
+        op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
+        sample = FailingDeepCopyDict(query="hello")
+
+        with self.assertRaisesRegex(ValueError, "deepcopy failed"):
+            op.process_single(sample)
+
+        self.mock_callback.report_record_failure.assert_called_once()
+        failure_call = self.mock_callback.report_record_failure.call_args.kwargs
+        self.assertTrue(failure_call["record_key"].startswith("prepare_record_key_failed:"))
+        self.assertEqual(failure_call["input_data"], sample)
+        self.assertEqual(failure_call["error_message"], "deepcopy failed")
 
     def test_callback_failure_does_not_block_record_key_generation(self):
         self.mock_callback.report_record_success.side_effect = RuntimeError("callback down")
