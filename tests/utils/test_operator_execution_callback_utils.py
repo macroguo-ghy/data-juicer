@@ -1,4 +1,7 @@
+import json
 import unittest
+from datetime import date, datetime
+from decimal import Decimal
 from unittest.mock import patch
 
 from data_juicer.utils.operator_execution_callback_utils import (
@@ -124,6 +127,30 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_start_converts_complex_operator_config_to_json_safe_payload(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True, "operatorExecutionId": 10001}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx())
+
+        client.start(
+            operator_config={
+                "query_date": date(2026, 5, 19),
+                "amount": Decimal("12.30"),
+            }
+        )
+
+        payload = fake_client.requests[0]["json_body"]
+        json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["operatorConfig"]["query_date"], "2026-05-19")
+        self.assertEqual(payload["operatorConfig"]["amount"], "12.30")
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_report_record_success_uses_saved_operator_execution_id(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
@@ -170,6 +197,118 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 }
             }],
         )
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_converts_complex_values_to_json_safe_payload(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            input_data={
+                "query_date": date(2026, 5, 19),
+                "created_at": datetime(2026, 5, 19, 12, 6, 32),
+                "amount": Decimal("12.30"),
+                "payload": b"hello",
+                "tags": {"b", "a"},
+                "nested": {
+                    (1, 2): "tuple-key",
+                },
+                "opaque": object(),
+            },
+            output_data={
+                "values": (1, 2),
+            },
+        )
+
+        payload = fake_client.requests[0]["json_body"]
+        json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["inputData"]["query_date"], "2026-05-19")
+        self.assertEqual(payload["inputData"]["created_at"], "2026-05-19T12:06:32")
+        self.assertEqual(payload["inputData"]["amount"], "12.30")
+        self.assertEqual(payload["inputData"]["payload"], {"__type__": "bytes", "base64": "aGVsbG8="})
+        self.assertEqual(payload["inputData"]["tags"], ["a", "b"])
+        self.assertEqual(payload["inputData"]["nested"], {"(1, 2)": "tuple-key"})
+        self.assertEqual(payload["inputData"]["opaque"]["__type__"], "object")
+        self.assertEqual(payload["outputData"]["values"], [1, 2])
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_summarizes_risky_complex_values(self, mock_client_cls):
+        class CustomObject:
+            def __init__(self):
+                self.secret = "should-not-expand"
+
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+        circular = {}
+        circular["self"] = circular
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            input_data={
+                "nan": float("nan"),
+                "inf": float("inf"),
+                "large_list": list(range(40)),
+                "custom": CustomObject(),
+                "circular": circular,
+            },
+        )
+
+        payload = fake_client.requests[0]["json_body"]
+        json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        self.assertEqual(payload["inputData"]["nan"], {"__type__": "float", "value": "nan"})
+        self.assertEqual(payload["inputData"]["inf"], {"__type__": "float", "value": "inf"})
+        self.assertEqual(
+            payload["inputData"]["large_list"],
+            {
+                "__type__": "list",
+                "length": 40,
+                "preview": list(range(10)),
+                "truncated": True,
+            },
+        )
+        self.assertNotIn("attrs", payload["inputData"]["custom"])
+        self.assertEqual(payload["inputData"]["custom"]["__type__"], "object")
+        self.assertEqual(payload["inputData"]["circular"]["self"]["__type__"], "circular_reference")
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_does_not_mark_shared_object_as_circular(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+        shared = {"value": 1}
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            input_data={
+                "left": shared,
+                "right": shared,
+            },
+        )
+
+        payload = fake_client.requests[0]["json_body"]
+        self.assertEqual(payload["inputData"]["left"], {"value": 1})
+        self.assertEqual(payload["inputData"]["right"], {"value": 1})
 
     @patch("data_juicer.utils.operator_execution_callback_utils.time.time")
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
