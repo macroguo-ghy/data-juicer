@@ -261,6 +261,7 @@ class OperatorExecutionCallbackClient:
                 if value == float("-inf"):
                     return {"__type__": "float", "value": "-inf"}
             return value
+
         value_id = id(value)
         if isinstance(value, (dict, list, tuple, set, frozenset)):
             if value_id in seen:
@@ -268,6 +269,7 @@ class OperatorExecutionCallbackClient:
                     "__type__": "circular_reference",
                     "class": OperatorExecutionCallbackClient._class_name(value),
                 }
+
         if hasattr(value, "as_py") and callable(value.as_py):
             try:
                 converted = value.as_py()
