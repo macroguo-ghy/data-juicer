@@ -793,6 +793,53 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
             load_table=False,
         )
 
+    def test_create_magnus_table_strips_arrow_metadata_before_sdk_create(self):
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+        schema = pa.schema(
+            [
+                pa.field(
+                    "state",
+                    pa.struct(
+                        [
+                            pa.field("query_time", pa.string(), metadata={b"child_key": b"child_value"}),
+                        ]
+                    ),
+                    metadata={b"field_key": b"field_value"},
+                )
+            ],
+            metadata={b"schema_key": b"schema_value"},
+        )
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=magnus_module):
+            create_magnus_table_if_not_exists("catalog.db.table", schema)
+
+        created_schema = client.create_table.call_args.args[3]
+        self.assertIsNone(created_schema.metadata)
+        self.assertIsNone(created_schema.field("state").metadata)
+        self.assertIsNone(created_schema.field("state").type.field("query_time").metadata)
+
+    def test_create_magnus_table_strips_nested_arrow_metadata_when_top_level_is_clean(self):
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+        schema = pa.schema(
+            [
+                pa.field(
+                    "events",
+                    pa.list_(pa.field("event", pa.struct([pa.field("id", pa.string(), metadata={b"k": b"v"})]))),
+                )
+            ]
+        )
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=magnus_module):
+            create_magnus_table_if_not_exists("catalog.db.table", schema)
+
+        created_schema = client.create_table.call_args.args[3]
+        id_field = created_schema.field("events").type.value_field.type.field("id")
+        self.assertIsNone(id_field.metadata)
+
     def test_create_magnus_table_allows_existing_table_without_schema(self):
         client = MagicMock()
         client.exist_table.return_value = True

@@ -1201,6 +1201,38 @@ def _as_arrow_schema(schema, *, source):
     raise ValueError(f"Magnus `infer_schema_on_create` could not infer a PyArrow schema from {source}")
 
 
+def _strip_arrow_metadata_from_type(data_type):
+    import pyarrow as pa
+
+    if pa.types.is_struct(data_type):
+        return pa.struct([_strip_arrow_metadata_from_field(field) for field in data_type])
+    if pa.types.is_list(data_type):
+        return pa.list_(_strip_arrow_metadata_from_field(data_type.value_field))
+    if pa.types.is_large_list(data_type):
+        return pa.large_list(_strip_arrow_metadata_from_field(data_type.value_field))
+    if pa.types.is_fixed_size_list(data_type):
+        return pa.list_(_strip_arrow_metadata_from_field(data_type.value_field), list_size=data_type.list_size)
+    if pa.types.is_map(data_type):
+        key_field = _strip_arrow_metadata_from_field(data_type.key_field)
+        item_field = _strip_arrow_metadata_from_field(data_type.item_field)
+        return pa.map_(key_field, item_field, keys_sorted=data_type.keys_sorted)
+    return data_type
+
+
+def _strip_arrow_metadata_from_field(field):
+    import pyarrow as pa
+
+    return pa.field(field.name, _strip_arrow_metadata_from_type(field.type), nullable=field.nullable)
+
+
+def _strip_arrow_metadata_from_schema(schema):
+    import pyarrow as pa
+
+    if not isinstance(schema, pa.Schema):
+        return schema
+    return pa.schema([_strip_arrow_metadata_from_field(field) for field in schema])
+
+
 def _infer_magnus_schema_from_arrow_batches(dataset):
     import pyarrow as pa
 
@@ -1341,6 +1373,7 @@ def create_magnus_table_if_not_exists(
     if schema is None and schema_provider is not None:
         schema = schema_provider()
 
+    schema = _strip_arrow_metadata_from_schema(schema)
     _validate_magnus_create_table_config(schema, partition_columns)
     try:
         magnus_client.create_table(
