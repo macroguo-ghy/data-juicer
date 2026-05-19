@@ -1201,14 +1201,60 @@ def _as_arrow_schema(schema, *, source):
     raise ValueError(f"Magnus `infer_schema_on_create` could not infer a PyArrow schema from {source}")
 
 
-def _infer_magnus_schema_from_ray_dataset(dataset):
+def _infer_magnus_schema_from_arrow_batches(dataset):
+    import pyarrow as pa
+
+    schemas = []
+    try:
+        batches = dataset.iter_batches(batch_format="pyarrow", batch_size=8192)
+        for batch in batches:
+            schemas.append(_as_arrow_schema(getattr(batch, "schema", None), source="Ray Dataset pyarrow batch"))
+    except Exception as exc:
+        raise ValueError(
+            "Magnus `infer_schema_on_create` could not infer a PyArrow schema from Ray Dataset pyarrow batches"
+        ) from exc
+    if not schemas:
+        raise ValueError("Magnus `infer_schema_on_create` could not infer a PyArrow schema from empty Ray Dataset")
+    try:
+        return pa.unify_schemas(schemas)
+    except Exception as exc:
+        raise ValueError("Magnus `infer_schema_on_create` found incompatible Ray Dataset pyarrow batch schemas") from exc
+
+
+def _infer_magnus_schema_and_dataset_from_ray_dataset(dataset):
     try:
         schema = dataset.schema(fetch_if_missing=True)
     except TypeError:
         schema = dataset.schema()
     except Exception as exc:
         raise ValueError("Magnus `infer_schema_on_create` failed to fetch Ray Dataset schema") from exc
-    return _as_arrow_schema(schema, source="Ray Dataset")
+    try:
+        return _as_arrow_schema(schema, source="Ray Dataset"), dataset
+    except ValueError:
+        inferred_dataset = dataset
+        if hasattr(dataset, "materialize"):
+            try:
+                inferred_dataset = dataset.materialize()
+            except Exception as exc:
+                raise ValueError(
+                    "Magnus `infer_schema_on_create` could not materialize Ray Dataset for pyarrow batch schema inference"
+                ) from exc
+            try:
+                schema = inferred_dataset.schema(fetch_if_missing=True)
+            except TypeError:
+                schema = inferred_dataset.schema()
+            except Exception:
+                schema = None
+            try:
+                return _as_arrow_schema(schema, source="materialized Ray Dataset"), inferred_dataset
+            except ValueError:
+                pass
+        return _infer_magnus_schema_from_arrow_batches(inferred_dataset), inferred_dataset
+
+
+def _infer_magnus_schema_from_ray_dataset(dataset):
+    schema, _ = _infer_magnus_schema_and_dataset_from_ray_dataset(dataset)
+    return schema
 
 
 def _infer_magnus_schema_from_hf_dataset(dataset):
@@ -1938,7 +1984,12 @@ def write_ray_dataset_to_magnus(dataset, table_name: str, **kwargs):
     if create_table_if_not_exists:
         create_table_kwargs = {"partition_columns": partition_columns}
         if infer_schema_on_create and explicit_schema is None:
-            create_table_kwargs["schema_provider"] = lambda: _infer_magnus_schema_from_ray_dataset(dataset)
+            def schema_provider():
+                nonlocal dataset
+                inferred_schema, dataset = _infer_magnus_schema_and_dataset_from_ray_dataset(dataset)
+                return inferred_schema
+
+            create_table_kwargs["schema_provider"] = schema_provider
         table_properties = _magnus_table_properties_from_write_options(magnus_conf)
         if table_properties:
             create_table_kwargs["table_properties"] = table_properties
