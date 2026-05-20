@@ -59,11 +59,11 @@ dataset:
 
 export:
   target: "magnus"
-  table_name: "<CATALOG>.<DATABASE>.ecom_product_image_schema"
+  table_name: "ai_data_forge.ccu.ecom_product_image_schema"
   operation: "OVERWRITE"
   partition_columns: ["p_date"]
   partition_values:
-    p_date: "<P_DATE>"
+    p_date: "20250518"
   schema:
     fields:
       - {name: "id", type: "string"}

@@ -177,6 +177,45 @@ class DatasetBuilder(object):
             self.weights = [1.0 for stra in self.load_strategies]
             self.sample_numbers = [None for stra in self.load_strategies]
 
+    def validate_ray_data_checkpoint_support(self) -> None:
+        if self.executor_type != "ray":
+            return
+
+        if self.require_dataset_arg:
+            raise ValueError(
+                "Ray Data checkpointing requires dataset configs with loaders that declare checkpoint support; "
+                "runtime dataset arguments are not supported."
+            )
+
+        if self.use_generated_dataset_config:
+            raise ValueError(
+                "Ray Data checkpointing does not support `generated_dataset_config` because it does not "
+                "declare a recoverable Ray read source boundary."
+            )
+
+        load_strategies = getattr(self, "load_strategies", None)
+        if not load_strategies:
+            raise ValueError("Ray Data checkpointing requires at least one configured Ray dataset loader.")
+
+        unsupported = []
+        for idx, strategy in enumerate(load_strategies):
+            support = strategy.get_ray_data_checkpoint_support()
+            if support.supported:
+                continue
+            data_type, data_source = normalize_data_type_and_source(strategy.ds_config)
+            reason = support.reason or "loader does not declare Ray Data checkpoint support"
+            unsupported.append(
+                f"dataset.configs[{idx}] type={data_type!r} source={data_source!r} "
+                f"strategy={strategy.__class__.__name__}: {reason}"
+            )
+
+        if unsupported:
+            raise ValueError(
+                "Ray Data checkpointing requires every Ray dataset loader to provide a recoverable "
+                "source boundary for checkpoint detail metadata. Unsupported loader(s): "
+                + "; ".join(unsupported)
+            )
+
     def load_dataset(self, **kwargs) -> DJDataset:
         if self.require_dataset_arg:
             # should not get into this method

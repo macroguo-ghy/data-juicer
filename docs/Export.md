@@ -10,6 +10,7 @@ After processing, DataJuicer exports the result dataset to disk using the `Expor
 - **Shard export** — split large datasets into multiple files by size
 - **Parallel export** — speed up single-file export with multiprocessing
 - **S3 export** — write results directly to Amazon S3 or S3-compatible storage
+- **Row limit** — cap the number of rows passed to the export sink with structured export config
 - **Stats and hash management** — control which intermediate fields are kept in the output
 
 ## Configuration
@@ -25,6 +26,17 @@ keep_stats_in_res_ds: false                # Keep computed stats in output
 keep_hashes_in_res_ds: false               # Keep computed hashes in output
 export_extra_args: {}                      # Additional format-specific arguments
 export_aws_credentials: null               # For S3 export, see S3 section for details
+```
+
+For row-limited export, use the structured `export` config:
+
+```yaml
+export:
+  target: local
+  path: ./outputs/result.jsonl
+  type: jsonl
+  max_rows: 1000
+  max_rows_mode: limit
 ```
 
 ### Command Line
@@ -169,6 +181,17 @@ AWS credentials are resolved in priority order:
 1. `export_aws_credentials` config (default mode) or `export_extra_args` (Ray mode)
 2. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
 3. Default credential chain (IAM role, `~/.aws/credentials`)
+
+## Export Row Limit
+
+`export.max_rows` controls the number of rows passed to the export sink. It must be a positive integer. When unset or `null`, export is unlimited.
+
+`export.max_rows_mode` controls the implementation:
+
+- `limit` (default): for default/HuggingFace Dataset export, this is an exact upper bound. For Ray Dataset export, Data-Juicer applies Ray Dataset `limit(max_rows)` before the sink write. The exported row count is bounded by `max_rows`, and Ray may push the limit upstream to reduce work for compatible lazy pipelines. This execution reduction is best effort: operators that need full input, all-to-all operators, filters, materialized datasets, or non-lazy metric collection can still execute more upstream work than `max_rows` rows.
+- `quota_reservation`: Ray-only. Data-Juicer inserts a quota actor before the sink, admits whole pyarrow batches until at least `max_rows` rows have been admitted, and materializes the quota-filtered Ray Dataset before the sink write so Ray pre-write schema/sample actions do not consume the quota. If the upstream produces enough rows and the write succeeds, the exported row count is greater than or equal to `max_rows`, and may exceed it by up to one quota batch. Configure that batch granularity with `export.max_rows_quota_batch_size`; larger batches reduce actor calls but can increase overshoot.
+
+`ray_collect_real_metrics: true` is invalid together with `export.max_rows`, because eager Ray Dataset `materialize()`/`count()` before export defeats the lazy limit path.
 
 ## Stats and Hash Management
 

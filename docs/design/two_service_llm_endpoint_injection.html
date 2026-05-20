@@ -1,0 +1,1820 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>双服务大模型部署与 VLM Endpoint 注入方案</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #627083;
+      --line: #d7dde6;
+      --soft-line: #e9edf3;
+      --blue: #2563eb;
+      --green: #188451;
+      --amber: #b7791f;
+      --red: #c2410c;
+      --purple: #6d5bd0;
+      --slate: #334155;
+      --code-bg: #111827;
+      --code-ink: #e5e7eb;
+      --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 264px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      padding: 24px 18px;
+    }
+
+    nav .title {
+      font-weight: 700;
+      font-size: 16px;
+      margin-bottom: 18px;
+      line-height: 1.35;
+    }
+
+    nav a {
+      display: block;
+      padding: 8px 10px;
+      margin: 2px 0;
+      border-radius: 6px;
+      color: var(--slate);
+      font-size: 14px;
+    }
+
+    nav a:hover {
+      background: #eef4ff;
+      text-decoration: none;
+    }
+
+    main {
+      min-width: 0;
+      padding: 40px 48px 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 28px;
+      align-items: stretch;
+      margin-bottom: 28px;
+    }
+
+    h1, h2, h3 {
+      letter-spacing: 0;
+      line-height: 1.25;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 34px;
+      max-width: 980px;
+    }
+
+    h2 {
+      margin: 40px 0 14px;
+      font-size: 24px;
+    }
+
+    h3 {
+      margin: 22px 0 10px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 17px;
+      max-width: 920px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero-copy {
+      padding: 28px;
+    }
+
+    .hero-figure {
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #1d4ed8;
+      border: 1px solid #c7d7fe;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .section {
+      max-width: 1180px;
+    }
+
+    .grid-2,
+    .grid-3,
+    .grid-4 {
+      display: grid;
+      gap: 16px;
+      margin: 16px 0 22px;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .metric {
+      display: block;
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 2px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .callout {
+      border-left: 4px solid var(--blue);
+      background: #eff6ff;
+      padding: 14px 16px;
+      border-radius: 0 8px 8px 0;
+      margin: 16px 0;
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+      background: #fff7ed;
+    }
+
+    .callout.success {
+      border-left-color: var(--green);
+      background: #ecfdf5;
+    }
+
+    .diagram {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .state-flow {
+      padding: 20px;
+      margin: 16px 0 24px;
+    }
+
+    .state-track {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .state-step {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .state-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      left: 50%;
+      bottom: -21px;
+      transform: translateX(-50%) rotate(90deg);
+      z-index: 1;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--slate);
+      font-weight: 700;
+    }
+
+    .state-step h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+    }
+
+    .state-phase {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #1d4ed8;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .state-fields {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+    }
+
+    .state-fields div {
+      display: grid;
+      gap: 3px;
+    }
+
+    .state-fields dt {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .state-fields dd {
+      margin: 0;
+    }
+
+    .state-branches {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .state-branch {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--amber);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .state-branch.danger {
+      border-left-color: var(--red);
+    }
+
+    .state-branch h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin: 16px 0 24px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--soft-line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f3f6fb;
+      font-weight: 700;
+      color: #263548;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
+      font-size: 0.92em;
+      background: #eef2f7;
+      color: #1f2937;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+
+    pre {
+      margin: 14px 0;
+      padding: 16px;
+      overflow-x: auto;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.55;
+      border: 1px solid #1f2937;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
+      font-size: inherit;
+    }
+
+    pre code.language-diff {
+      display: block;
+    }
+
+    .diff-line {
+      display: block;
+      min-height: 1.55em;
+      padding: 0 4px;
+      margin: 0 -4px;
+      white-space: pre;
+    }
+
+    .diff-file {
+      color: #bfdbfe;
+      background: rgba(59, 130, 246, 0.14);
+    }
+
+    .diff-hunk {
+      color: #fde68a;
+      background: rgba(245, 158, 11, 0.14);
+    }
+
+    .diff-add {
+      color: #bbf7d0;
+      background: rgba(34, 197, 94, 0.16);
+    }
+
+    .diff-del {
+      color: #fecaca;
+      background: rgba(239, 68, 68, 0.16);
+    }
+
+    .diff-meta {
+      color: #cbd5e1;
+      background: rgba(148, 163, 184, 0.12);
+    }
+
+    .tabs {
+      display: grid;
+      gap: 12px;
+      margin: 18px 0 24px;
+    }
+
+    .tab-buttons {
+      display: none;
+    }
+
+    .tab-button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--slate);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .tab-button[aria-selected="true"] {
+      border-color: var(--blue);
+      color: #1d4ed8;
+      background: #eef4ff;
+    }
+
+    .tab-panel {
+      display: block;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .copy-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .button {
+      border: 1px solid #b7c4d8;
+      background: #fff;
+      color: var(--slate);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+      white-space: nowrap;
+    }
+
+    .button:hover {
+      background: #f3f6fb;
+    }
+
+    .status {
+      color: var(--green);
+      min-height: 24px;
+      font-size: 13px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .step-index {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #e0ecff;
+      color: #1d4ed8;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .step h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+    }
+
+    .risk {
+      border-top: 4px solid var(--line);
+    }
+
+    .risk.high {
+      border-top-color: var(--red);
+    }
+
+    .risk.medium {
+      border-top-color: var(--amber);
+    }
+
+    .risk.low {
+      border-top-color: var(--green);
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        display: block;
+      }
+
+      nav {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      nav a {
+        display: inline-block;
+      }
+
+      main {
+        padding: 28px 18px 56px;
+      }
+
+      .hero,
+      .grid-2,
+      .grid-3,
+      .grid-4,
+      .state-fields,
+      .state-branches {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav aria-label="文档导航">
+      <div class="title">双服务 LLM Endpoint 注入方案</div>
+      <a href="#summary">方案摘要</a>
+      <a href="#context">背景与约束</a>
+      <a href="#architecture">目标架构</a>
+      <a href="#flow">控制流程</a>
+      <a href="#merlin-sequence">Merlin 时序</a>
+      <a href="#confirmed-decisions">确认决策</a>
+      <a href="#state-machine">状态机</a>
+      <a href="#api-thrift-changes">接口变化</a>
+      <a href="#endpoint">Endpoint 适配</a>
+      <a href="#yaml">YAML 改写策略</a>
+      <a href="#boundary">实现边界</a>
+      <a href="#risks">风险与治理</a>
+      <a href="#todo">TODO</a>
+      <a href="#rollout">灰度验收</a>
+      <a href="#references">代码依据</a>
+    </nav>
+
+    <main>
+      <section id="summary" class="hero section">
+        <div class="panel hero-copy">
+          <h1>双服务大模型部署与 VLM Endpoint 注入方案</h1>
+          <p class="lede">
+            当 Ray 内部部署链路受 vLLM 版本锁定影响，无法承载较新的多模态模型时，
+            将模型推理服务从数据合成 Ray 作业中拆出。两者本质上都是 Merlin 任务：
+            先启动 GPU LLM Merlin 任务，等待模型服务可访问，再启动数据合成 Ray Merlin 任务。
+            控制面在 LLM 服务就绪后发现 IPv6 地址，并把用户 YAML 中 <code>vlm_api_response_mapper</code> 的
+            <code>base_url</code>/<code>endpoint</code>/<code>api_format</code>
+            改写为该服务的 OpenAI 兼容访问地址。
+          </p>
+          <div class="badges">
+            <span class="badge">独立 GPU LLM 服务</span>
+            <span class="badge">Ray 作业只负责数据处理</span>
+            <span class="badge">两者都是 Merlin 任务</span>
+            <span class="badge">OpenAI 兼容 API</span>
+            <span class="badge">IPv6 bracket URL</span>
+            <span class="badge">可在控制面实现</span>
+          </div>
+        </div>
+        <div class="panel hero-figure" aria-label="双服务概览图">
+          <svg class="diagram" viewBox="0 0 620 360" role="img" aria-labelledby="hero-title hero-desc">
+            <title id="hero-title">双服务概览</title>
+            <desc id="hero-desc">控制面先启动 GPU LLM 服务，发现地址后改写 YAML，再启动 Data-Juicer Ray 作业。</desc>
+            <defs>
+              <linearGradient id="g1" x1="0%" x2="100%" y1="0%" y2="100%">
+                <stop offset="0%" stop-color="#eef4ff"/>
+                <stop offset="100%" stop-color="#ecfdf5"/>
+              </linearGradient>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+              </marker>
+            </defs>
+            <rect x="12" y="12" width="596" height="336" rx="16" fill="url(#g1)" stroke="#d7dde6"/>
+            <rect x="46" y="68" width="150" height="86" rx="10" fill="#ffffff" stroke="#b7c4d8"/>
+            <text x="121" y="98" text-anchor="middle" fill="#17202a" font-size="17" font-weight="700">控制面服务</text>
+            <text x="121" y="124" text-anchor="middle" fill="#627083" font-size="13">编排 / YAML 改写</text>
+            <rect x="398" y="52" width="164" height="104" rx="10" fill="#ffffff" stroke="#b7c4d8"/>
+            <text x="480" y="82" text-anchor="middle" fill="#17202a" font-size="17" font-weight="700">GPU LLM 服务</text>
+            <text x="480" y="108" text-anchor="middle" fill="#627083" font-size="13">vLLM / SGLang / 其他</text>
+            <text x="480" y="132" text-anchor="middle" fill="#2563eb" font-size="13">http://[ipv6]:port/v1</text>
+            <rect x="222" y="216" width="188" height="92" rx="10" fill="#ffffff" stroke="#b7c4d8"/>
+            <text x="316" y="246" text-anchor="middle" fill="#17202a" font-size="17" font-weight="700">Data-Juicer Ray 作业</text>
+            <text x="316" y="272" text-anchor="middle" fill="#627083" font-size="13">vlm_api_response_mapper</text>
+            <line x1="196" y1="110" x2="392" y2="104" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+            <text x="294" y="90" text-anchor="middle" fill="#334155" font-size="12">1. 启动 LLM 服务</text>
+            <line x1="424" y1="156" x2="354" y2="214" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+            <text x="430" y="190" fill="#334155" font-size="12">2. 注入 endpoint</text>
+            <line x1="300" y1="216" x2="160" y2="154" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+            <text x="184" y="200" fill="#334155" font-size="12">3. 提交 Ray 作业</text>
+            <line x1="410" y1="262" x2="464" y2="158" stroke="#188451" stroke-width="3" marker-end="url(#arrow)"/>
+            <text x="446" y="230" fill="#188451" font-size="12">4. 行级 API 调用</text>
+          </svg>
+        </div>
+      </section>
+
+      <section id="context" class="section">
+        <h2>背景与约束</h2>
+        <div class="grid-4">
+          <div class="card">
+            <span class="metric">vLLM 0.8.5</span>
+            <p class="muted">Ray 内部部署链路锁定的 vLLM 版本无法快速跟进较新的模型运行时需求。</p>
+          </div>
+          <div class="card">
+            <span class="metric">OpenAI API</span>
+            <p class="muted"><code>vlm_api_response_mapper</code> 已按 OpenAI 兼容接口组织请求，可对接外部推理服务。</p>
+          </div>
+          <div class="card">
+            <span class="metric">IPv6</span>
+            <p class="muted">服务发现地址通常是 IPv6，URL 中必须使用 <code>[ipv6]</code> bracket 写法。</p>
+          </div>
+          <div class="card">
+            <span class="metric">Merlin</span>
+            <p class="muted">LLM 服务和数据合成 Ray 作业都按 Merlin 任务管理，控制面编排两次提交。</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>核心判断：</strong>
+          Data-Juicer 不需要直接承载模型部署能力。更稳妥的边界是让控制面负责 GPU 服务生命周期与 YAML 改写，
+          Data-Juicer 继续通过 <code>vlm_api_response_mapper</code> 调用 OpenAI 兼容 endpoint。
+        </div>
+      </section>
+
+      <section id="architecture" class="section">
+        <h2>目标架构</h2>
+        <p>
+          方案拆成两个服务：第一个是 GPU LLM 服务，负责加载模型并暴露 OpenAI 兼容 API；
+          第二个是 Data-Juicer/Ray 作业，负责数据读取、算子执行和导出。两者都由 Merlin 承载，
+          控制面在两次 Merlin 任务之间做状态等待、地址发现和配置注入。
+        </p>
+
+        <div class="panel hero-figure" aria-label="目标架构图">
+          <svg class="diagram" viewBox="0 0 980 480" role="img" aria-labelledby="arch-title arch-desc">
+            <title id="arch-title">目标架构</title>
+            <desc id="arch-desc">控制面管理服务生命周期、服务发现、YAML 改写和作业提交。</desc>
+            <defs>
+              <marker id="arch-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+              </marker>
+              <marker id="arch-green-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#188451"/>
+              </marker>
+            </defs>
+            <rect x="22" y="24" width="936" height="426" rx="18" fill="#ffffff" stroke="#d7dde6"/>
+            <rect x="54" y="74" width="204" height="310" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+            <text x="156" y="110" text-anchor="middle" fill="#17202a" font-size="18" font-weight="700">控制面</text>
+            <text x="156" y="142" text-anchor="middle" fill="#627083" font-size="13">模型部署请求</text>
+            <text x="156" y="168" text-anchor="middle" fill="#627083" font-size="13">服务发现</text>
+            <text x="156" y="194" text-anchor="middle" fill="#627083" font-size="13">YAML patch</text>
+            <text x="156" y="220" text-anchor="middle" fill="#627083" font-size="13">Ray 作业提交</text>
+            <text x="156" y="246" text-anchor="middle" fill="#627083" font-size="13">失败清理</text>
+
+            <rect x="382" y="64" width="238" height="142" rx="12" fill="#eef4ff" stroke="#93b4ff"/>
+            <text x="501" y="100" text-anchor="middle" fill="#17202a" font-size="18" font-weight="700">LLM Serving Service</text>
+            <text x="501" y="130" text-anchor="middle" fill="#627083" font-size="13">GPU 资源 / 模型权重 / 推理框架</text>
+            <text x="501" y="158" text-anchor="middle" fill="#2563eb" font-size="13">/v1/chat/completions</text>
+            <text x="501" y="182" text-anchor="middle" fill="#2563eb" font-size="13">/v1/responses</text>
+
+            <rect x="382" y="278" width="238" height="118" rx="12" fill="#ecfdf5" stroke="#8dd7b0"/>
+            <text x="501" y="314" text-anchor="middle" fill="#17202a" font-size="18" font-weight="700">Data-Juicer Ray Job</text>
+            <text x="501" y="344" text-anchor="middle" fill="#627083" font-size="13">pipeline / loader / mapper / export</text>
+            <text x="501" y="370" text-anchor="middle" fill="#188451" font-size="13">vlm_api_response_mapper</text>
+
+            <rect x="714" y="108" width="174" height="98" rx="12" fill="#fff7ed" stroke="#f4bd72"/>
+            <text x="801" y="140" text-anchor="middle" fill="#17202a" font-size="17" font-weight="700">Model Runtime</text>
+            <text x="801" y="166" text-anchor="middle" fill="#627083" font-size="13">新模型所需版本</text>
+            <text x="801" y="188" text-anchor="middle" fill="#627083" font-size="13">不受 Ray vLLM 限制</text>
+
+            <line x1="258" y1="150" x2="376" y2="132" stroke="#334155" stroke-width="2" marker-end="url(#arch-arrow)"/>
+            <text x="308" y="122" fill="#334155" font-size="12">create</text>
+            <line x1="376" y1="174" x2="258" y2="210" stroke="#334155" stroke-width="2" marker-end="url(#arch-arrow)"/>
+            <text x="298" y="206" fill="#334155" font-size="12">ready + IPv6</text>
+            <line x1="258" y1="250" x2="376" y2="326" stroke="#334155" stroke-width="2" marker-end="url(#arch-arrow)"/>
+            <text x="290" y="306" fill="#334155" font-size="12">patched YAML</text>
+            <line x1="620" y1="335" x2="620" y2="206" stroke="#188451" stroke-width="3" marker-end="url(#arch-green-arrow)"/>
+            <text x="640" y="272" fill="#188451" font-size="12">POST requests</text>
+            <line x1="620" y1="136" x2="708" y2="152" stroke="#334155" stroke-width="2" marker-end="url(#arch-arrow)"/>
+          </svg>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>服务一：GPU LLM Merlin 任务</h3>
+            <p>负责加载较新模型，选择适配的推理框架和镜像，暴露 OpenAI 兼容 API。</p>
+            <p class="muted">输出：Merlin job 标识、服务就绪状态、IPv6 地址、端口、支持的 API endpoint。</p>
+          </div>
+          <div class="card">
+            <h3>服务二：数据合成 Ray Merlin 任务</h3>
+            <p>读取用户 YAML 并执行数据处理，算子通过 HTTP 调用已部署的 LLM 服务。</p>
+            <p class="muted">输入：控制面改写后的 YAML，不需要感知 GPU 服务部署细节。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="flow" class="section">
+        <h2>控制流程</h2>
+        <div class="timeline">
+          <div class="step">
+            <div class="step-index">1</div>
+            <div>
+              <h3>接收用户 YAML 与模型部署声明</h3>
+              <p>控制面读取原始 pipeline，定位 <code>vlm_api_response_mapper</code> 节点，识别其目标 API 形态：Chat Completions 或 Responses。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">2</div>
+            <div>
+              <h3>启动独立 GPU LLM 服务</h3>
+              <p>根据模型、镜像、GPU 规格、并发和上下文长度创建 LLM Merlin 任务，并等待健康检查与模型加载完成。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">3</div>
+            <div>
+              <h3>发现服务访问地址</h3>
+              <p>通过 <code>ai_data_forge</code> 的 Merlin get 接口拿到 IPv6 与端口后，生成标准 root URL：<code>http://[2605:...]:8001/v1</code>。IPv6 必须带方括号。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">4</div>
+            <div>
+              <h3>改写 VLM mapper 配置</h3>
+              <p>按原始 endpoint 语义改写 <code>base_url</code>、必要时补充 <code>endpoint</code> 与 <code>api_format</code>，保持请求 payload 类型不变。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">5</div>
+            <div>
+              <h3>提交 Data-Juicer Ray 作业</h3>
+              <p>数据处理 Ray Merlin 任务只接收已注入 endpoint 的 YAML。作业结束、失败或取消时，控制面负责回收 LLM 服务。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="merlin-sequence" class="section">
+        <h2>Merlin 编排时序</h2>
+        <p>
+          控制面位于 <code>../ad_ai_data_center</code>，负责把一次用户数据合成请求拆成两个 Merlin 生命周期：
+          先通过 <code>ai_data_forge</code> 拉起 LLM Merlin 任务；轮询 Merlin get 接口并做 LLM
+          endpoint 连通性探测；确认服务可访问后，再改写 YAML 并拉起数据合成 Ray Merlin 任务。
+          LLM 节点从容器启动到模型 ready 可能需要几分钟到十几分钟，取决于模型大小、权重加载和 GPU 资源调度。
+        </p>
+
+        <div class="panel hero-figure" aria-label="Merlin 双任务时序图">
+          <svg class="diagram" viewBox="0 0 1120 560" role="img" aria-labelledby="seq-title seq-desc">
+            <title id="seq-title">Merlin 双任务编排时序</title>
+            <desc id="seq-desc">控制面先启动 LLM Merlin 任务，等待服务可访问后，注入 endpoint 并启动数据合成 Ray Merlin 任务。</desc>
+            <defs>
+              <marker id="seq-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+              </marker>
+              <marker id="seq-green-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#188451"/>
+              </marker>
+            </defs>
+            <rect x="18" y="18" width="1084" height="518" rx="16" fill="#ffffff" stroke="#d7dde6"/>
+
+            <rect x="54" y="54" width="180" height="54" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+            <text x="144" y="87" text-anchor="middle" fill="#17202a" font-size="16" font-weight="700">用户 / 前端</text>
+            <rect x="290" y="54" width="210" height="54" rx="8" fill="#eef4ff" stroke="#93b4ff"/>
+            <text x="395" y="87" text-anchor="middle" fill="#17202a" font-size="16" font-weight="700">控制面 ad_ai_data_center</text>
+            <rect x="556" y="54" width="190" height="54" rx="8" fill="#f3f6fb" stroke="#cbd5e1"/>
+            <text x="651" y="87" text-anchor="middle" fill="#17202a" font-size="16" font-weight="700">ai_data_forge</text>
+            <rect x="802" y="54" width="240" height="54" rx="8" fill="#ecfdf5" stroke="#8dd7b0"/>
+            <text x="922" y="87" text-anchor="middle" fill="#17202a" font-size="16" font-weight="700">Merlin 运行时</text>
+
+            <line x1="144" y1="110" x2="144" y2="500" stroke="#d7dde6" stroke-width="2"/>
+            <line x1="395" y1="110" x2="395" y2="500" stroke="#d7dde6" stroke-width="2"/>
+            <line x1="651" y1="110" x2="651" y2="500" stroke="#d7dde6" stroke-width="2"/>
+            <line x1="922" y1="110" x2="922" y2="500" stroke="#d7dde6" stroke-width="2"/>
+
+            <line x1="144" y1="146" x2="388" y2="146" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="266" y="132" text-anchor="middle" fill="#334155" font-size="13">提交数据合成请求 + 原始 YAML</text>
+
+            <line x1="395" y1="194" x2="644" y2="194" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="520" y="180" text-anchor="middle" fill="#334155" font-size="13">LaunchMerlinJobRun: LLM 服务任务</text>
+
+            <line x1="651" y1="238" x2="914" y2="238" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="782" y="224" text-anchor="middle" fill="#334155" font-size="13">创建 GPU Merlin 任务</text>
+            <line x1="914" y1="276" x2="658" y2="276" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="786" y="264" text-anchor="middle" fill="#334155" font-size="13">返回 job_run_id / sid</text>
+
+            <rect x="284" y="306" width="735" height="92" rx="10" fill="#fff7ed" stroke="#f4bd72"/>
+            <text x="652" y="330" text-anchor="middle" fill="#17202a" font-size="15" font-weight="700">等待 LLM 服务 ready：几分钟到十几分钟</text>
+            <line x1="395" y1="352" x2="644" y2="352" stroke="#b7791f" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="520" y="342" text-anchor="middle" fill="#7c4a03" font-size="12">GetMerlinJobRun / GetMerlinFederalJob</text>
+            <line x1="651" y1="376" x2="914" y2="376" stroke="#b7791f" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="782" y="366" text-anchor="middle" fill="#7c4a03" font-size="12">查询状态、IP、端口、endpoint</text>
+
+            <line x1="914" y1="416" x2="402" y2="416" stroke="#188451" stroke-width="3" marker-end="url(#seq-green-arrow)"/>
+            <text x="658" y="405" text-anchor="middle" fill="#188451" font-size="13">LLM endpoint 可访问，返回 http://[ipv6]:port/v1</text>
+
+            <line x1="395" y1="456" x2="644" y2="456" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="520" y="444" text-anchor="middle" fill="#334155" font-size="13">LaunchMerlinJobRun: 数据处理 Ray 任务</text>
+            <line x1="651" y1="492" x2="914" y2="492" stroke="#334155" stroke-width="2" marker-end="url(#seq-arrow)"/>
+            <text x="782" y="480" text-anchor="middle" fill="#334155" font-size="13">使用注入后的 YAML 启动 Ray 作业</text>
+          </svg>
+        </div>
+
+        <div class="grid-3">
+          <div class="card">
+            <h3>启动入口</h3>
+            <p><code>ad_ai_data_center</code> 现有数据合成任务会调用 <code>aiDataForgeClient.LaunchMerlinJobRun</code> 或 <code>LaunchMerlinFederalJob</code>，LLM 服务任务可以复用同类入口。</p>
+          </div>
+          <div class="card">
+            <h3>状态与地址发现</h3>
+            <p>控制面通过 <code>GetMerlinJobRun</code> / <code>GetMerlinFederalJob</code> 轮询状态，并从 Merlin 详情中解析 LLM 节点 IP、端口和 endpoint。</p>
+          </div>
+          <div class="card">
+            <h3>可用性门禁</h3>
+            <p>只有当 Merlin 状态进入 running 且一次最小 OpenAI 兼容请求成功后，才允许提交数据处理 Ray 任务。</p>
+          </div>
+        </div>
+
+        <div class="callout warning">
+          <strong>接口补齐点：</strong>
+          当前 <code>ai_data_forge</code> 的 <code>MerlinJobRunDTO</code> 主要暴露
+          <code>merlin_job_run_id</code>、<code>status</code>、<code>progress_percent</code>
+          和 <code>error_message</code>。如果标准 <code>GetMerlinJobRun</code> 需要直接返回 LLM
+          endpoint，建议在 <code>ai_data_forge</code> 侧补充 endpoint/IP 字段，或通过 Merlin 详情字段结构化透传；
+          Federal Job 路径可复用 <code>GetMerlinFederalJob</code> 的详情结果承载扩展信息。
+        </div>
+      </section>
+
+      <section id="confirmed-decisions" class="section">
+        <h2>已确认设计决策</h2>
+        <p>
+          本节记录当前讨论后收敛的产品和控制面约束。后续如果进入实现，应优先按这些约束拆分
+          <code>ad_ai_data_center</code> 的任务配置、运行实例状态和 Merlin 编排逻辑。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>主题</th>
+                <th>确认决策</th>
+                <th>实现含义</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>用户可见性</td>
+                <td>LLM Merlin 任务对用户隐藏，但暴露阶段状态。</td>
+                <td>用户看到一个数据合成实例；列表/详情可展示 <code>WAITING_LLM_READY</code>、<code>DATA_RAY_RUNNING</code> 等阶段。</td>
+              </tr>
+              <tr>
+                <td>状态存储</td>
+                <td>第一版写入现有 <code>SynthesisInstanceProperties</code>，不新建表。</td>
+                <td>新增 <code>stage</code>、<code>llmServing</code>、<code>dataProcessing</code> 等扩展字段；主实例状态不扩展。</td>
+              </tr>
+              <tr>
+                <td>Ready 判定</td>
+                <td><code>Merlin RUNNING -> /readyz 或 /health OK -> OpenAI 最小请求成功</code>。</td>
+                <td>Merlin running 只作为前置条件；最终以实际 chat/responses endpoint 最小请求成功为准。</td>
+              </tr>
+              <tr>
+                <td>配置位置</td>
+                <td><code>llmServingConfig</code> 是新建/更新任务请求的独立配置，不进入 Data-Juicer YAML。</td>
+                <td>建议加在 <code>RayTaskUpsertRequest</code> 顶层，并持久化到任务版本 properties。</td>
+              </tr>
+              <tr>
+                <td>运行期 YAML</td>
+                <td>控制面内部生成 resolved YAML 或等价执行配置，但不向普通用户展示。</td>
+                <td>任务版本展示原始 YAML；内部保存 resolved endpoint 摘要，必要时保存 resolved YAML 供排障。</td>
+              </tr>
+              <tr>
+                <td><code>base_url</code></td>
+                <td>启用 LLM Serving 后，用户 YAML 中 <code>base_url</code> 可以省略。</td>
+                <td>API 形态按 <code>api_format</code> / <code>endpoint</code> 判断；都缺省时按 Chat Completions。</td>
+              </tr>
+              <tr>
+                <td>多 mapper</td>
+                <td>第一版最多拉起一个 LLM 服务，多个 <code>vlm_api_response_mapper</code> 必须共享同一 serving spec。</td>
+                <td>所有 mapper 的 model、API 形态、endpoint 语义必须一致；不一致则拒绝运行。</td>
+              </tr>
+              <tr>
+                <td>模型一致性</td>
+                <td><code>mapper.model</code> 为空时由控制面注入；不为空时必须等于 <code>llmServingConfig.model</code>。</td>
+                <td>模型不一致时强失败，不做静默覆盖。</td>
+              </tr>
+              <tr>
+                <td>生命周期</td>
+                <td>LLM Merlin 任务绑定单次数据合成实例。</td>
+                <td>LLM ready 后提交数据处理 Ray 任务；数据处理终态后同步停止 LLM Merlin 任务。</td>
+              </tr>
+              <tr>
+                <td>取消</td>
+                <td>取消时按 stage 停止相关 Merlin job；数据处理已运行时先停 Ray，再停 LLM。</td>
+                <td>如果还在等待 LLM ready，则只停止 LLM Merlin 任务，不提交数据处理任务。</td>
+              </tr>
+              <tr>
+                <td>回收失败</td>
+                <td>回收失败不覆盖主任务业务结果，只更新 LLM 子状态。</td>
+                <td>例如主任务 <code>SUCCEEDED</code> 但 <code>llmServing.status=CLEANUP_FAILED</code>；补偿能力统一记录在 TODO 章节。</td>
+              </tr>
+              <tr>
+                <td>运行中故障</td>
+                <td>Ray 任务运行中 LLM 请求失败，由 mapper retry / <code>error_key</code> / <code>fail_on_error</code> 处理。</td>
+                <td>运行中恢复和流量切换能力统一记录在 TODO 章节。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>llmServingConfig 建议形态</h3>
+        <pre><code class="language-json">{
+  "llmServingConfig": {
+    "enabled": true,
+    "model": "qwen3vl",
+    "runtime": "vllm",
+    "image": "hub.byted.org/arnold/life.gen_ai.lifellm_env:9500dc6dbc7ff0ce96920939ebde75f6",
+    "port": 8001,
+    "readiness": {
+      "initialDelaySeconds": 30,
+      "probeIntervalSeconds": 20,
+      "timeoutSeconds": 1800
+    },
+    "resource": {
+      "name": "llm",
+      "queue": "",
+      "number": 1,
+      "cpu": 32,
+      "gpu": 8,
+      "gpuType": "H20",
+      "memory": 262144
+    }
+  }
+}</code></pre>
+
+        <div class="grid-3">
+          <div class="card">
+            <h3>默认值</h3>
+            <p><code>runtime</code> 缺省为 <code>vllm</code>，第一版只支持 <code>vllm</code>；<code>port</code> 缺省为 <code>8001</code>；<code>basePath</code> 第一版固定 <code>/v1</code>。</p>
+          </div>
+          <div class="card">
+            <h3>默认镜像</h3>
+            <p>镜像可覆盖；不配置时使用 <code>hub.byted.org/arnold/life.gen_ai.lifellm_env:9500dc6dbc7ff0ce96920939ebde75f6</code>。运行实例需记录 resolved image。</p>
+          </div>
+          <div class="card">
+            <h3>资源格式</h3>
+            <p><code>resource</code> 复用 <code>RayTaskRunNode</code> 字段语义；第一版 <code>number</code> 只能为 <code>1</code>，多卡通过 <code>gpu</code> 表达。</p>
+          </div>
+        </div>
+
+        <div class="callout warning">
+          <strong>鉴权处理：</strong>
+          当前 LLM Serving 服务按无鉴权处理。启用 LLM Serving 时，控制面生成的内部执行 YAML 应移除 mapper
+          中的 <code>api_key</code> 和 <code>extra_headers.Authorization</code>，其他 headers 可保留。
+        </div>
+      </section>
+
+      <section id="state-machine" class="section">
+        <h2>状态机设计</h2>
+        <p>
+          第一版不扩展数据合成实例的主状态；主状态仍表达用户任务的整体结果。
+          LLM Serving 的细粒度状态挂在 <code>SynthesisInstanceProperties.llmServing</code>，
+          页面可根据 <code>stage</code> 展示“等待 LLM 服务就绪”“数据处理运行中”等派生阶段。
+        </p>
+
+        <div class="panel state-flow" aria-label="LLM Serving 与数据处理状态机">
+          <div class="state-track">
+            <div class="state-step">
+              <span class="state-phase">1. 提交 LLM</span>
+              <h3>创建 LLM Merlin 任务</h3>
+              <dl class="state-fields">
+                <div>
+                  <dt>stage</dt>
+                  <dd><code>SUBMITTING_LLM</code></dd>
+                </div>
+                <div>
+                  <dt>llmServing.status</dt>
+                  <dd><code>PENDING -&gt; SUBMITTED</code></dd>
+                </div>
+                <div>
+                  <dt>dataProcessing.status</dt>
+                  <dd><code>PENDING</code></dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="state-step">
+              <span class="state-phase">2. 等待服务可用</span>
+              <h3>轮询 Merlin + HTTP 探活</h3>
+              <dl class="state-fields">
+                <div>
+                  <dt>stage</dt>
+                  <dd><code>WAITING_LLM_READY</code></dd>
+                </div>
+                <div>
+                  <dt>llmServing.status</dt>
+                  <dd><code>MERLIN_RUNNING -&gt; PROBING</code></dd>
+                </div>
+                <div>
+                  <dt>ready 条件</dt>
+                  <dd><code>/readyz</code> 或 <code>/health</code> + 最小 OpenAI 请求成功</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="state-step">
+              <span class="state-phase">3. 提交数据任务</span>
+              <h3>生成内部 resolved YAML</h3>
+              <dl class="state-fields">
+                <div>
+                  <dt>stage</dt>
+                  <dd><code>SUBMITTING_DATA_RAY</code></dd>
+                </div>
+                <div>
+                  <dt>llmServing.status</dt>
+                  <dd><code>READY</code></dd>
+                </div>
+                <div>
+                  <dt>dataProcessing.status</dt>
+                  <dd><code>SUBMITTED</code></dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="state-step">
+              <span class="state-phase">4. 数据处理中</span>
+              <h3>Ray Merlin 任务运行</h3>
+              <dl class="state-fields">
+                <div>
+                  <dt>stage</dt>
+                  <dd><code>DATA_RAY_RUNNING</code></dd>
+                </div>
+                <div>
+                  <dt>llmServing.status</dt>
+                  <dd><code>READY</code></dd>
+                </div>
+                <div>
+                  <dt>dataProcessing.status</dt>
+                  <dd><code>RUNNING</code></dd>
+                </div>
+              </dl>
+            </div>
+
+            <div class="state-step">
+              <span class="state-phase">5. 结束与回收</span>
+              <h3>停止 LLM Merlin 任务</h3>
+              <dl class="state-fields">
+                <div>
+                  <dt>stage</dt>
+                  <dd><code>SUCCEEDED</code> / <code>FAILED</code> / <code>CANCELLED</code></dd>
+                </div>
+                <div>
+                  <dt>llmServing.status</dt>
+                  <dd><code>CLEANING -&gt; CLEANED</code></dd>
+                </div>
+                <div>
+                  <dt>dataProcessing.status</dt>
+                  <dd>Ray 任务终态</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+
+          <div class="state-branches" aria-label="异常分支">
+            <div class="state-branch danger">
+              <h3>LLM ready 前失败</h3>
+              <p>ready 超时或探活失败时，主实例进入 <code>FAILED</code>；不提交数据处理 Ray 任务。</p>
+            </div>
+            <div class="state-branch danger">
+              <h3>用户取消</h3>
+              <p>等待 LLM 阶段只停止 LLM；数据 Ray 已启动时，先停止数据 Ray，再停止 LLM。</p>
+            </div>
+            <div class="state-branch">
+              <h3>清理失败</h3>
+              <p>主任务结果不被覆盖，只记录 <code>llmServing.status=CLEANUP_FAILED</code>，补偿扫描见 TODO。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>触发条件</th>
+                <th>主实例 stage</th>
+                <th>LLM 子状态</th>
+                <th>数据处理状态</th>
+                <th>动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>提交运行请求</td>
+                <td><code>SUBMITTING_LLM</code></td>
+                <td><code>PENDING -> SUBMITTED</code></td>
+                <td><code>PENDING</code></td>
+                <td>调用 <code>LaunchMerlinJobRun</code> 创建 LLM Merlin 任务。</td>
+              </tr>
+              <tr>
+                <td>LLM Merlin running</td>
+                <td><code>WAITING_LLM_READY</code></td>
+                <td><code>MERLIN_RUNNING -> PROBING</code></td>
+                <td><code>PENDING</code></td>
+                <td>解析 endpoint JSON，执行 <code>/readyz</code> 或 <code>/health</code>，再做 OpenAI 最小请求。</td>
+              </tr>
+              <tr>
+                <td>LLM 探活成功</td>
+                <td><code>SUBMITTING_DATA_RAY</code></td>
+                <td><code>READY</code></td>
+                <td><code>SUBMITTED</code></td>
+                <td>生成内部 resolved YAML，提交数据处理 Ray Merlin 任务。</td>
+              </tr>
+              <tr>
+                <td>数据处理任务 running</td>
+                <td><code>DATA_RAY_RUNNING</code></td>
+                <td><code>READY</code></td>
+                <td><code>RUNNING</code></td>
+                <td>请求失败交给 mapper retry/error 策略；运行中恢复能力见 TODO 章节。</td>
+              </tr>
+              <tr>
+                <td>数据处理终态</td>
+                <td><code>SUCCEEDED</code> / <code>FAILED</code> / <code>CANCELLED</code></td>
+                <td><code>CLEANING -> CLEANED</code></td>
+                <td>终态</td>
+                <td>同步停止 LLM Merlin 任务；回收失败时写 <code>CLEANUP_FAILED</code>。</td>
+              </tr>
+              <tr>
+                <td>LLM ready 前失败或取消</td>
+                <td><code>FAILED</code> / <code>CANCELLED</code></td>
+                <td><code>FAILED</code> 或 <code>CLEANED</code></td>
+                <td><code>PENDING</code></td>
+                <td>不提交数据处理任务；失败可重试，重试时新建 LLM Merlin 任务。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>清理语义：</strong>
+          主流程在数据处理终态后同步清理 LLM Merlin 任务；清理失败只更新 LLM 子状态，
+          不覆盖主任务业务结果。补偿扫描放入统一 TODO 章节。
+        </div>
+      </section>
+
+      <section id="api-thrift-changes" class="section">
+        <h2>接口和 Thrift 变化</h2>
+        <p>
+          这里列出第一版建议的接口模型变化。原则是：<code>llmServingConfig</code>
+          属于控制面任务配置，不进入 Data-Juicer YAML；Merlin endpoint 第一版先用 JSON 承载，
+          不新增结构化 endpoint 字段。
+        </p>
+        <p class="muted">
+          下面的 diff 是设计级建议，用来表达字段和类型变化；具体包名可在
+          <code>../ad_ai_data_center</code> 落地时按现有分层微调。
+        </p>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>ad_ai_data_center: 任务配置</h3>
+            <p>在 <code>RayTaskUpsertRequest</code> 顶层新增 <code>llmServingConfig</code>，并同步保存到 <code>RayTaskVersionProperties</code>。</p>
+            <pre><code class="language-diff">diff --git a/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/RayTaskUpsertRequest.java b/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/RayTaskUpsertRequest.java
+@@
+ public class RayTaskUpsertRequest {
+     private RayTaskExecutionConfig rayExecutionConfig;
+     private List&lt;RayTaskRunNode&gt; nodes;
+     private RayTaskProcess process;
++    private LlmServingConfig llmServingConfig;
+ }
+
+diff --git a/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/RayTaskVersionProperties.java b/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/RayTaskVersionProperties.java
+@@
+ public class RayTaskVersionProperties {
+     private RayTaskExecutionConfig rayExecutionConfig;
+     private List&lt;RayTaskRunNode&gt; nodes;
++    private LlmServingConfig llmServingConfig;
+ }</code></pre>
+          </div>
+
+          <div class="card">
+            <h3>ad_ai_data_center: 运行状态</h3>
+            <p>在 <code>SynthesisInstanceProperties</code> 扩展内部运行态。普通用户接口可返回派生状态，但不返回内部 resolved YAML。</p>
+            <pre><code class="language-diff">diff --git a/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/SynthesisInstanceProperties.java b/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/SynthesisInstanceProperties.java
+@@
+ public class SynthesisInstanceProperties {
++    private String stage;
++    private LlmServingRuntime llmServing;
++    private DataProcessingRuntime dataProcessing;
+     private String request;
+     private String response;
+     private String merlinJobRunId;
+     private String merlinFederalJobSid;
+     private String yamlFile;
+ }</code></pre>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>ad_ai_data_center: 新增配置模型</h3>
+            <p><code>resource</code> 复用现有 <code>RayTaskRunNode</code> 字段格式；第一版 <code>number</code> 只能为 <code>1</code>。</p>
+            <pre><code class="language-diff">diff --git a/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/LlmServingConfig.java b/data-center-http-service/src/main/java/com/bytedance/data/center/model/systhesis/task/LlmServingConfig.java
+new file mode 100644
+@@
++public class LlmServingConfig {
++    private Boolean enabled;
++    private String model;
++    private String runtime; // default: vllm
++    private String image;   // default image allowed
++    private Integer port;   // default: 8001
++    private LlmServingReadinessConfig readiness;
++    private RayTaskRunNode resource;
++}
++
++public class LlmServingReadinessConfig {
++    private Integer initialDelaySeconds;
++    private Integer probeIntervalSeconds;
++    private Integer timeoutSeconds;
++}</code></pre>
+          </div>
+
+          <div class="card">
+            <h3>ad_ai_data_center: Endpoint Resolver</h3>
+            <p>短期使用 JSON，但解析逻辑必须集中在一个 resolver 中，避免业务流程散落 JSON path。</p>
+            <pre><code class="language-diff">diff --git a/data-center-http-service/src/main/java/com/bytedance/data/center/service/synthesis/MerlinEndpointResolver.java b/data-center-http-service/src/main/java/com/bytedance/data/center/service/synthesis/MerlinEndpointResolver.java
+new file mode 100644
+@@
++public class MerlinEndpointResolver {
++    LlmServingEndpoint resolveFromDetailJson(String detailJson);
++}
++
++public class LlmServingEndpoint {
++    private String scheme;   // http
++    private String host;     // ipv6 without brackets
++    private Integer port;    // 8001
++    private String basePath; // /v1
++}</code></pre>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>仓库</th>
+                <th>变更点</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>../ad_ai_data_center</code></td>
+                <td>新增 <code>LlmServingConfig</code>、<code>LlmServingRuntime</code>、<code>DataProcessingRuntime</code> 等模型。</td>
+                <td>配置进入任务版本 properties；运行态进入实例 properties。</td>
+              </tr>
+              <tr>
+                <td><code>../ad_ai_data_center</code></td>
+                <td>运行前校验 mapper 与 <code>llmServingConfig</code> 的一致性。</td>
+                <td>base_url 可省略；多个 mapper 必须归并为同一 serving spec；model 不一致强失败。</td>
+              </tr>
+              <tr>
+                <td><code>../ad_ai_data_center</code></td>
+                <td>新增 LLM Merlin 编排逻辑。</td>
+                <td>提交 LLM job、等待 ready、生成内部 resolved YAML、提交数据处理 job、终态清理。</td>
+              </tr>
+              <tr>
+                <td><code>../ai_data_forge</code></td>
+                <td><code>MerlinJobRunDTO</code> 兼容性新增 <code>detail_json</code>。</td>
+                <td>用于普通 Merlin job-run 路径透传 endpoint JSON；Federal job 已有 <code>detail_json</code>。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>ai_data_forge Thrift 建议</h3>
+        <pre><code class="language-diff">diff --git a/idl/ai_data_forge.thrift b/idl/ai_data_forge.thrift
+@@
+ struct MerlinJobRunDTO {
+   1: required string merlin_job_run_id,
+   2: required MerlinJobRunStatus status,
+   3: optional double progress_percent,
+   4: optional string error_message,
++  5: optional string detail_json, // JSON for endpoint/service details
+ }</code></pre>
+
+        <div class="callout warning">
+          <strong>兼容性约束：</strong>
+          Thrift 只新增 optional 字段，不复用已有 field id。变更后需要在
+          <code>../ai_data_forge</code> 重新生成 thrift 代码，并在 <code>../ad_ai_data_center</code>
+          更新对应客户端依赖或生成代码。第一版不新增结构化 endpoint 字段，endpoint 由
+          <code>MerlinEndpointResolver</code> 从 JSON 解析。
+        </div>
+      </section>
+
+      <section id="endpoint" class="section">
+        <h2>Endpoint 适配规则</h2>
+        <p>
+          当前 <code>VlmApiResponseMapper</code> 的 URL 拼接规则是：如果
+          <code>base_url</code> 已经以 <code>/chat/completions</code> 或
+          <code>/responses</code> 结尾，则直接使用；否则把 <code>endpoint</code>
+          追加到 <code>base_url</code> 后面。Responses API 的判定来自显式
+          <code>api_format: responses</code>，或 <code>endpoint/base_url</code>
+          以 <code>/responses</code> 结尾。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>原始语义</th>
+                <th>推荐注入方式</th>
+                <th>最终请求 URL</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>默认 Chat Completions</td>
+                <td><code>base_url: http://[ipv6]:8001/v1</code></td>
+                <td><code>http://[ipv6]:8001/v1/chat/completions</code></td>
+                <td>保留默认 <code>endpoint: /chat/completions</code>。</td>
+              </tr>
+              <tr>
+                <td>显式 Chat endpoint</td>
+                <td><code>base_url: http://[ipv6]:8001/v1</code><br><code>endpoint: /chat/completions</code></td>
+                <td><code>http://[ipv6]:8001/v1/chat/completions</code></td>
+                <td>适合原 YAML 已声明 endpoint 的情况，改写后语义清晰。</td>
+              </tr>
+              <tr>
+                <td>Responses API</td>
+                <td><code>base_url: http://[ipv6]:8001/v1</code><br><code>endpoint: /responses</code><br><code>api_format: responses</code></td>
+                <td><code>http://[ipv6]:8001/v1/responses</code></td>
+                <td>同时锁定 URL 与 payload 形态，避免误走 Chat payload。</td>
+              </tr>
+              <tr>
+                <td>完整 endpoint 已存在</td>
+                <td><code>base_url: http://[ipv6]:8001/v1/responses</code></td>
+                <td><code>http://[ipv6]:8001/v1/responses</code></td>
+                <td>mapper 会识别完整 endpoint，不再重复追加。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warning">
+          <strong>不建议：</strong>
+          控制面不要只做字符串替换，把原始 <code>base_url</code> 的 host 换成 IPv6。
+          这样容易把 <code>/api/v3/responses</code>、<code>/v1</code>、
+          <code>/chat/completions</code> 等路径混在一起，导致重复路径或 payload 类型错误。
+        </div>
+      </section>
+
+      <section id="yaml" class="section">
+        <h2>YAML 改写策略</h2>
+        <div class="tabs" data-tabs>
+          <div class="tab-buttons" role="tablist" aria-label="YAML 改写示例">
+            <button class="tab-button" type="button" role="tab" aria-selected="true" data-tab="chat">Chat Completions</button>
+            <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="responses">Responses</button>
+            <button class="tab-button" type="button" role="tab" aria-selected="false" data-tab="patch">控制面 Patch</button>
+          </div>
+
+          <div class="tab-panel active" role="tabpanel" data-panel="chat">
+            <p>Chat Completions 场景的内部执行配置会注入 root URL，并复用 mapper 默认 endpoint；用户任务版本 YAML 中可以省略 <code>base_url</code>。</p>
+            <pre><code class="language-yaml">- vlm_api_response_mapper:
+    image_key: "images"
+    output_key: "qwen_response"
+    model: "qwen3vl"
+    base_url: "http://[2605:340:cd51:603:7dd5:e521:38d0:fe5c]:8001/v1"
+    # endpoint 默认是 /chat/completions
+    temperature: 0.1
+    max_tokens: 2048
+    rpm: 120
+    tpm: 500000</code></pre>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" data-panel="responses">
+            <p>Responses 场景的内部执行配置必须同时表达 endpoint 与 payload 形态；用户任务版本 YAML 中可以只保留 <code>api_format</code> / <code>endpoint</code> 语义。</p>
+            <pre><code class="language-yaml">- vlm_api_response_mapper:
+    image_keys: ["main_image", "detail_images"]
+    output_key: "ocr_answer"
+    model: "qwen3vl"
+    base_url: "http://[2605:340:cd51:603:7dd5:e521:38d0:fe5c]:8001/v1"
+    endpoint: "/responses"
+    api_format: "responses"
+    text:
+      format:
+        type: "json_object"
+    store: false
+    rpm: 120
+    tpm: 500000</code></pre>
+          </div>
+
+          <div class="tab-panel" role="tabpanel" data-panel="patch">
+            <p>控制面可用结构化 YAML parser 生成内部 resolved YAML，避免正则替换破坏注释、缩进或多算子配置；该 resolved YAML 不向普通用户展示。</p>
+            <pre id="patch-snippet"><code class="language-python">def inject_llm_endpoint(mapper_cfg, service):
+    api_kind = detect_api_kind(mapper_cfg)
+    root = f"http://[{service.ipv6}]:{service.port}/v1"
+
+    mapper_cfg["base_url"] = root
+    if api_kind == "responses":
+        mapper_cfg["endpoint"] = "/responses"
+        mapper_cfg["api_format"] = "responses"
+    else:
+        mapper_cfg["endpoint"] = "/chat/completions"
+        mapper_cfg.pop("api_format", None)
+
+    return mapper_cfg</code></pre>
+            <div class="copy-row">
+              <button class="button" type="button" data-copy="#patch-snippet">复制 Patch 伪代码</button>
+              <span class="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>检测 API 类型</h3>
+            <p>优先使用用户显式配置：<code>api_format</code>。没有显式配置时，再看 <code>endpoint</code> 和 <code>base_url</code> 是否以 <code>/responses</code> 结尾。</p>
+          </div>
+          <div class="card">
+            <h3>保留业务参数</h3>
+            <p><code>prompt_template</code>、<code>messages_template</code>、<code>input_template</code>、<code>extra_body</code>、限流参数等都不应被控制面改写。当前无鉴权时，应移除 <code>api_key</code> 和 <code>Authorization</code> header。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="boundary" class="section">
+        <h2>实现边界</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>优先放在控制面</h3>
+            <p>服务编排、GPU 配额、IPv6 服务发现、健康检查、失败回收、YAML patch 与作业提交天然属于控制面职责。</p>
+            <p class="muted">控制面代码位于 <code>../ad_ai_data_center</code>。Data-Juicer 仓库只需要保持 mapper 的 endpoint 契约清晰，并提供文档或可选工具函数。</p>
+          </div>
+          <div class="card">
+            <h3>仓库内可选能力</h3>
+            <p>如果需要在本仓库落地，可以新增一个纯配置转换工具，输入原 YAML 和服务发现结果，输出改写后的 YAML。</p>
+            <p class="muted">该工具不应负责启动 GPU 服务，也不应把具体平台 API 写进算子实现。</p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>职责</th>
+                <th>建议归属</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>GPU 服务创建、扩缩容、回收</td>
+                <td><code>../ad_ai_data_center</code></td>
+                <td>依赖平台资源、服务账号、网络和配额，不适合塞进数据处理仓库；LLM 服务本身也按 Merlin 任务提交。</td>
+              </tr>
+              <tr>
+                <td>IPv6/端口发现与健康检查</td>
+                <td><code>../ad_ai_data_center</code> + <code>../ai_data_forge</code></td>
+                <td>控制面轮询 <code>GetMerlinJobRun</code> / <code>GetMerlinFederalJob</code>，从 Merlin 详情获取地址并做 HTTP 探活。</td>
+              </tr>
+              <tr>
+                <td>YAML 中 VLM mapper endpoint patch</td>
+                <td><code>../ad_ai_data_center</code></td>
+                <td>这是本方案的核心连接点，要求使用结构化 YAML 改写。</td>
+              </tr>
+              <tr>
+                <td>OpenAI 兼容请求构造</td>
+                <td>Data-Juicer mapper</td>
+                <td>现有 mapper 已负责 Chat/Responses payload、图片模板、限流和响应解析。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="risks" class="section">
+        <h2>风险与治理</h2>
+        <div class="grid-3">
+          <div class="card risk high">
+            <h3>Endpoint 语义错配</h3>
+            <p>Responses 请求如果只改 URL，不设置 <code>api_format: responses</code>，可能仍按 Chat payload 发送。</p>
+            <p class="muted">治理：改写时同时锁定 <code>endpoint</code> 和 <code>api_format</code>。</p>
+          </div>
+          <div class="card risk high">
+            <h3>IPv6 URL 格式</h3>
+            <p>原始 IPv6 不能直接拼到 URL host 中，必须写成 <code>http://[ipv6]:port</code>。</p>
+            <p class="muted">治理：使用 URL builder 或专门的 host formatter。</p>
+          </div>
+          <div class="card risk medium">
+            <h3>服务就绪不等于端口可达</h3>
+            <p>容器启动后模型权重可能仍在加载，过早提交 Ray 作业会造成批量请求失败。</p>
+            <p class="muted">治理：健康检查需要覆盖模型 ready 与一次最小推理。</p>
+          </div>
+          <div class="card risk medium">
+            <h3>网络可达性</h3>
+            <p>Ray worker 到 GPU 服务之间需要网络可达；当前 LLM Serving 按无鉴权处理。</p>
+            <p class="muted">治理：在控制面做连通性预检，并从内部执行 YAML 中移除旧的 <code>api_key</code> / <code>Authorization</code>。</p>
+          </div>
+          <div class="card risk medium">
+            <h3>并发和限流</h3>
+            <p>服务侧吞吐和 mapper 的 <code>rpm/tpm</code>、Ray 并发度需要匹配，否则会压垮单服务。</p>
+            <p class="muted">治理：由部署声明给出推荐限流，控制面可填充 mapper 限流参数。</p>
+          </div>
+          <div class="card risk low">
+            <h3>资源泄露</h3>
+            <p>Ray 作业失败或被取消时，独立 LLM 服务可能继续占用 GPU。</p>
+            <p class="muted">治理：控制面同步回收；补偿扫描见 TODO 章节。</p>
+          </div>
+          <div class="card risk medium">
+            <h3>Merlin get 字段缺口</h3>
+            <p>如果 <code>GetMerlinJobRun</code> 只返回状态而不返回 endpoint，控制面无法稳定拼出 LLM 服务地址。</p>
+            <p class="muted">治理：在 <code>ai_data_forge</code> 返回中补齐 IP/port/endpoint，或结构化透传 Merlin 详情。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="todo" class="section">
+        <h2>TODO / 后续版本</h2>
+        <p>
+          本节统一收敛当前版本不做、但后续可以补齐的能力。实现评审时优先检查这些项是否仍然
+          保持在当前版本范围外，避免散落在状态机、接口和风险章节里形成隐式需求。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>能力</th>
+                <th>当前处理</th>
+                <th>后续触发条件</th>
+                <th>建议归属</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>后台清理补偿任务</td>
+                <td>主流程同步停止 LLM Merlin；失败时写 <code>llmServing.status=CLEANUP_FAILED</code>。</td>
+                <td>出现终态实例残留 GPU 服务，或需要平台级资源兜底回收。</td>
+                <td><code>../ad_ai_data_center</code></td>
+              </tr>
+              <tr>
+                <td>LLM Serving 复用 / 池化</td>
+                <td>LLM Merlin 绑定单次数据合成实例，实例结束后回收。</td>
+                <td>模型加载时间成为主要成本，且同模型任务具备稳定复用边界。</td>
+                <td><code>../ad_ai_data_center</code></td>
+              </tr>
+              <tr>
+                <td>多 LLM 服务 / 多模型 mapper</td>
+                <td>一个数据合成实例最多拉起一个 LLM 服务；多个 mapper 必须共享同一 serving spec。</td>
+                <td>同一任务确实需要多个模型、多个 endpoint 或不同 runtime。</td>
+                <td><code>../ad_ai_data_center</code> + Data-Juicer YAML 校验</td>
+              </tr>
+              <tr>
+                <td>运行中自动重启、endpoint 热切换、代理 / LB</td>
+                <td>Ray 运行期间请求失败交给 mapper retry、<code>error_key</code> 和 <code>fail_on_error</code>。</td>
+                <td>需要提升长任务可用性，或 LLM 服务故障恢复不能依赖整体任务重跑。</td>
+                <td><code>../ad_ai_data_center</code> 或独立 serving gateway</td>
+              </tr>
+              <tr>
+                <td>结构化 endpoint 字段</td>
+                <td><code>MerlinJobRunDTO.detail_json</code> 先承载 IP、port、endpoint 等详情。</td>
+                <td>JSON 解析字段稳定后，或多个调用方需要强类型契约。</td>
+                <td><code>../ai_data_forge</code></td>
+              </tr>
+              <tr>
+                <td>其他 serving runtime / 自定义 basePath</td>
+                <td><code>runtime</code> 使用 <code>vllm</code>，OpenAI 兼容路径使用固定 <code>/v1</code>。</td>
+                <td>需要接入 SGLang、TGI 或非标准 OpenAI 兼容路径。</td>
+                <td><code>../ad_ai_data_center</code> + serving runtime</td>
+              </tr>
+              <tr>
+                <td>LLM Serving 鉴权</td>
+                <td>当前按无鉴权处理；内部执行 YAML 移除旧 <code>api_key</code> 和 <code>Authorization</code>。</td>
+                <td>服务暴露范围扩大，或平台要求服务间调用统一鉴权。</td>
+                <td><code>../ad_ai_data_center</code> + serving runtime</td>
+              </tr>
+              <tr>
+                <td>控制面自动推导限流</td>
+                <td>限流参数默认保留用户 YAML 配置，不由控制面动态注入。</td>
+                <td>需要按模型部署规格自动给出 <code>rpm/tpm</code> 建议或保护阈值。</td>
+                <td><code>../ad_ai_data_center</code></td>
+              </tr>
+              <tr>
+                <td>Data-Juicer 仓库内 YAML patch 工具</td>
+                <td>核心改写逻辑优先放在控制面；本仓库只保持 mapper endpoint 契约清晰。</td>
+                <td>需要离线验证、单测复用，或控制面希望复用仓库内结构化 patch 逻辑。</td>
+                <td>Data-Juicer 可选工具模块</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="rollout" class="section">
+        <h2>灰度验收</h2>
+        <div class="timeline">
+          <div class="step">
+            <div class="step-index">A</div>
+            <div>
+              <h3>离线 YAML patch 验证</h3>
+              <p>对 Chat 与 Responses 各准备一个样例 YAML，检查 patch 后 URL 只出现一次 endpoint，且 API 类型不变。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">B</div>
+            <div>
+              <h3>LLM Merlin 任务等待与连通性验证</h3>
+              <p>控制面先拉起 LLM Merlin 任务，轮询状态和 endpoint；在提交 Ray 作业前，对注入后的 URL 发起一次最小请求，验证路径和 payload 均可用。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">C</div>
+            <div>
+              <h3>小批量 Data-Juicer 作业</h3>
+              <p>用少量样本验证 mapper 的输出字段、错误字段、限流参数和响应解析行为。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-index">D</div>
+            <div>
+              <h3>任务级监控和回收</h3>
+              <p>确认 Ray 作业结束、失败、取消时，LLM 服务都能被回收；同时记录请求量、延迟、错误率和 GPU 利用率。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="references" class="section">
+        <h2>代码依据</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Mapper URL 拼接契约</h3>
+            <p><code>data_juicer/ops/mapper/qa/vlm_api_response_mapper.py</code> 中 <code>_api_url()</code> 会在 root <code>base_url</code> 后追加 <code>endpoint</code>，但完整 endpoint 不会重复追加。</p>
+            <pre><code class="language-python">if base_url.endswith(("/chat/completions", "/responses")):
+    return base_url
+endpoint = self.endpoint if self.endpoint.startswith("/") else f"/{self.endpoint}"
+if base_url.endswith(endpoint):
+    return base_url
+return f"{base_url}{endpoint}"</code></pre>
+          </div>
+          <div class="card">
+            <h3>Responses API 判定契约</h3>
+            <p><code>_is_responses_api()</code> 优先相信 <code>api_format</code>，因此控制面改写 Responses 场景时应显式设置。</p>
+            <pre><code class="language-python">if self.api_format is not None:
+    return self.api_format == "responses"
+endpoint = self.endpoint.rstrip("/")
+base_url = (self.base_url or "").rstrip("/")
+return endpoint.endswith("/responses") or base_url.endswith("/responses")</code></pre>
+          </div>
+          <div class="card">
+            <h3>控制面已有 Merlin 提交路径</h3>
+            <p><code>../ad_ai_data_center</code> 的数据合成任务已经通过 <code>aiDataForgeClient</code> 调用 Merlin job-run 接口，并把返回的 <code>merlinJobRunId</code> 写入实例属性。</p>
+            <pre><code class="language-java">LaunchMerlinJobRunResponse response =
+    aiDataForgeClient.LaunchMerlinJobRun(request);
+String merlinJobRunId = resolveMerlinJobRunId(response);
+properties.setMerlinJobRunId(merlinJobRunId);</code></pre>
+          </div>
+          <div class="card">
+            <h3>ai_data_forge Merlin get 接口</h3>
+            <p><code>../ai_data_forge</code> 的 Thrift 面提供 <code>LaunchMerlinJobRun</code>、<code>GetMerlinJobRun</code>、<code>LaunchMerlinFederalJob</code> 和 <code>GetMerlinFederalJob</code>。本方案的 IP/endpoint 发现应复用这层入口。</p>
+            <pre><code class="language-thrift">LaunchMerlinJobRunResponse LaunchMerlinJobRun(...)
+GetMerlinJobRunResponse GetMerlinJobRun(...)
+LaunchMerlinFederalJobResponse LaunchMerlinFederalJob(...)
+GetMerlinFederalJobResponse GetMerlinFederalJob(...)</code></pre>
+          </div>
+        </div>
+
+        <div class="callout success">
+          仓库内已有 YAML 使用 <code>http://[ipv6]:8001/v1</code> 作为
+          <code>base_url</code>，这与本方案的 root URL 注入方式一致；
+          另有示例使用完整 <code>/responses</code> endpoint，说明控制面需要保留 API 类型语义。
+        </div>
+      </section>
+
+      <footer>
+        本文档是方案设计文档，不要求当前仓库立即实现控制面能力。后续若落地到仓库，建议先补充结构化 YAML patch 的单元测试，再接入具体平台。
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const escapeHtml = (value) => value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    document.querySelectorAll("code.language-diff").forEach((block) => {
+      const lines = block.textContent.split("\n");
+      block.innerHTML = lines.map((line) => {
+        let cls = "diff-line";
+
+        if (line.startsWith("diff --git")) {
+          cls += " diff-file";
+        } else if (line.startsWith("@@")) {
+          cls += " diff-hunk";
+        } else if (line.startsWith("+") && !line.startsWith("+++")) {
+          cls += " diff-add";
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          cls += " diff-del";
+        } else if (line.startsWith("new file mode") || line.startsWith("index ")) {
+          cls += " diff-meta";
+        }
+
+        return `<span class="${cls}">${escapeHtml(line) || " "}</span>`;
+      }).join("");
+    });
+
+    document.querySelectorAll("[data-tabs]").forEach((tabs) => {
+      const buttons = Array.from(tabs.querySelectorAll("[data-tab]"));
+      const panels = Array.from(tabs.querySelectorAll("[data-panel]"));
+
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const target = button.getAttribute("data-tab");
+          buttons.forEach((item) => {
+            item.setAttribute("aria-selected", String(item === button));
+          });
+          panels.forEach((panel) => {
+            panel.classList.toggle("active", panel.getAttribute("data-panel") === target);
+          });
+        });
+      });
+    });
+
+    document.querySelectorAll("[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const selector = button.getAttribute("data-copy");
+        const target = document.querySelector(selector);
+        const status = button.parentElement.querySelector(".status");
+        const text = target ? target.innerText : "";
+
+        try {
+          await navigator.clipboard.writeText(text);
+          status.textContent = "已复制";
+        } catch (error) {
+          status.textContent = "复制失败，请手动选择代码";
+        }
+
+        window.setTimeout(() => {
+          status.textContent = "";
+        }, 1800);
+      });
+    });
+  </script>
+</body>
+</html>

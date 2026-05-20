@@ -285,7 +285,7 @@ class RayExecutorTest(DataJuicerTestCaseBase):
 
         self.assertEqual(format_ray_data_plan(FakeDataset()), "EXPLAINED")
 
-    def test_ray_data_checkpoint_enabled_is_forced_off(self):
+    def test_ray_data_checkpoint_enabled_sets_and_restores_ray_context(self):
         checkpoint_cfg = SimpleNamespace(
             enabled=True,
             dir='hdfs://checkpoint/job-1',
@@ -294,21 +294,45 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         )
         cfg = SimpleNamespace(ray_data_checkpoint=checkpoint_cfg)
 
+        fake_context = SimpleNamespace(
+            data_checkpoint_dir='hdfs://checkpoint/old-job',
+            data_delete_no_checkpoint_files=False,
+            data_checkpoint_write_interval=3,
+        )
         fake_data_context = SimpleNamespace(
-            get_current=MagicMock(),
+            get_current=MagicMock(return_value=fake_context),
             _set_current=MagicMock(),
         )
         fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
 
         with patch('data_juicer.core.executor.ray_executor.ray', fake_ray):
             with RayDataCheckpointManager(cfg) as checkpoint:
-                self.assertFalse(checkpoint.enabled)
+                self.assertTrue(checkpoint.enabled)
+                self.assertEqual(fake_context.data_checkpoint_dir, 'hdfs://checkpoint/job-1')
+                self.assertTrue(fake_context.data_delete_no_checkpoint_files)
+                self.assertEqual(fake_context.data_checkpoint_write_interval, 7)
 
-        self.assertFalse(checkpoint_cfg.enabled)
-        fake_data_context.get_current.assert_not_called()
-        fake_data_context._set_current.assert_not_called()
+        self.assertTrue(checkpoint_cfg.enabled)
+        self.assertEqual(fake_context.data_checkpoint_dir, 'hdfs://checkpoint/old-job')
+        self.assertFalse(fake_context.data_delete_no_checkpoint_files)
+        self.assertEqual(fake_context.data_checkpoint_write_interval, 3)
+        fake_data_context.get_current.assert_called_once()
+        self.assertEqual(fake_data_context._set_current.call_count, 2)
 
-    def test_run_with_ray_data_checkpoint_enabled_uses_normal_materialized_path(self):
+    def test_ray_data_checkpoint_enabled_requires_checkpoint_dir(self):
+        checkpoint_cfg = SimpleNamespace(
+            enabled=True,
+            dir=None,
+            delete_no_checkpoint_files=False,
+            write_interval=None,
+        )
+        cfg = SimpleNamespace(ray_data_checkpoint=checkpoint_cfg)
+
+        with self.assertRaisesRegex(ValueError, "`ray_data_checkpoint.dir` must be set"):
+            with RayDataCheckpointManager(cfg):
+                pass
+
+    def test_run_with_ray_data_checkpoint_enabled_keeps_lazy_export_path(self):
         class FakeData:
             def __init__(self):
                 self.materialize_calls = 0
@@ -348,7 +372,10 @@ class RayExecutorTest(DataJuicerTestCaseBase):
                 write_interval=7,
             ),
         )
-        executor.datasetbuilder = SimpleNamespace(load_dataset=MagicMock(return_value=dataset))
+        executor.datasetbuilder = SimpleNamespace(
+            load_dataset=MagicMock(return_value=dataset),
+            validate_ray_data_checkpoint_support=MagicMock(),
+        )
         executor.work_dir = self.tmp_dir
         executor.executor_type = 'ray'
         executor.tmp_dir = os.path.join(self.tmp_dir, '.tmp')
@@ -380,16 +407,17 @@ class RayExecutorTest(DataJuicerTestCaseBase):
             executor.run()
 
         executor.exporter.export.assert_called_once()
-        self.assertFalse(executor.cfg.ray_data_checkpoint.enabled)
-        self.assertEqual(dataset.data.materialize_calls, 1)
-        self.assertEqual(dataset.data.count_calls, 1)
-        fake_data_context.get_current.assert_not_called()
-        fake_data_context._set_current.assert_not_called()
+        executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_called_once()
+        self.assertTrue(executor.cfg.ray_data_checkpoint.enabled)
+        self.assertEqual(dataset.data.materialize_calls, 0)
+        self.assertEqual(dataset.data.count_calls, 0)
+        fake_data_context.get_current.assert_called_once()
+        self.assertEqual(fake_data_context._set_current.call_count, 2)
         metrics = executor._post_execute_operations_with_dag_monitoring.call_args.kwargs['metrics']
         self.assertIsNone(metrics['input_rows'])
-        self.assertEqual(metrics['output_rows'], 3)
+        self.assertIsNone(metrics['output_rows'])
 
-    def test_run_with_ray_data_checkpoint_enabled_allows_skip_export_because_it_is_disabled(self):
+    def test_run_with_ray_data_checkpoint_enabled_rejects_skip_export(self):
         class FakeData:
             def columns(self):
                 return ['text']
@@ -433,7 +461,10 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         )
         fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
 
-        executor.datasetbuilder = SimpleNamespace(load_dataset=MagicMock(return_value=FakeDataset()))
+        executor.datasetbuilder = SimpleNamespace(
+            load_dataset=MagicMock(return_value=FakeDataset()),
+            validate_ray_data_checkpoint_support=MagicMock(),
+        )
         executor.work_dir = self.tmp_dir
         executor.executor_type = 'ray'
         executor.tmp_dir = os.path.join(self.tmp_dir, '.tmp')
@@ -451,9 +482,97 @@ class RayExecutorTest(DataJuicerTestCaseBase):
             patch('data_juicer.core.executor.ray_executor.ray', fake_ray),
             patch('data_juicer.core.executor.ray_executor.load_ops', return_value=[]),
         ):
-            executor.run(skip_export=True)
+            with self.assertRaisesRegex(ValueError, "requires an export sink"):
+                executor.run(skip_export=True)
 
         executor.exporter.export.assert_not_called()
+        executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_not_called()
+        executor.datasetbuilder.load_dataset.assert_not_called()
+        fake_data_context.get_current.assert_not_called()
+        fake_data_context._set_current.assert_not_called()
+
+    def test_run_with_ray_data_checkpoint_enabled_rejects_unsupported_loader_before_context(self):
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'noop': {}}],
+            op_fusion=False,
+            export_path=os.path.join(self.tmp_dir, 'unused.jsonl'),
+            dataset=None,
+            dataset_path=None,
+            ray_data_checkpoint=SimpleNamespace(
+                enabled=True,
+                dir='hdfs://checkpoint/job-1',
+                delete_no_checkpoint_files=True,
+                write_interval=None,
+            ),
+        )
+
+        fake_data_context = SimpleNamespace(
+            get_current=MagicMock(),
+            _set_current=MagicMock(),
+        )
+        fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
+
+        executor.datasetbuilder = SimpleNamespace(
+            load_dataset=MagicMock(),
+            validate_ray_data_checkpoint_support=MagicMock(
+                side_effect=ValueError("unsupported loader")
+            ),
+        )
+        executor.exporter = SimpleNamespace(export=MagicMock())
+
+        with patch('data_juicer.core.executor.ray_executor.ray', fake_ray):
+            with self.assertRaisesRegex(ValueError, "unsupported loader"):
+                executor.run()
+
+        executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_called_once()
+        executor.datasetbuilder.load_dataset.assert_not_called()
+        executor.exporter.export.assert_not_called()
+        fake_data_context.get_current.assert_not_called()
+        fake_data_context._set_current.assert_not_called()
+
+    def test_run_with_ray_data_checkpoint_enabled_rejects_unsupported_hdfs_export_before_context(self):
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'noop': {}}],
+            op_fusion=False,
+            export_path='hdfs://cluster/path/result.csv',
+            export={'target': 'hdfs', 'path': 'hdfs://cluster/path/result.csv', 'type': 'csv'},
+            dataset=None,
+            dataset_path=None,
+            ray_data_checkpoint=SimpleNamespace(
+                enabled=True,
+                dir='hdfs://checkpoint/job-1',
+                delete_no_checkpoint_files=True,
+                write_interval=None,
+            ),
+        )
+
+        fake_data_context = SimpleNamespace(
+            get_current=MagicMock(),
+            _set_current=MagicMock(),
+        )
+        fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
+
+        executor.datasetbuilder = SimpleNamespace(
+            load_dataset=MagicMock(),
+            validate_ray_data_checkpoint_support=MagicMock(),
+        )
+        executor.exporter = SimpleNamespace(
+            export=MagicMock(),
+            validate_ray_data_checkpoint_sink=MagicMock(side_effect=ValueError("parquet/jsonl")),
+        )
+
+        with patch('data_juicer.core.executor.ray_executor.ray', fake_ray):
+            with self.assertRaisesRegex(ValueError, "parquet/jsonl"):
+                executor.run()
+
+        executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_called_once()
+        executor.exporter.validate_ray_data_checkpoint_sink.assert_called_once()
+        executor.datasetbuilder.load_dataset.assert_not_called()
+        executor.exporter.export.assert_not_called()
+        fake_data_context.get_current.assert_not_called()
+        fake_data_context._set_current.assert_not_called()
 
 
 if __name__ == '__main__':

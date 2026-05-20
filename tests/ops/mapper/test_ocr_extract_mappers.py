@@ -1434,6 +1434,37 @@ class VlmApiResponseMapperTest(unittest.TestCase):
         image_part = calls[0][1]["input"][0]["content"][0]
         self.assertEqual(image_part, {"type": "input_image", "image_url": image_url, "detail": "low"})
 
+    def test_responses_api_maps_first_class_response_parameters(self):
+        calls = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append(payload)
+                return {"output": [{"content": [{"text": "ok"}]}]}
+
+        op = CapturingMapper(
+            prompt_template="describe",
+            model="m",
+            base_url="https://seed.example/v1/responses",
+            top_p=0.8,
+            text={"format": {"type": "json_object"}},
+            store=False,
+            reasoning={"effort": "low"},
+            thinking={"type": "disabled"},
+            previous_response_id="resp_123",
+        )
+
+        row = op.process_single({"images": ["https://example.com/image.png"]})
+
+        self.assertEqual(row["ocr_answer"], "ok")
+        payload = calls[0]
+        self.assertEqual(payload["top_p"], 0.8)
+        self.assertEqual(payload["text"], {"format": {"type": "json_object"}})
+        self.assertIs(payload["store"], False)
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["previous_response_id"], "resp_123")
+
     def test_responses_api_extracts_message_text_after_reasoning_items(self):
         class CapturingMapper(VlmApiResponseMapper):
             def _post_json(self, url, payload, headers):
@@ -1483,6 +1514,154 @@ class VlmApiResponseMapperTest(unittest.TestCase):
 
         empty = op.process_batched({})
         self.assertEqual(empty, {"ocr_answer": []})
+
+    def test_chat_api_maps_first_class_chat_parameters(self):
+        calls = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append(payload)
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        op = CapturingMapper(
+            prompt_template="describe",
+            model="m",
+            base_url="https://seed.example/v1/chat/completions",
+            top_p=0.6,
+            thinking={"type": "disabled"},
+            response_format={"type": "json_object"},
+            stop=["END"],
+            frequency_penalty=0.1,
+            presence_penalty=0.2,
+        )
+
+        row = op.process_single({"images": ["https://example.com/image.png"]})
+
+        self.assertEqual(row["ocr_answer"], "ok")
+        payload = calls[0]
+        self.assertEqual(payload["top_p"], 0.6)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["stop"], ["END"])
+        self.assertEqual(payload["frequency_penalty"], 0.1)
+        self.assertEqual(payload["presence_penalty"], 0.2)
+
+    def test_chat_api_uses_messages_template_with_recursive_field_rendering(self):
+        calls = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append(payload)
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        op = CapturingMapper(
+            messages_template=[
+                {"role": "system", "content": "fixed system"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "name=${user.name}; metadata=${metadata}"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "${image_bytes}",
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                },
+            ],
+            model="m",
+            base_url="https://seed.example/v1/chat/completions",
+        )
+
+        row = op.process_single(
+            {
+                "user.name": "Alice",
+                "metadata": {"类别": ["截图"], "score": 1},
+                "image_bytes": b"abc",
+            }
+        )
+
+        self.assertEqual(row["ocr_answer"], "ok")
+        messages = calls[0]["messages"]
+        self.assertEqual(messages[0], {"role": "system", "content": "fixed system"})
+        self.assertEqual(messages[1]["content"][0]["text"], 'name=Alice; metadata={"类别": ["截图"], "score": 1}')
+        self.assertEqual(messages[1]["content"][1]["image_url"]["url"], "data:image/png;base64,YWJj")
+
+    def test_responses_api_uses_input_template_with_list_and_string_forms(self):
+        calls = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append(payload)
+                return {"output": [{"content": [{"text": "ok"}]}]}
+
+        list_op = CapturingMapper(
+            input_template=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "question=${question}; metadata=${metadata}"},
+                        {"type": "input_image", "image_url": "${image_bytes}", "detail": "high"},
+                    ],
+                }
+            ],
+            model="m",
+            base_url="https://seed.example/v1/responses",
+        )
+        self.assertEqual(
+            list_op.process_single({"question": "what", "metadata": {"a": [1]}, "image_bytes": b"abc"})[
+                "ocr_answer"
+            ],
+            "ok",
+        )
+        self.assertEqual(calls[0]["input"][0]["content"][0]["text"], 'question=what; metadata={"a": [1]}')
+        self.assertEqual(calls[0]["input"][0]["content"][1]["image_url"], "data:image/png;base64,YWJj")
+
+        string_op = CapturingMapper(
+            input_template="question=${question}",
+            model="m",
+            base_url="https://seed.example/v1/responses",
+        )
+        self.assertEqual(string_op.process_single({"question": "what"})["ocr_answer"], "ok")
+        self.assertEqual(calls[1]["input"], "question=what")
+
+    def test_template_validation_and_missing_field_errors(self):
+        with self.assertRaisesRegex(ValueError, "messages_template can only be used"):
+            VlmApiResponseMapper(
+                messages_template=[{"role": "user", "content": "x"}],
+                model="m",
+                base_url="https://seed.example/v1/responses",
+            )
+        with self.assertRaisesRegex(ValueError, "input_template can only be used"):
+            VlmApiResponseMapper(
+                input_template="x",
+                model="m",
+                base_url="https://seed.example/v1/chat/completions",
+            )
+        with self.assertRaisesRegex(ValueError, "messages_template cannot be combined"):
+            VlmApiResponseMapper(
+                messages_template=[{"role": "user", "content": "x"}],
+                prompt_template="x",
+                model="m",
+                base_url="https://seed.example/v1/chat/completions",
+            )
+        with self.assertRaisesRegex(ValueError, "input_template must be a non-empty"):
+            VlmApiResponseMapper(input_template=[], model="m", base_url="https://seed.example/v1/responses")
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        failed = CapturingMapper(
+            messages_template=[{"role": "user", "content": "${missing}"}],
+            model="m",
+            base_url="https://seed.example/v1/chat/completions",
+            error_key="error",
+        ).process_single({})
+        self.assertEqual(failed["ocr_answer"], "")
+        self.assertIn("missing", failed["error"])
 
     def test_ray_job_rate_limiter_shares_rpm_per_model(self):
         limiter = _RayJobVlmRateLimiter()
@@ -1851,11 +2030,7 @@ class VlmApiResponseMapperTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "model"):
             VlmApiResponseMapper(prompt_template="p", base_url="https://seed.example/v1")._model()
 
-    def test_removed_parameters_are_rejected(self):
-        for removed_arg in ["prompt", "model_env", "base_url_env", "api_key_env"]:
-            with self.subTest(removed_arg=removed_arg):
-                with self.assertRaisesRegex(TypeError, removed_arg):
-                    VlmApiResponseMapper(**{removed_arg: "old"})
+    def test_invalid_api_format_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "api_format"):
             VlmApiResponseMapper(api_format="bad")
 

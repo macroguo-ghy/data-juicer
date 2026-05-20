@@ -61,6 +61,7 @@ dependencies = [
     "gitpython",
     "rank-bm25>=0.2.2",
     "regex",  # advanced Unicode-aware regular expressions used by built-in deduplicators
+    "lark-oapi",  # Lark sheet import/export
 ]
 
 [project.optional-dependencies]
@@ -139,7 +140,6 @@ cloud = [
 internal_io = [
     "bytedtqs",  # TQS client for Hive/TQS small-sample client-result loading
     "duckdb",  # DuckDB-based staging queries
-    "lark-oapi",  # Lark sheet import/export
     "byted-iceberg[pyarrow]==0.2.360; sys_platform == 'linux'",  # Magnus/Iceberg read/write support
     "byted-iceberg[pyarrow]==0.2.341; sys_platform == 'darwin'",  # macos test
     "tos",  # TOS object storage client

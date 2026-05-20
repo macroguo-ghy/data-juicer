@@ -1,7 +1,6 @@
 project_name: "magnus-demo"
-executor_type: "default"
+executor_type: "ray"
 np: 1
-work_dir: "./outputs/magnus_demo"
 
 # Source table:
 # ghy_test.default.lance_format
@@ -18,7 +17,7 @@ dataset:
 # Columns: id(int64), name(string), score(double), processed_by(string)
 export:
   target: magnus
-  table_name: "ghy_test.default.lance_format_output3"
+  table_name: "ghy_test.default.lance_format_output10"
   magnus_conf: {}
 
 # This demo keeps only rows with score >= 85.0, then adds a new processed_by column.
