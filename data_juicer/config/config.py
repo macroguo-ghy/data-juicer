@@ -422,7 +422,7 @@ def build_base_parser() -> ArgumentParser:
         "--ray_data_checkpoint.enabled",
         type=bool,
         default=False,
-        help="Ray Data source-to-sink checkpointing is temporarily unavailable; true values are ignored.",
+        help="Whether to enable Ray Data source-to-sink checkpointing. Requires an export sink and checkpoint dir.",
     )
     parser.add_argument(
         "--ray_data_checkpoint.dir",
@@ -950,6 +950,7 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         return cfg
     if not isinstance(export_cfg, dict):
         raise ValueError("Structured `export` config must be a dictionary")
+    _validate_export_max_rows(export_cfg, cfg)
 
     path = export_cfg.get("path")
     if path:
@@ -967,6 +968,42 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
 
     cfg.export = dict_to_namespace(export_cfg)
     return cfg
+
+
+def _validate_export_max_rows(export_cfg: dict, cfg: Namespace) -> None:
+    max_rows_mode = export_cfg.get("max_rows_mode", "limit")
+    if max_rows_mode not in {"limit", "quota_reservation"}:
+        raise ValueError("`export.max_rows_mode` must be one of ['limit', 'quota_reservation'].")
+
+    quota_batch_size = export_cfg.get("max_rows_quota_batch_size")
+    if quota_batch_size is not None:
+        if isinstance(quota_batch_size, bool) or not isinstance(quota_batch_size, int) or quota_batch_size <= 0:
+            raise ValueError("`export.max_rows_quota_batch_size` must be a positive integer when set.")
+        if max_rows_mode != "quota_reservation":
+            raise ValueError(
+                "`export.max_rows_quota_batch_size` is only valid when "
+                "`export.max_rows_mode` is `quota_reservation`."
+            )
+
+    if "max_rows" not in export_cfg or export_cfg.get("max_rows") is None:
+        if "max_rows_mode" in export_cfg:
+            raise ValueError("`export.max_rows_mode` requires `export.max_rows` to be set.")
+        return
+
+    max_rows = export_cfg["max_rows"]
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
+        raise ValueError("`export.max_rows` must be a positive integer when set.")
+
+    export_cfg.setdefault("max_rows_mode", "limit")
+
+    if max_rows_mode == "quota_reservation" and getattr(cfg, "executor_type", "default") != "ray":
+        raise ValueError("`export.max_rows_mode=quota_reservation` requires `executor_type: ray`.")
+
+    if getattr(cfg, "ray_collect_real_metrics", False):
+        raise ValueError(
+            "`ray_collect_real_metrics` cannot be true when `export.max_rows` is set, because eager "
+            "Ray Dataset materialize/count before export would defeat lazy export limiting."
+        )
 
 
 def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
@@ -1331,11 +1368,14 @@ def namespace_to_arg_list(namespace, prefix="", includes=None, excludes=None):
     arg_list = []
 
     for key, value in vars(namespace).items():
+        concat_key = f"{prefix}{key}"
         if issubclass(type(value), Namespace):
+            if includes is not None and concat_key in includes:
+                arg_list.append(f"--{concat_key}={json.dumps(namespace_to_dict(value), ensure_ascii=False)}")
+                continue
             nested_args = namespace_to_arg_list(value, f"{prefix}{key}.")
             arg_list.extend(nested_args)
         elif value is not None:
-            concat_key = f"{prefix}{key}"
             if includes is not None and concat_key not in includes:
                 continue
             if excludes is not None and concat_key in excludes:

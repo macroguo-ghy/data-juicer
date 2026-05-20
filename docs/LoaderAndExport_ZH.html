@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loader 与 Export 配置解析</title>
+  <style>
+    :root { color-scheme: light; --bg:#f7f8fb; --panel:#fff; --text:#20242c; --muted:#657084; --line:#d9dee8; --accent:#2166d5; --accent-soft:#eaf1ff; --code-bg:#f2f4f8; --shadow:0 10px 30px rgba(31,45,71,.08); }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; line-height:1.7; }
+    .layout { display:grid; grid-template-columns:minmax(230px,300px) minmax(0,1fr); gap:28px; max-width:1480px; margin:0 auto; padding:28px; }
+    aside { position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:18px; }
+    aside h2 { margin:0 0 12px; font-size:16px; }
+    .toc a { display:block; color:var(--muted); text-decoration:none; padding:5px 0; border-radius:4px; font-size:14px; }
+    .toc a:hover { color:var(--accent); }
+    .toc-l1 { font-weight:700; color:var(--text)!important; }
+    .toc-l2 { padding-left:10px!important; }
+    .toc-l3 { padding-left:24px!important; font-size:13px!important; }
+    main { min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:36px 44px; }
+    h1,h2,h3,h4,h5,h6 { line-height:1.35; scroll-margin-top:18px; }
+    h1 { margin-top:0; font-size:34px; border-bottom:1px solid var(--line); padding-bottom:18px; }
+    h2 { margin-top:38px; font-size:24px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    h3 { margin-top:28px; font-size:19px; }
+    p { margin:12px 0; } a { color:var(--accent); }
+    code { background:var(--code-bg); padding:2px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.92em; }
+    pre { overflow:auto; background:#111827; color:#f8fafc; border-radius:8px; padding:16px; line-height:1.55; }
+    pre code { background:transparent; color:inherit; padding:0; border-radius:0; }
+    .table-wrap { overflow-x:auto; margin:16px 0 24px; border:1px solid var(--line); border-radius:8px; }
+    table { width:100%; border-collapse:collapse; min-width:720px; font-size:14px; }
+    th,td { border-bottom:1px solid var(--line); border-right:1px solid var(--line); padding:9px 11px; vertical-align:top; text-align:left; }
+    th:last-child,td:last-child { border-right:none; } tr:last-child td { border-bottom:none; }
+    th { background:var(--accent-soft); color:#173a75; font-weight:700; white-space:nowrap; }
+    ul { padding-left:22px; } .meta { color:var(--muted); font-size:14px; margin-top:-8px; margin-bottom:24px; } .ordered-item { margin-left:1em; }
+    @media (max-width:980px) { .layout{display:block;padding:14px;} aside{position:static;max-height:none;margin-bottom:16px;} main{padding:24px 18px;} h1{font-size:28px;} table{min-width:640px;} }
+    @media print { body{background:#fff;} .layout{display:block;max-width:none;padding:0;} aside{display:none;} main{box-shadow:none;border:none;padding:0;} a{color:inherit;text-decoration:none;} }
+
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h2>目录</h2>
+      <nav class="toc">
+<a class="toc-l1" href="#loader-与-export-配置解析">Loader 与 Export 配置解析</a>
+<a class="toc-l2" href="#loader-配置总览">Loader 配置总览</a>
+<a class="toc-l2" href="#loader-选择规则">Loader 选择规则</a>
+<a class="toc-l2" href="#本地文件-loader">本地文件 Loader</a>
+<a class="toc-l3" href="#默认模式">默认模式</a>
+<a class="toc-l3" href="#ray-模式">Ray 模式</a>
+<a class="toc-l2" href="#huggingface-loader">HuggingFace Loader</a>
+<a class="toc-l2" href="#s3-loader">S3 Loader</a>
+<a class="toc-l3" href="#默认模式-1">默认模式</a>
+<a class="toc-l3" href="#ray-模式-1">Ray 模式</a>
+<a class="toc-l2" href="#hdfs-loader">HDFS Loader</a>
+<a class="toc-l3" href="#默认模式-2">默认模式</a>
+<a class="toc-l3" href="#ray-模式-2">Ray 模式</a>
+<a class="toc-l2" href="#tqs-loader">TQS Loader</a>
+<a class="toc-l2" href="#hive-loader">Hive Loader</a>
+<a class="toc-l2" href="#duckdb-loader">DuckDB Loader</a>
+<a class="toc-l2" href="#lark-sheet-loader">Lark Sheet Loader</a>
+<a class="toc-l2" href="#magnus-loader">Magnus Loader</a>
+<a class="toc-l2" href="#当前注册但不可用的-loader">当前注册但不可用的 Loader</a>
+<a class="toc-l2" href="#export-配置总览">Export 配置总览</a>
+<a class="toc-l2" href="#export-target-推断规则">Export target 推断规则</a>
+<a class="toc-l2" href="#local-与-s3-export">Local 与 S3 Export</a>
+<a class="toc-l2" href="#hdfs-export">HDFS Export</a>
+<a class="toc-l3" href="#默认模式-3">默认模式</a>
+<a class="toc-l3" href="#ray-分布式模式">Ray 分布式模式</a>
+<a class="toc-l2" href="#hive-export">Hive Export</a>
+<a class="toc-l2" href="#lark-export">Lark Export</a>
+<a class="toc-l2" href="#tos-export">TOS Export</a>
+<a class="toc-l2" href="#magnus-export">Magnus Export</a>
+<a class="toc-l2" href="#webdataset-export">WebDataset Export</a>
+<a class="toc-l2" href="#从-demo-抽取的配置案例">从 Demo 抽取的配置案例</a>
+<a class="toc-l3" href="#案例-1ray-本地-jsonl-读取导出到本地目录">案例 1：Ray 本地 JSONL 读取，导出到本地目录</a>
+<a class="toc-l3" href="#案例-2s3-读取结果元信息导出回-s3">案例 2：S3 读取，结果元信息导出回 S3</a>
+<a class="toc-l3" href="#案例-3lark-sheet-读取导出-jsonl">案例 3：Lark Sheet 读取，导出 JSONL</a>
+<a class="toc-l3" href="#案例-4lark-sheet-读取处理并追加回同一-sheet">案例 4：Lark Sheet 读取、处理并追加回同一 Sheet</a>
+<a class="toc-l3" href="#案例-5ray-hive-读取写入-magnus-lance-表">案例 5：Ray Hive 读取，写入 Magnus Lance 表</a>
+<a class="toc-l3" href="#案例-6tqs-clientresult-小样本读取写入-magnus">案例 6：TQS client_result 小样本读取，写入 Magnus</a>
+<a class="toc-l3" href="#案例-7本地-jsonl-创建覆盖-magnus-lance-表">案例 7：本地 JSONL 创建/覆盖 Magnus Lance 表</a>
+<a class="toc-l2" href="#旧式-datasetpath">旧式 <code>dataset_path</code></a>
+      </nav>
+    </aside>
+    <main>
+      <p class="meta">由 <code>docs/LoaderAndExport_ZH.md</code> 生成。对应 Markdown：<a href="LoaderAndExport_ZH.md">LoaderAndExport_ZH.md</a></p>
+<h1 id="loader-与-export-配置解析">Loader 与 Export 配置解析</h1>
+<p>本文档说明 Data-Juicer 当前支持的数据加载（loader）和导出（export）配置。内容以实际代码路径为准：</p>
+<ul>
+<li>Loader：<code>data_juicer/core/data/load_strategy.py</code></li>
+<li>Export：<code>data_juicer/core/export_manager.py</code>、<code>data_juicer/core/exporter.py</code>、<code>data_juicer/core/ray_exporter.py</code></li>
+</ul>
+<h2 id="loader-配置总览">Loader 配置总览</h2>
+<p>Loader 配置写在 <code>dataset.configs</code> 下。每一项代表一个数据源：</p>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: local
+      path: ./data/input.jsonl
+      weight: 1.0
+      load_kwargs: {}</code></pre>
+<p>公共字段：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>type</code></td><td>推荐</td><td>无</td><td>数据位置类型。常用值：<code>local</code>、<code>remote</code>。</td></tr>
+<tr><td><code>source</code></td><td>视 loader 而定</td><td><code>*</code></td><td>数据源类型。远程数据必须配置，例如 <code>huggingface</code>、<code>s3</code>、<code>hdfs</code>、<code>tqs</code>、<code>hive</code>、<code>duckdb</code>、<code>lark</code>、<code>magnus</code>。Ray 本地读取时也可用它指定格式。</td></tr>
+<tr><td><code>path</code></td><td>视 loader 而定</td><td>无</td><td>文件路径、目录路径、远程 URI 或远程数据集名称。</td></tr>
+<tr><td><code>weight</code></td><td>否</td><td><code>1.0</code></td><td>多数据源混合时的采样权重。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td><code>{}</code></td><td>透传给具体读取实现的额外参数。默认 executor 多数会传给 formatter/HuggingFace <code>load_dataset</code>；Ray 部分 loader 只会转发白名单参数。</td></tr>
+</tbody></table></div>
+<p>与 loader 相关的顶层配置：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>executor_type</code></td><td><code>default</code></td><td>决定使用默认 loader 还是 Ray loader。Ray 模式需要 <code>executor_type: ray</code>。</td></tr>
+<tr><td><code>text_keys</code></td><td><code>text</code></td><td>Data-Juicer 统一格式化时使用的文本字段。</td></tr>
+<tr><td><code>suffixes</code></td><td><code>[]</code></td><td>本地文件读取时的后缀过滤。</td></tr>
+<tr><td><code>np</code></td><td><code>4</code></td><td>默认模式的加载/处理进程数；Ray 模式下通常不是 Ray 读取并发的主控制项。</td></tr>
+<tr><td><code>load_dataset_kwargs</code></td><td><code>{}</code></td><td>旧式 <code>dataset_path</code> 路径使用的额外加载参数；结构化 <code>dataset.configs</code> 更推荐使用每个数据源自己的 <code>load_kwargs</code>。</td></tr>
+</tbody></table></div>
+<h2 id="loader-选择规则">Loader 选择规则</h2>
+<p>Data-Juicer 使用 <code>(executor_type, type, source)</code> 查找 loader：</p>
+<p class="ordered-item">1. 先匹配最具体的注册项。</p>
+<p class="ordered-item">2. 再匹配带 <code>*</code> 的通配注册项。</p>
+<p class="ordered-item">3. 找不到时会报 “No data load strategy found”。</p>
+<p>常见例子：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>executor_type</th><th>type</th><th>source</th><th>实际 loader</th></tr></thead>
+<tbody>
+<tr><td><code>default</code></td><td><code>local</code></td><td>任意或省略</td><td>默认本地 loader</td></tr>
+<tr><td><code>ray</code></td><td><code>local</code></td><td>任意或省略</td><td>Ray 本地 loader</td></tr>
+<tr><td><code>default</code></td><td><code>remote</code></td><td><code>lark</code></td><td>默认 Lark Sheet loader</td></tr>
+<tr><td><code>ray</code></td><td><code>remote</code></td><td><code>lark</code></td><td>Ray Lark Sheet loader</td></tr>
+<tr><td><code>ray</code></td><td><code>remote</code></td><td><code>hive</code></td><td>Ray Hive loader</td></tr>
+</tbody></table></div>
+<h2 id="本地文件-loader">本地文件 Loader</h2>
+<h3 id="默认模式">默认模式</h3>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: local
+      path: ./data/input.jsonl</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>本地文件或目录。支持格式由 formatter 自动识别，常见为 JSON、JSONL、CSV、TSV、TXT、Parquet 等。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td>传给 formatter 的额外参数。</td></tr>
+</tbody></table></div>
+<p>行为：</p>
+<ul>
+<li>使用 <code>data_juicer.format.load.load_formatter</code> 加载。</li>
+<li>会根据顶层 <code>text_keys</code>、<code>suffixes</code> 做统一格式化。</li>
+<li>如果 pipeline 中包含 <code>suffix_filter</code>，loader 会为样本增加后缀信息。</li>
+</ul>
+<h3 id="ray-模式">Ray 模式</h3>
+<pre><code class="language-yaml">executor_type: ray
+dataset:
+  configs:
+    - type: local
+      path: ./data/input.parquet
+      source: parquet</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>无</td><td>本地文件或目录。相对路径会尝试按当前目录、仓库根目录、用户目录、<code>work_dir</code> 解析。</td></tr>
+<tr><td><code>source</code></td><td>否</td><td>自动识别</td><td>可显式指定格式：<code>json</code>、<code>text</code>、<code>csv</code>、<code>parquet</code>、<code>numpy</code>、<code>tfrecords</code>、<code>lance</code>。</td></tr>
+</tbody></table></div>
+<p>行为：</p>
+<ul>
+<li>使用 <code>RayDataset.read(data_format, path)</code>。</li>
+<li>目录自动识别时，以目录中遇到的第一个文件后缀决定读取格式。</li>
+<li>不能识别时默认按 JSON 读取。</li>
+</ul>
+<h2 id="huggingface-loader">HuggingFace Loader</h2>
+<p>默认模式支持 HuggingFace；Ray 模式当前未实现。</p>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: huggingface
+      path: HuggingFaceFW/fineweb
+      name: CC-MAIN-2024-10
+      split: train
+      data_dir: null
+      data_files: null
+      limit: 1000</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>HuggingFace 数据集名称或本地/远程数据集脚本路径。</td></tr>
+<tr><td><code>name</code></td><td>否</td><td>数据集配置名。</td></tr>
+<tr><td><code>split</code></td><td>否</td><td>数据集 split，例如 <code>train</code>。</td></tr>
+<tr><td><code>data_files</code></td><td>否</td><td>传给 <code>datasets.load_dataset</code> 的数据文件。</td></tr>
+<tr><td><code>data_dir</code></td><td>否</td><td>传给 <code>datasets.load_dataset</code> 的数据目录。</td></tr>
+<tr><td><code>limit</code></td><td>否</td><td>传给 <code>datasets.load_dataset</code> 的限制参数。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td>透传给 <code>datasets.load_dataset</code> 的额外参数。</td></tr>
+</tbody></table></div>
+<h2 id="s3-loader">S3 Loader</h2>
+<h3 id="默认模式-1">默认模式</h3>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: s3
+      path: s3://bucket/path/data.jsonl
+      aws_access_key_id: &lt;access_key&gt;
+      aws_secret_access_key: &lt;secret_key&gt;
+      aws_session_token: null
+      aws_region: us-east-1
+      endpoint_url: https://s3.example.com</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>必须以 <code>s3://</code> 开头。</td></tr>
+<tr><td><code>aws_access_key_id</code></td><td>否</td><td>S3 access key。</td></tr>
+<tr><td><code>aws_secret_access_key</code></td><td>否</td><td>S3 secret key。</td></tr>
+<tr><td><code>aws_session_token</code></td><td>否</td><td>临时凭证 token。</td></tr>
+<tr><td><code>aws_region</code></td><td>否</td><td>区域；默认模式下 HuggingFace/fsspec 通常可从路径或环境推断。</td></tr>
+<tr><td><code>endpoint_url</code></td><td>否</td><td>S3 兼容存储 endpoint。</td></tr>
+<tr><td><code>anon</code></td><td>否</td><td>公开桶匿名访问。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td>传给 <code>datasets.load_dataset</code> 的额外参数。</td></tr>
+</tbody></table></div>
+<p>行为：</p>
+<ul>
+<li>按文件后缀识别 JSON、JSONL、TXT、CSV、TSV、Parquet；不能识别时默认 JSON。</li>
+<li>凭证优先级由 <code>get_aws_credentials</code> 处理，通常显式配置和环境变量都可用。</li>
+</ul>
+<h3 id="ray-模式-1">Ray 模式</h3>
+<pre><code class="language-yaml">executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: s3
+      path: s3://bucket/path/data.parquet
+      format: parquet
+      aws_access_key_id: &lt;access_key&gt;
+      aws_secret_access_key: &lt;secret_key&gt;
+      endpoint_url: https://s3.example.com</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>必须以 <code>s3://</code> 开头。</td><td></td></tr>
+<tr><td><code>format</code></td><td>否</td><td>自动识别；不能识别时默认 <code>parquet</code></td><td>支持 <code>json</code>、<code>text</code>、<code>csv</code>、<code>parquet</code>、<code>numpy</code>、<code>tfrecords</code>、<code>lance</code>。</td></tr>
+<tr><td><code>aws_access_key_id</code> / <code>aws_secret_access_key</code> / <code>aws_session_token</code> / <code>aws_region</code> / <code>endpoint_url</code></td><td>否</td><td>无</td><td>用于创建 PyArrow S3 filesystem。</td></tr>
+</tbody></table></div>
+<h2 id="hdfs-loader">HDFS Loader</h2>
+<h3 id="默认模式-2">默认模式</h3>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://cluster/path/data.jsonl</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>必须以 <code>hdfs://</code> 开头。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td>复制到本地暂存后，透传给本地 loader。</td></tr>
+</tbody></table></div>
+<p>行为：</p>
+<ul>
+<li>先将 HDFS 文件或目录复制到 <code>work_dir/.io_cache/load/...</code>。</li>
+<li>再复用本地 loader 读取。</li>
+</ul>
+<h3 id="ray-模式-2">Ray 模式</h3>
+<pre><code class="language-yaml">executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://cluster/path/table_or_file
+      format: parquet
+      filesystem: pyarrow
+      columns: [&quot;text&quot;, &quot;label&quot;]
+      override_num_blocks: 128</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>无</td><td>必须以 <code>hdfs://</code> 开头。</td></tr>
+<tr><td><code>format</code></td><td>否</td><td><code>parquet</code></td><td>Ray HDFS 直读当前只支持 Parquet。</td></tr>
+<tr><td><code>filesystem</code></td><td>否</td><td><code>pyarrow</code></td><td>HDFS filesystem 实现。生产和线上 Ray 集群使用 <code>pyarrow</code>；<code>webhdfs</code> 仅用于本地或测试环境验证。</td></tr>
+<tr><td><code>webhdfs</code></td><td>否</td><td><code>{}</code></td><td>仅在 <code>filesystem: webhdfs</code> 的测试场景生效，传给 fsspec 的参数，例如 <code>host</code>、<code>port</code>、<code>user</code>。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td><code>{}</code></td><td>读取参数。</td></tr>
+<tr><td><code>columns</code>、<code>parallelism</code>、<code>num_cpus</code>、<code>num_gpus</code>、<code>memory</code>、<code>ray_remote_args</code>、<code>tensor_column_schema</code>、<code>partition_filter</code>、<code>partitioning</code>、<code>shuffle</code>、<code>include_paths</code>、<code>file_extensions</code>、<code>concurrency</code>、<code>override_num_blocks</code></td><td>否</td><td>无</td><td>会转发给 Ray Parquet reader 的白名单参数。</td></tr>
+</tbody></table></div>
+<h2 id="tqs-loader">TQS Loader</h2>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: tqs
+      query: SELECT text, label FROM db.table
+      tqs_app_id: &lt;app_id&gt;
+      tqs_app_key: &lt;app_key&gt;
+      user_name: &lt;user_name&gt;
+      read_mode: materialized
+      output_uri: hdfs://cluster/tmp/dj_tqs_result</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>query</code></td><td>是</td><td>无</td><td>要执行的 SQL。</td></tr>
+<tr><td><code>tqs_app_id</code></td><td>是</td><td>无</td><td>TQS app id。</td></tr>
+<tr><td><code>tqs_app_key</code></td><td>是</td><td>无</td><td>TQS app key。</td></tr>
+<tr><td><code>user_name</code></td><td>是</td><td>无</td><td>TQS 执行用户。</td></tr>
+<tr><td><code>read_mode</code></td><td>否</td><td><code>materialized</code></td><td><code>materialized</code>：SQL 写到 <code>output_uri</code> 后再加载；<code>client_result</code>：直接拉取查询结果。</td></tr>
+<tr><td><code>output_uri</code> / <code>tqs_output_uri</code></td><td>materialized 必填</td><td>无</td><td>查询结果物化位置。</td></tr>
+<tr><td><code>cluster</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized 模式下的 Yarn cluster。</td></tr>
+<tr><td><code>queue_name</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized 模式下的队列。</td></tr>
+<tr><td><code>priority</code></td><td>否</td><td><code>5</code></td><td>materialized 模式下的任务优先级。</td></tr>
+<tr><td><code>memory</code></td><td>否</td><td><code>0</code></td><td>materialized 模式下的 executor memory，单位 GB。</td></tr>
+<tr><td><code>max_result_rows</code></td><td>否</td><td><code>10000</code></td><td>client_result 模式最多拉取行数。</td></tr>
+<tr><td><code>tqs_cluster</code></td><td>否</td><td><code>cn</code></td><td>client_result 模式 TQS cluster。</td></tr>
+<tr><td><code>tqs_enable_domain</code></td><td>否</td><td>无</td><td>client_result 模式 domain 开关。</td></tr>
+<tr><td><code>tqs_timeout</code></td><td>否</td><td><code>120</code></td><td>client_result 模式超时秒数。</td></tr>
+</tbody></table></div>
+<p>默认 executor 和 Ray executor 都支持 TQS。Ray 的 <code>client_result</code> 会用 <code>ray.data.from_items</code> 构造 Ray Dataset；<code>materialized</code> 会先落地再走 staged loader。</p>
+<h2 id="hive-loader">Hive Loader</h2>
+<p>Hive loader 只支持 Ray 模式，并依赖内部 byted-ray。</p>
+<pre><code class="language-yaml">executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: db.table
+      columns:
+        - text
+        - label
+        - name: user_id
+          cast: BIGINT
+      filter: &quot;date=&#x27;20260515&#x27;&quot;
+      concurrency: 64
+      override_num_blocks: 128</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>table_name</code></td><td>是</td><td>无</td><td>Hive 表名。</td></tr>
+<tr><td><code>columns</code></td><td>否</td><td>全部列</td><td>可以是字符串列表，也可以包含 <code>{name, cast}</code> 的对象列表。<code>cast</code> 当前支持 <code>STRING</code>、<code>BIGINT</code>。</td></tr>
+<tr><td><code>filter</code></td><td>否</td><td>无</td><td>Hive/Parquet reader 的过滤条件。</td></tr>
+<tr><td><code>concurrency</code></td><td>否</td><td>无</td><td>读取并发。</td></tr>
+<tr><td><code>override_num_blocks</code></td><td>否</td><td>无</td><td>Ray block 数。</td></tr>
+<tr><td><code>ray_remote_args</code></td><td>否</td><td>无</td><td>Ray remote 参数。</td></tr>
+<tr><td><code>arrow_parquet_args</code></td><td>否</td><td><code>{}</code></td><td>透传给底层 Arrow/Parquet reader 的参数。</td></tr>
+<tr><td><code>load_kwargs</code></td><td>否</td><td><code>{}</code></td><td>先合入 read kwargs，再被显式字段覆盖。</td></tr>
+</tbody></table></div>
+<p>明确不再支持的旧字段：<code>sql</code>、<code>table</code>、<code>output_uri</code>、<code>tqs_output_uri</code>、<code>read_mode</code>、<code>max_result_rows</code>、<code>tqs_app_id</code>、<code>tqs_app_key</code>、<code>user_name</code>、<code>tqs_cluster</code>、<code>tqs_enable_domain</code>、<code>tqs_timeout</code>、<code>catalog</code>、<code>cast_columns</code>。</p>
+<h2 id="duckdb-loader">DuckDB Loader</h2>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: duckdb
+      sql: SELECT * FROM read_parquet(&#x27;/path/to/*.parquet&#x27;)
+      path_mapping:
+        /remote/prefix: /local/prefix</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>sql</code></td><td>是</td><td>DuckDB SQL。查询结果会物化为暂存 Parquet，再走 staged loader。</td></tr>
+<tr><td><code>path_mapping</code></td><td>否</td><td>路径映射，供 <code>materialize_duckdb_query</code> 使用。</td></tr>
+</tbody></table></div>
+<p>默认模式和 Ray 模式都支持 DuckDB staged loading。</p>
+<h2 id="lark-sheet-loader">Lark Sheet Loader</h2>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;
+      lark_app_id: &lt;lark_app_id&gt;
+      lark_app_secret: &lt;lark_app_secret&gt;
+      file_extension: csv
+      document_type: sheet
+      wait_export_time_seconds: 60</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>lark_path</code></td><td>是</td><td>无</td><td>飞书表格 URL 或 bare spreadsheet token。URL 中可带 <code>?sheet=&lt;sheet_id&gt;</code>。</td></tr>
+<tr><td><code>sheet_id</code></td><td>URL 中无 <code>sheet</code> 时必填</td><td>URL query</td><td>目标 sheet id。如果 URL 和字段同时设置，必须一致。</td></tr>
+<tr><td><code>lark_app_id</code></td><td>是</td><td>无</td><td>飞书应用 app id。</td></tr>
+<tr><td><code>lark_app_secret</code></td><td>是</td><td>无</td><td>飞书应用 app secret。不要提交真实 secret。</td></tr>
+<tr><td><code>file_extension</code></td><td>否</td><td><code>csv</code></td><td>当前只支持 <code>csv</code>。</td></tr>
+<tr><td><code>document_type</code></td><td>否</td><td><code>sheet</code></td><td>当前只支持 <code>sheet</code>。</td></tr>
+<tr><td><code>wait_export_time_seconds</code></td><td>否</td><td><code>60</code></td><td>等待 Drive 导出任务完成的最长秒数。</td></tr>
+</tbody></table></div>
+<p>读取行为：</p>
+<p class="ordered-item">1. 优先创建 Drive export task，将 sheet 导出为 CSV。</p>
+<p class="ordered-item">2. 如果导出创建失败且错误是权限类 <code>1069902/no permission</code>，则降级为 Sheets values read。</p>
+<p class="ordered-item">3. values read 成功后，会把二维单元格写成暂存 CSV，再复用普通 CSV loader。</p>
+<p class="ordered-item">4. 如果 app 对表格没有读权限，values read 会失败，常见错误是 <code>91403 Forbidden</code>。</p>
+<p>权限要求：</p>
+<ul>
+<li>loader 使用 <code>lark_app_id + lark_app_secret</code> 创建 tenant/app client，不使用本机用户登录态。</li>
+<li>应用需要开通对应 API scope。</li>
+<li>具体表格也需要分享给应用/bot；用户自己能读，不代表应用能读。</li>
+</ul>
+<h2 id="magnus-loader">Magnus Loader</h2>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: remote
+      source: magnus
+      table_name: db.table
+      filter: &quot;date = &#x27;20260515&#x27;&quot;
+      magnus_conf:
+        catalog: &lt;catalog&gt;</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>table_name</code></td><td>是</td><td>无</td><td>Magnus 表名。</td></tr>
+<tr><td><code>filter</code></td><td>否</td><td>无</td><td>下推过滤条件。</td></tr>
+<tr><td><code>magnus_conf</code></td><td>否</td><td><code>{}</code></td><td>传给 Magnus/PyIceberg 的配置。</td></tr>
+</tbody></table></div>
+<p>默认模式会读成 pandas 再转 HuggingFace Dataset；Ray 模式会读成 Ray Dataset。</p>
+<h2 id="当前注册但不可用的-loader">当前注册但不可用的 Loader</h2>
+<p>以下 loader 有注册类或配置校验，但 <code>load_data</code> 当前直接抛出 <code>NotImplementedError</code>：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>source</th><th>executor_type</th><th>状态</th></tr></thead>
+<tbody>
+<tr><td><code>modelscope</code></td><td><code>default</code></td><td>未实现</td></tr>
+<tr><td><code>arxiv</code></td><td><code>default</code></td><td>未实现</td></tr>
+<tr><td><code>wiki</code></td><td><code>default</code></td><td>未实现</td></tr>
+<tr><td><code>commoncrawl</code></td><td><code>default</code></td><td>未实现</td></tr>
+<tr><td><code>huggingface</code></td><td><code>ray</code></td><td>未实现</td></tr>
+</tbody></table></div>
+<h2 id="export-配置总览">Export 配置总览</h2>
+<p>推荐使用结构化 <code>export</code> 配置；旧式 <code>export_path</code>、<code>export_type</code> 等字段仍可用。</p>
+<p>旧式配置：</p>
+<pre><code class="language-yaml">export_path: ./outputs/result.jsonl
+export_type: jsonl
+export_shard_size: 0
+export_in_parallel: false
+export_extra_args: {}
+export_aws_credentials: null
+keep_stats_in_res_ds: false
+keep_hashes_in_res_ds: false</code></pre>
+<p>结构化配置：</p>
+<pre><code class="language-yaml">export:
+  target: local
+  path: ./outputs/result.jsonl
+  type: jsonl
+  shard_size: 0
+  in_parallel: false
+  max_rows: null
+  max_rows_mode: limit
+  max_rows_quota_batch_size: null
+  extra_args: {}</code></pre>
+<p>公共字段：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>旧式字段</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>target</code></td><td>从 <code>export_path</code> 推断</td><td>自动推断</td><td>导出目标：<code>local</code>、<code>s3</code>、<code>hdfs</code>、<code>hive</code>、<code>lark</code>、<code>tos</code>、<code>magnus</code>。</td></tr>
+<tr><td><code>path</code></td><td><code>export_path</code></td><td>无</td><td>输出路径。local/s3/hdfs 使用；部分远端目标作为暂存类型推断来源。</td></tr>
+<tr><td><code>type</code></td><td><code>export_type</code></td><td>从路径后缀推断</td><td>输出格式。</td></tr>
+<tr><td><code>shard_size</code></td><td><code>export_shard_size</code></td><td><code>0</code></td><td>废弃字段。旧式本地文件导出仍可识别；新配置不要继续使用。Ray HDFS 分布式导出不支持该字段，需要控制文件大小或行数时使用目标 sink 的 <code>extra_args</code>。</td></tr>
+<tr><td><code>in_parallel</code></td><td><code>export_in_parallel</code></td><td><code>false</code></td><td>默认模式单文件导出是否并行。</td></tr>
+<tr><td><code>max_rows</code></td><td>无</td><td><code>null</code></td><td>控制传给导出 sink 的行数，必须是正整数。</td></tr>
+<tr><td><code>max_rows_mode</code></td><td>无</td><td><code>limit</code></td><td><code>limit</code>：默认实现，导出行数不超过 <code>max_rows</code>，Ray 模式会在写入前应用 <code>Dataset.limit(max_rows)</code> 并尽量保留 lazy limit 下推能力。<code>quota_reservation</code>：Ray-only，按 pyarrow batch 整批放行直到至少达到 <code>max_rows</code>，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 <code>max_rows</code>。</td></tr>
+<tr><td><code>max_rows_quota_batch_size</code></td><td>无</td><td>算子默认 batch size</td><td>仅 <code>max_rows_mode: quota_reservation</code> 生效。batch 越大，actor 调用越少，但超出 <code>max_rows</code> 的行数可能越多。</td></tr>
+<tr><td><code>extra_args</code></td><td><code>export_extra_args</code></td><td><code>{}</code></td><td>传给底层导出函数的额外参数。</td></tr>
+<tr><td><code>aws_credentials</code></td><td><code>export_aws_credentials</code></td><td><code>{}</code></td><td>S3 导出凭证。</td></tr>
+</tbody></table></div>
+<p><code>export.max_rows</code> 只控制传给 sink 的数据规模，不改变写入模式；例如 <code>OVERWRITE</code> 仍会覆盖目标，只是写入受控后的数据。<code>limit</code> 模式下，Ray limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 <code>max_rows</code> 行的上游工作。<code>quota_reservation</code> 控制的是进入 sink 输入流的数据，不是写入提交计数器；它会在真正 sink 前增加一次 materialize 屏障，用来避免 Ray 写入前的 schema/sample 动作重复执行带状态的 quota reservation。任务重试或 sink 失败时不提供 exactly-once 计数保证。<code>ray_collect_real_metrics: true</code> 不能和 <code>export.max_rows</code> 同时配置，因为导出前的 eager <code>materialize()</code> / <code>count()</code> 会破坏 lazy limit 路径。</p>
+<p>导出前，默认会移除中间字段：</p>
+<ul>
+<li><code>keep_stats_in_res_ds: false</code> 时移除 <code>__dj__stats__</code>、<code>__dj__meta__</code>。</li>
+<li><code>keep_hashes_in_res_ds: false</code> 时移除 <code>__dj__hash__</code>、<code>__dj__minhash__</code>、<code>__dj__simhash__</code>、<code>__dj__imagehash__</code>、<code>__dj__videohash__</code>。</li>
+</ul>
+<h2 id="export-target-推断规则">Export target 推断规则</h2>
+<p>如果没有显式设置 <code>export.target</code>：</p>
+<p class="ordered-item">1. <code>hive_table</code> 存在时推断为 <code>hive</code>。</p>
+<p class="ordered-item">2. <code>table_name</code> 存在且 <code>magnus_conf</code> 不为 <code>null</code> 时推断为 <code>magnus</code>。</p>
+<p class="ordered-item">3. <code>lark_path</code> 存在时推断为 <code>lark</code>。</p>
+<p class="ordered-item">4. <code>bucket_name</code> 和 <code>object_key</code> 同时存在时推断为 <code>tos</code>。</p>
+<p class="ordered-item">5. 否则根据 <code>path</code>/<code>export_path</code> 推断：<code>s3://</code> 为 <code>s3</code>，<code>hdfs://</code> 为 <code>hdfs</code>，其他为 <code>local</code>。</p>
+<h2 id="local-与-s3-export">Local 与 S3 Export</h2>
+<pre><code class="language-yaml">export:
+  target: local
+  path: ./outputs/result.jsonl
+  type: jsonl</code></pre>
+<pre><code class="language-yaml">export:
+  target: s3
+  path: s3://bucket/outputs/result.parquet
+  type: parquet
+  aws_credentials:
+    aws_access_key_id: &lt;access_key&gt;
+    aws_secret_access_key: &lt;secret_key&gt;
+    aws_session_token: null
+    endpoint_url: https://s3.example.com</code></pre>
+<p>默认模式支持：<code>jsonl</code>、<code>json</code>、<code>parquet</code>、<code>csv</code>。</p>
+<p>Ray 模式支持：<code>jsonl</code>、<code>json</code>、<code>parquet</code>、<code>csv</code>、<code>tfrecords</code>、<code>webdataset</code>、<code>lance</code>。</p>
+<h2 id="hdfs-export">HDFS Export</h2>
+<h3 id="默认模式-3">默认模式</h3>
+<pre><code class="language-yaml">export:
+  target: hdfs
+  path: hdfs://cluster/path/result.parquet
+  type: parquet</code></pre>
+<p>行为：</p>
+<ul>
+<li>先导出到本地 <code>work_dir/.io_cache/export/...</code>。</li>
+<li>再通过 PyArrow filesystem 复制到 HDFS。</li>
+<li><code>type</code> 可显式设置；不设置时依次从 <code>path</code> 后缀、默认值推断。</li>
+</ul>
+<h3 id="ray-分布式模式">Ray 分布式模式</h3>
+<p>Ray 模式下，<code>parquet</code> 和 <code>jsonl</code> 可以直接由 Ray workers 分布式写入 HDFS 目录，避免先写到 driver 本地再复制到 HDFS。该路径适合大规模输出，也是 <code>ray_data_checkpoint.enabled: true</code> 与 HDFS export 配合时的要求。</p>
+<pre><code class="language-yaml">executor_type: ray
+export:
+  target: hdfs
+  type: parquet
+  path: hdfs://cluster/path/output_dir
+  filesystem: pyarrow
+  mode: error_if_exists
+  extra_args:
+    max_rows_per_file: 10000
+    concurrency: 64</code></pre>
+<pre><code class="language-yaml">executor_type: ray
+export:
+  target: hdfs
+  type: jsonl
+  path: hdfs://cluster/path/output_dir
+  filesystem: pyarrow
+  mode: error_if_exists
+  extra_args:
+    num_rows_per_file: 10000
+    concurrency: 64</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>path</code></td><td>是</td><td>无</td><td>目标 HDFS 目录，必须以 <code>hdfs://</code> 开头。Ray 分布式 HDFS export 要求目录路径，不能是 <code>*.parquet</code>、<code>*.json</code>、<code>*.jsonl</code>、<code>*.csv</code> 这类文件路径。</td></tr>
+<tr><td><code>type</code></td><td>否</td><td>从路径后缀推断，否则 <code>jsonl</code></td><td>Ray 分布式 HDFS export 当前支持 <code>parquet</code>、<code>jsonl</code>。其他格式仍走默认 staging copy 路径；开启 <code>ray_data_checkpoint</code> 时会提前报错。</td></tr>
+<tr><td><code>filesystem</code></td><td>否</td><td><code>pyarrow</code></td><td>HDFS filesystem 实现。生产和线上 Ray 集群使用 <code>pyarrow</code>；<code>webhdfs</code> 仅用于本地或测试环境验证。</td></tr>
+<tr><td><code>webhdfs</code></td><td>否</td><td><code>{}</code></td><td>仅在 <code>filesystem: webhdfs</code> 的测试场景生效，传给 fsspec 的参数，例如 <code>host</code>、<code>port</code>、<code>user</code>。</td></tr>
+<tr><td><code>mode</code></td><td>否</td><td><code>error_if_exists</code></td><td>写入模式。<code>error_if_exists</code>：目标已存在时失败；<code>overwrite</code>：写入前删除已有目标；<code>append</code>：直接追加 part 文件，重试或重跑可能产生重复文件。checkpoint 的可启用性不依赖具体 <code>mode</code>，但失败后重提任务的恢复语义依赖 <code>mode</code>。</td></tr>
+<tr><td><code>extra_args</code></td><td>否</td><td><code>{}</code></td><td>传给 Ray writer / datasink 的参数，例如 <code>concurrency</code>、<code>ray_remote_args</code>、<code>min_rows_per_file</code>、<code>num_rows_per_file</code>、<code>max_rows_per_file</code>。旧版 byted-ray 的 parquet writer 不支持 <code>max_rows_per_file</code> 时会兼容映射到 <code>min_rows_per_file</code>。JSONL 推荐使用 <code>num_rows_per_file</code> 或 <code>min_rows_per_file</code>。</td></tr>
+</tbody></table></div>
+<p>限制：</p>
+<ul>
+<li>Ray 分布式 HDFS export 不支持 <code>export.shard_size</code>；需要控制文件大小或行数时使用 <code>export.extra_args</code> 中的 Ray writer 参数。</li>
+<li><code>ray_data_checkpoint.enabled: true</code> 的硬要求是 Ray 文件 source 到文件 sink 的 lazy 路径；HDFS export 场景需要使用上述 Ray 分布式 <code>parquet/jsonl</code> 写入路径。</li>
+<li>checkpoint 与 <code>export.mode</code> 没有硬绑定，但恢复语义不同。<code>error_if_exists</code> / <code>overwrite</code> 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，<code>error_if_exists</code> 可能因输出目录已存在而失败，<code>overwrite</code> 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。</li>
+<li><code>mode: append</code> 才可能保留已经写出的 part 文件，但第一版只提供 at-least-once 语义，不提供 exactly-once；同一次任务重试、用户重跑或局部失败后再次提交都可能产生重复 part。</li>
+</ul>
+<h2 id="hive-export">Hive Export</h2>
+<p>Hive export 只支持 Ray 模式，并依赖内部 byted-ray。</p>
+<pre><code class="language-yaml">executor_type: ray
+export:
+  target: hive
+  table_name: db.table
+  partition:
+    date: &quot;20260515&quot;
+  mode: append
+  auto_cast_schema: true
+  concurrency: 64</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>table_name</code></td><td>是</td><td>目标 Hive 表。</td></tr>
+<tr><td><code>partition</code></td><td>否</td><td>分区，可以是字符串或字典。</td></tr>
+<tr><td><code>mode</code></td><td>否</td><td>写入模式，透传给 <code>write_hive_table</code>。</td></tr>
+<tr><td><code>auto_cast_schema</code></td><td>否</td><td>是否自动 cast 到目标表 schema。</td></tr>
+<tr><td><code>concurrency</code></td><td>否</td><td>写入并发。</td></tr>
+<tr><td><code>ray_remote_args</code></td><td>否</td><td>Ray remote 参数。</td></tr>
+<tr><td><code>arrow_parquet_args</code></td><td>否</td><td>透传给底层 parquet writer 的参数。</td></tr>
+</tbody></table></div>
+<h2 id="lark-export">Lark Export</h2>
+<pre><code class="language-yaml">export:
+  target: lark
+  lark_path: https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;
+  lark_app_id: &lt;lark_app_id&gt;
+  lark_app_secret: &lt;lark_app_secret&gt;
+  range: A1
+  type: csv
+  mode: file</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>lark_path</code></td><td>视模式而定</td><td>无</td><td>目标飞书表格 URL，必须能解析出 spreadsheet token 和 sheet id。<code>create_spreadsheet: true</code> 时可不写。</td></tr>
+<tr><td><code>lark_app_id</code></td><td>是</td><td>无</td><td>飞书应用 app id。</td></tr>
+<tr><td><code>lark_app_secret</code></td><td>是</td><td>无</td><td>飞书应用 app secret。不要提交真实 secret。</td></tr>
+<tr><td><code>range</code></td><td>仅 <code>file</code>/<code>upload</code> 必填</td><td><code>append</code> 从 <code>lark_path</code> 的 <code>sheet</code> 推断；<code>overwrite</code> 从 <code>A1</code> 开始</td><td>写入范围。<code>append</code> 可不写，会默认追加到 <code>lark_path</code> 指定的 sheet 当前表尾；<code>overwrite</code> 可不写，会按暂存 CSV 的行列数从 <code>A1</code> 覆盖写入。</td></tr>
+<tr><td><code>type</code></td><td>否</td><td><code>csv</code></td><td>暂存导出格式。<code>append</code> 和 <code>overwrite</code> 只支持 <code>csv</code>。</td></tr>
+<tr><td><code>mode</code></td><td>否</td><td><code>file</code></td><td><code>file</code>/<code>upload</code>：上传暂存文件并把文件对象写入目标单元格；<code>append</code>：把暂存 CSV 的行追加写入目标 sheet；<code>overwrite</code>：把暂存 CSV 覆盖写入目标 sheet。</td></tr>
+<tr><td><code>skip_header</code></td><td>否</td><td><code>append</code> 默认为 <code>true</code>；<code>overwrite</code> 默认为 <code>false</code></td><td>values 写入时是否跳过暂存 CSV 表头。</td></tr>
+<tr><td><code>clear_sheet</code></td><td>否</td><td><code>true</code></td><td>仅 <code>overwrite</code> 且未配置 <code>range</code> 时生效。写入前删除本次输出行数之后的旧行，避免历史尾行残留。</td></tr>
+<tr><td><code>create_spreadsheet</code></td><td>否</td><td><code>false</code></td><td>为 <code>true</code> 且未配置 <code>lark_path</code> 时，先创建一个新的飞书表格，再写入。</td></tr>
+<tr><td><code>spreadsheet_title</code> / <code>title</code></td><td>否</td><td><code>data-juicer-export</code></td><td><code>create_spreadsheet: true</code> 时的新表标题。</td></tr>
+</tbody></table></div>
+<p>行为：</p>
+<ul>
+<li>先把结果数据集导出为本地暂存文件，默认 <code>dataset.csv</code>。</li>
+<li><code>mode: file</code>/<code>upload</code>：再上传文件到 Lark，并把文件对象写入目标 sheet 的 <code>range</code>。</li>
+<li><code>mode: append</code>：读取暂存 CSV，并调用 Lark Sheets append 接口把数据行追加到目标 sheet。不写 <code>range</code> 时使用 <code>lark_path</code> 里的 <code>sheet</code> 作为 append range；写单个起始单元格时会按暂存 CSV 的行列数扩展为矩形范围。</li>
+<li><code>mode: overwrite</code>：读取暂存 CSV，并调用 Lark Sheets values PUT 接口覆盖写入。未配置 <code>range</code> 时从 <code>A1</code> 开始，自动扩展到暂存 CSV 的行列范围，并默认清理旧的尾行。</li>
+<li>与 Lark loader 一样，使用 app/tenant 身份，不使用本机 user 登录态。</li>
+</ul>
+<h2 id="tos-export">TOS Export</h2>
+<pre><code class="language-yaml">export:
+  target: tos
+  bucket_name: &lt;bucket&gt;
+  object_key: outputs/result.jsonl
+  type: jsonl
+  endpoint: https://tos-cn-beijing.volces.com
+  region: cn-beijing
+  access_key: &lt;access_key&gt;
+  secret_key: &lt;secret_key&gt;
+  session_token: null</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>bucket_name</code></td><td>是</td><td>无</td><td>TOS bucket。</td></tr>
+<tr><td><code>object_key</code></td><td>是</td><td>无</td><td>TOS object key。</td></tr>
+<tr><td><code>type</code></td><td>否</td><td>从 <code>object_key</code> 或 <code>path</code> 推断</td><td>暂存文件格式。</td></tr>
+<tr><td><code>endpoint</code></td><td>否</td><td><code>https://tos-cn-beijing.volces.com</code></td><td>TOS endpoint。</td></tr>
+<tr><td><code>region</code></td><td>否</td><td><code>cn-beijing</code></td><td>TOS region。</td></tr>
+<tr><td><code>access_key</code> / <code>secret_key</code> / <code>session_token</code></td><td>否</td><td>无</td><td>TOS 凭证。</td></tr>
+</tbody></table></div>
+<p>限制：当前 TOS export 要求暂存结果是单文件；目录分片会报错。</p>
+<h2 id="magnus-export">Magnus Export</h2>
+<pre><code class="language-yaml">export:
+  target: magnus
+  table_name: db.table
+  magnus_conf:
+    write_options:
+      write.format.default: lance
+  partition_columns: [&quot;date&quot;]
+  partition_values:
+    date: &quot;20260515&quot;
+  operation: APPEND
+  create_table_if_not_exists: false
+  infer_schema_on_create: false
+  schema: null
+  magnus_failure_policy: abort</code></pre>
+<p>参数：</p>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>table_name</code></td><td>是</td><td>无</td><td>目标 Magnus 表。</td></tr>
+<tr><td><code>magnus_conf</code></td><td>否</td><td><code>{}</code></td><td>传给 Magnus/PyIceberg 写入的配置。</td></tr>
+<tr><td><code>partition_columns</code></td><td>否</td><td>无</td><td>分区列名列表。</td></tr>
+<tr><td><code>partition_values</code></td><td>否</td><td>无</td><td>当前写入对应的分区值。</td></tr>
+<tr><td><code>schema</code></td><td>否</td><td>无</td><td>创建表或对齐写入时使用的显式 schema。</td></tr>
+<tr><td><code>create_table_if_not_exists</code></td><td>否</td><td><code>false</code></td><td>表不存在时是否自动创建。</td></tr>
+<tr><td><code>infer_schema_on_create</code></td><td>否</td><td><code>false</code></td><td>配合 <code>create_table_if_not_exists: true</code> 使用；未配置 <code>schema</code> 时从数据集推断 schema。</td></tr>
+<tr><td><code>magnus_failure_policy</code></td><td>否</td><td><code>abort</code></td><td>支持 <code>abort</code> 和 <code>commit_completed_unsafe</code>。后者仅适合 Ray Data checkpoint 场景。</td></tr>
+<tr><td><code>batch_size</code></td><td>否</td><td><code>2000</code></td><td>默认模式 HuggingFace Dataset 写入时的 batch size。</td></tr>
+<tr><td><code>operation</code></td><td>Ray 模式可选</td><td><code>APPEND</code></td><td>Ray Magnus 写入操作，例如 <code>APPEND</code>、<code>OVERWRITE</code> 等，具体取决于目标 SDK。</td></tr>
+<tr><td><code>validate_overwrite_partition_before_write</code></td><td>Ray 模式可选</td><td><code>false</code></td><td>OVERWRITE 分区写入前是否提前 materialize/count 并校验分区值。</td></tr>
+</tbody></table></div>
+<p>注意：</p>
+<ul>
+<li><code>partition_columns</code> 和 <code>partition_values</code> 用于分区写入和覆盖保护。需要覆盖指定分区，或创建分区表时，应配置它们。</li>
+<li><code>create_table_if_not_exists: true</code> 且没有 <code>schema</code> 时，只有 <code>infer_schema_on_create: true</code> 才会自动推断 schema。</li>
+<li>Ray 模式会尽量保持 Ray Data lazy；开启 <code>validate_overwrite_partition_before_write</code> 会提前触发计算。</li>
+</ul>
+<h2 id="webdataset-export">WebDataset Export</h2>
+<p>Ray 模式支持 WebDataset：</p>
+<pre><code class="language-yaml">executor_type: ray
+export:
+  target: local
+  path: ./outputs/webdataset
+  type: webdataset
+  extra_args:
+    field_mapping:
+      txt: text
+      png: images
+      json: metadata</code></pre>
+<p><code>field_mapping</code> 用于把数据集字段映射到 WebDataset 样本扩展名。</p>
+<h2 id="从-demo-抽取的配置案例">从 Demo 抽取的配置案例</h2>
+<p>本节从 <code>demos/</code> 中抽取常见 loader/export 组合，并对内部路径、表名、凭证做了占位符化。真实任务中应替换为自己的资源。</p>
+<h3 id="案例-1ray-本地-jsonl-读取导出到本地目录">案例 1：Ray 本地 JSONL 读取，导出到本地目录</h3>
+<p>来源：<code>demos/process_on_ray/configs/demo-new-config.yaml</code></p>
+<pre><code class="language-yaml">project_name: ray-local-jsonl-demo
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/process_on_ray/data/demo-dataset.jsonl
+      weight: 1.0
+
+process:
+  - text_length_filter:
+      min_len: 10
+
+export_path: ./outputs/demo/demo-processed</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>本地文件作为输入。</li>
+<li>需要在 Ray 上跑算子。</li>
+<li>结果写到本地路径；Ray export 格式由 <code>export_path</code> 或 <code>export_type</code> 推断。</li>
+</ul>
+<h3 id="案例-2s3-读取结果元信息导出回-s3">案例 2：S3 读取，结果元信息导出回 S3</h3>
+<p>来源：<code>demos/process_video_on_ray/configs/s3_video_processing_config.yaml</code></p>
+<pre><code class="language-yaml">project_name: s3-video-processing-demo
+executor_type: ray
+ray_address: auto
+work_dir: ./outputs/s3_demo
+
+dataset:
+  configs:
+    - type: remote
+      source: s3
+      path: s3://&lt;bucket&gt;/dj/dataset/input.jsonl
+      aws_region: us-east-1
+      endpoint_url: https://&lt;s3-compatible-endpoint&gt;
+
+export_path: s3://&lt;bucket&gt;/dj/dataset/demo-processed
+export_type: jsonl
+export_aws_credentials:
+  aws_access_key_id: &lt;aws_access_key_id&gt;
+  aws_secret_access_key: &lt;aws_secret_access_key&gt;
+  aws_region: us-east-1
+  endpoint_url: https://&lt;s3-compatible-endpoint&gt;</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>数据集文件在 S3 或 S3 兼容存储。</li>
+<li>默认 loader 使用 fsspec/s3fs；Ray loader 使用 PyArrow S3 filesystem。</li>
+<li>输入凭证在 <code>dataset.configs</code> 中配置，输出凭证在 <code>export_aws_credentials</code> 或结构化 <code>export.aws_credentials</code> 中配置。</li>
+</ul>
+<h3 id="案例-3lark-sheet-读取导出-jsonl">案例 3：Lark Sheet 读取，导出 JSONL</h3>
+<p>来源：<code>demos/bytedance/lark_sheet_loader/lark_sheet_loader_default.yaml</code></p>
+<pre><code class="language-yaml">project_name: lark-sheet-loader-default
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;
+      lark_app_id: &lt;lark_app_id&gt;
+      lark_app_secret: &lt;lark_app_secret&gt;
+      file_extension: csv
+
+process:
+  - text_length_filter:
+      min_len: 0
+
+export_path: ./outputs/lark_sheet_loader_default.jsonl</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>一个飞书电子表格作为输入。</li>
+<li>表格中需要有 Data-Juicer 后续算子要用的字段，例如 <code>text</code>。</li>
+<li>应用需要有目标表的读取权限；如果 Drive 导出没权限但 values read 有权限，会自动 fallback 到 read 后写临时 CSV。</li>
+</ul>
+<h3 id="案例-4lark-sheet-读取处理并追加回同一-sheet">案例 4：Lark Sheet 读取、处理并追加回同一 Sheet</h3>
+<p>来源：<code>demos/bytedance/lark_sheet_loader/lark_sheet_transform_append.yaml</code></p>
+<pre><code class="language-yaml">project_name: lark_sheet_transform_append
+text_keys: null
+
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: &quot;https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;&quot;
+      lark_app_id: &quot;&lt;lark_app_id&gt;&quot;
+      lark_app_secret: &quot;&lt;lark_app_secret&gt;&quot;
+      file_extension: csv
+
+process:
+  - python_lambda_mapper:
+      lambda_str: &#x27;lambda d: {k: (&quot;empty&quot; if v is None or v == &quot;&quot; else (v + 1 if isinstance(v, (int, float)) and not isinstance(v, bool) else (v + &quot;_process_by_dj&quot; if isinstance(v, str) else v))) for k, v in d.items()}&#x27;
+
+export:
+  target: lark
+  mode: append
+  lark_path: &quot;https://bytedance.larkoffice.com/sheets/&lt;spreadsheet_token&gt;?sheet=&lt;sheet_id&gt;&quot;
+  lark_app_id: &quot;&lt;lark_app_id&gt;&quot;
+  lark_app_secret: &quot;&lt;lark_app_secret&gt;&quot;
+  type: csv
+  skip_header: true</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>不要求输入表有 <code>text</code> 列；<code>text_keys: null</code> 会关闭默认文本列校验。</li>
+<li>mapper 会遍历每一列：数字加 1，字符串追加 <code>_process_by_dj</code>，空值写成 <code>empty</code>，其他 Python 值类型保持不变。</li>
+<li><code>skip_header: true</code> 会避免把暂存 CSV 的表头再次追加进原表。</li>
+</ul>
+<h3 id="案例-5ray-hive-读取写入-magnus-lance-表">案例 5：Ray Hive 读取，写入 Magnus Lance 表</h3>
+<p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo.yaml</code></p>
+<pre><code class="language-yaml">project_name: hive-to-magnus-ray
+executor_type: ray
+ray_address: auto
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: &lt;hive_db.hive_table&gt;
+      columns:
+        p_date: STRING
+        site_id: BIGINT
+        text: STRING
+      filter: |
+        p_date = &#x27;&lt;partition_date&gt;&#x27;
+        AND text IS NOT NULL
+      override_num_blocks: 1024
+      concurrency: 32
+      ray_remote_args:
+        num_cpus: 1
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  create_table_if_not_exists: true
+  operation: OVERWRITE
+  partition_columns: [&quot;p_date&quot;]
+  partition_values:
+    p_date: &lt;partition_date&gt;
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;string&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;p_date&quot;, type: &quot;string&quot;}
+      - {name: &quot;site_id&quot;, type: &quot;int64&quot;}
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: &quot;true&quot;
+      magnus.ray.write.disable_sort: &quot;true&quot;</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>内部 byted-ray 直接读 Hive。</li>
+<li>结果写到 Magnus，底层格式使用 Lance。</li>
+<li>覆盖分区时应同时配置 <code>partition_columns</code> 和 <code>partition_values</code>，并确保数据中分区列存在。</li>
+</ul>
+<h3 id="案例-6tqs-clientresult-小样本读取写入-magnus">案例 6：TQS client_result 小样本读取，写入 Magnus</h3>
+<p>来源：<code>demos/bytedance/process_landing_page_on_ray/configs/preloads_demo_tqs_100.yaml</code></p>
+<pre><code class="language-yaml">project_name: tqs-client-result-to-magnus
+executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: tqs
+      read_mode: client_result
+      max_result_rows: 1000
+      tqs_app_id: &lt;tqs_app_id&gt;
+      tqs_app_key: &lt;tqs_app_key&gt;
+      user_name: &lt;user_name&gt;
+      tqs_cluster: cn
+      tqs_timeout: 120
+      query: |
+        SELECT
+          CAST(p_date AS STRING) AS p_date,
+          CAST(id AS BIGINT) AS id,
+          CAST(text AS STRING) AS text
+        FROM &lt;db.table&gt;
+        WHERE p_date = &#x27;&lt;partition_date&gt;&#x27;
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  operation: OVERWRITE
+  partition_columns: [&quot;p_date&quot;]
+  partition_values:
+    p_date: &lt;partition_date&gt;
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;int64&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;p_date&quot;, type: &quot;string&quot;}
+  magnus_conf:
+    write_options:
+      write.format.default: lance</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>只需要小批量查询结果，不想先物化到 HDFS。</li>
+<li><code>max_result_rows</code> 控制 client_result 读取上限。</li>
+<li>大结果集更适合 <code>read_mode: materialized</code> 并配置 <code>output_uri</code>。</li>
+</ul>
+<h3 id="案例-7本地-jsonl-创建覆盖-magnus-lance-表">案例 7：本地 JSONL 创建/覆盖 Magnus Lance 表</h3>
+<p>来源：<code>demos/bytedance/process_magnus/configs/lance_create_smoke.yaml</code></p>
+<pre><code class="language-yaml">project_name: magnus-lance-create-smoke
+executor_type: ray
+ray_address: auto
+np: 1
+work_dir: ./outputs/magnus_lance_create_smoke
+
+dataset:
+  configs:
+    - type: local
+      path: ./demos/bytedance/process_magnus/data/lance_create_smoke.jsonl
+
+export:
+  target: magnus
+  table_name: &lt;catalog.db.output_table&gt;
+  operation: OVERWRITE
+  schema:
+    fields:
+      - {name: &quot;id&quot;, type: &quot;int64&quot;}
+      - {name: &quot;text&quot;, type: &quot;string&quot;}
+      - {name: &quot;score&quot;, type: &quot;double&quot;}
+  magnus_conf:
+    concurrency: 1
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write.format.default: lance
+      magnus.ray.write.disable_repartition: &quot;true&quot;
+      magnus.ray.write.disable_sort: &quot;true&quot;
+
+process: []</code></pre>
+<p>适用场景：</p>
+<ul>
+<li>用本地小数据做 Magnus 写入 smoke test。</li>
+<li>通过显式 <code>schema</code> 固定建表/写入字段。</li>
+<li>已存在但格式不符合预期的表应失败，而不是被静默覆盖成另一种物理格式。</li>
+</ul>
+<h2 id="旧式-datasetpath">旧式 <code>dataset_path</code></h2>
+<p>旧式配置仍可用：</p>
+<pre><code class="language-yaml">dataset_path: ./data/input.jsonl</code></pre>
+<p>它简单但表达能力弱，不适合多数据源、远程数据源、权重、凭证、read mode 等场景。新配置应优先使用：</p>
+<pre><code class="language-yaml">dataset:
+  configs:
+    - type: local
+      path: ./data/input.jsonl</code></pre>
+    </main>
+  </div>
+</body>
+</html>

@@ -479,6 +479,89 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
 
         self.assertIn('No data load strategy found', str(context.exception))
 
+    def test_ray_data_checkpoint_support_accepts_local_file_loader(self):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.dataset = {'configs': [{'type': 'local', 'path': 'test.jsonl'}]}
+
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        builder.validate_ray_data_checkpoint_support()
+
+    def test_ray_data_checkpoint_support_rejects_tqs_loader(self):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.dataset = {
+            'configs': [
+                {
+                    'type': 'remote',
+                    'source': 'tqs',
+                    'read_mode': 'client_result',
+                    'query': 'select 1',
+                    'tqs_app_id': 'app-id',
+                    'tqs_app_key': 'app-key',
+                    'user_name': 'user',
+                }
+            ]
+        }
+
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        with self.assertRaisesRegex(ValueError, "source='tqs'.*TQS loader"):
+            builder.validate_ray_data_checkpoint_support()
+
+    def test_ray_data_checkpoint_support_rejects_any_unsupported_loader_in_mixture(self):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.dataset = {
+            'configs': [
+                {'type': 'local', 'path': 'test.jsonl'},
+                {
+                    'type': 'remote',
+                    'source': 'tqs',
+                    'query': 'select 1',
+                    'tqs_app_id': 'app-id',
+                    'tqs_app_key': 'app-key',
+                    'user_name': 'user',
+                },
+            ]
+        }
+
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        with self.assertRaisesRegex(ValueError, r"dataset\.configs\[1\].*RayTQSDataLoadStrategy"):
+            builder.validate_ray_data_checkpoint_support()
+
+    def test_ray_data_checkpoint_support_rejects_lark_from_arrow_loader(self):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.dataset = {
+            'configs': [
+                {
+                    'type': 'remote',
+                    'source': 'lark',
+                    'lark_path': 'https://example.feishu.cn/sheets/sht-token?sheet=sheet-id',
+                    'lark_app_id': 'app-id',
+                    'lark_app_secret': 'app-secret',
+                }
+            ]
+        }
+
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        with self.assertRaisesRegex(ValueError, r"RayLarkDataLoadStrategy.*does not declare"):
+            builder.validate_ray_data_checkpoint_support()
+
+    def test_ray_data_checkpoint_support_rejects_generated_dataset_config(self):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.generated_dataset_config = {'type': 'json', 'path': 'test.jsonl'}
+
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        with self.assertRaisesRegex(ValueError, "generated_dataset_config"):
+            builder.validate_ray_data_checkpoint_support()
+
     def test_builder_invalid_dataset_config_type(self):
         """Test handling of invalid dataset configuration type"""
         self.base_cfg.dataset = "invalid_string_config"

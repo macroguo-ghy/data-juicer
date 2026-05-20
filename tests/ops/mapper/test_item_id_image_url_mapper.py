@@ -431,6 +431,79 @@ class EcomVideoItemConfigTest(unittest.TestCase):
         self.assertEqual(ops[8].ocr_result_key, "ocr_result")
         self.assertEqual(ops[9].field_key, "ocr_result")
 
+    def test_ecom_video_item_video_hdfs_parquet_config_loads(self):
+        _patch_yaml_loader_tags()
+        path = os.path.join(
+            os.getcwd(),
+            "demos",
+            "bytedance",
+            "ecom_video_item_a_dragon",
+            "configs",
+            "ecom_video_item_video_hdfs_parquet.yaml",
+        )
+
+        with open(path, encoding="utf-8") as f:
+            yaml_text = f.read()
+        self.assertEqual(yaml_text.splitlines()[0].strip(), "# 电商视频-视频")
+
+        cfg = init_configs(args=["--config", path, "--ray_address", "local"], load_configs_only=True)
+        source_root = (
+            "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/"
+            "ecom_video_item_sample_stats_daily_v2"
+        )
+        output_path = (
+            "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/"
+            "ecom_video_item_sample_stats_daily_v2"
+        )
+
+        self.assertEqual(cfg.executor_type, "ray")
+        self.assertEqual(cfg.process, [])
+        self.assertIn("TODO: add item_id_video_id_mapper", yaml_text)
+        self.assertIn("TODO: add guldan_video_frames_mapper", yaml_text)
+        self.assertIn("TODO: add a Ray branch/union pipeline", yaml_text)
+        self.assertEqual([config["source"] for config in cfg.dataset["configs"]], ["hdfs"])
+        self.assertEqual(
+            [config["path"] for config in cfg.dataset["configs"]],
+            [
+                f"{source_root}/date=20260425",
+            ],
+        )
+        self.assertEqual(cfg.export_path, output_path)
+        self.assertEqual(cfg.export_type, "parquet")
+
+
+class EcomPlayletConfigTest(unittest.TestCase):
+    def test_ecom_playlet_hdfs_parquet_config_loads(self):
+        _patch_yaml_loader_tags()
+        path = os.path.join(
+            os.getcwd(),
+            "demos",
+            "bytedance",
+            "ecom_playlet_a_dragon",
+            "configs",
+            "ecom_playlet_hdfs_parquet.yaml",
+        )
+
+        with open(path, encoding="utf-8") as f:
+            yaml_text = f.read()
+
+        cfg = init_configs(args=["--config", path, "--ray_address", "local"], load_configs_only=True)
+        source_path = "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/playlet/20260204"
+        output_path = "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_playlet"
+
+        self.assertEqual(yaml_text.splitlines()[0].strip(), "# 短剧")
+        self.assertIn("TODO: add ecom_playlet_schema_prepare_pipeline", yaml_text)
+        self.assertIn("TODO: add guldan_video_frames_mapper", yaml_text)
+        self.assertIn("TODO: add a Ray branch/union pipeline", yaml_text)
+        self.assertEqual(cfg.executor_type, "ray")
+        self.assertEqual(cfg.process, [])
+        self.assertEqual(len(cfg.dataset["configs"]), 1)
+        self.assertEqual(cfg.dataset["configs"][0]["source"], "hdfs")
+        self.assertEqual(cfg.dataset["configs"][0]["path"], source_path)
+        self.assertEqual(cfg.dataset["configs"][0]["format"], "parquet")
+        self.assertEqual(cfg.export_path, output_path)
+        self.assertEqual(cfg.export_type, "parquet")
+
 
 if __name__ == "__main__":
     unittest.main()

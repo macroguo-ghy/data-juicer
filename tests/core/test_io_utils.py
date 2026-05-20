@@ -777,9 +777,6 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported Magnus write operation"):
                 write_ray_dataset_to_magnus(dataset, "catalog.db.table", operation="DELETE")
 
-            with self.assertRaisesRegex(ValueError, "Unsupported Magnus write operation"):
-                write_ray_dataset_to_magnus(dataset, "catalog.db.table", operation="OVERWRITE_PARTITION")
-
     def test_write_ray_dataset_to_magnus_uses_explicit_schema(self):
         dataset = MagicMock()
         dataset.schema.side_effect = AssertionError("inferred schema should not be used")
@@ -1161,6 +1158,41 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
                 dataset,
                 "catalog.db.table",
                 operation="OVERWRITE",
+                partition_columns=["p_date"],
+                partition_values={"p_date": "20260421"},
+            )
+
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertIsNot(written_dataset, dataset)
+        self.assertEqual(written_dataset.rows, dataset.rows)
+        mock_create_table.assert_not_called()
+        pyiceberg_ray.write_magnus.assert_called_once_with(
+            written_dataset,
+            identifier="catalog.db.table",
+            operation="OVERWRITE",
+            write_options={
+                "magnus.ray.write.disable_repartition": "true",
+                "magnus.ray.write.disable_sort": "true",
+            },
+        )
+
+    def test_overwrite_partition_operation_alias_writes_as_overwrite(self):
+        dataset = FakeRayDataset(
+            [
+                {"id": "1", "p_date": "20260421"},
+                {"id": "2", "p_date": "20260421"},
+            ]
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+
+        with (
+            patch("data_juicer.core.io_utils.import_optional_dependency", return_value=pyiceberg_ray),
+            patch("data_juicer.core.io_utils.create_magnus_table_if_not_exists") as mock_create_table,
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                operation="OVERWRITE_PARTITION",
                 partition_columns=["p_date"],
                 partition_values={"p_date": "20260421"},
             )

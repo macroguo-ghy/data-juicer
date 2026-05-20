@@ -751,6 +751,47 @@ class LandingPageConfigTest(unittest.TestCase):
         self.assertEqual(cfg.export["target"], "magnus")
         self.assertEqual(cfg.export["table_name"], "ai_data_forge.ccu.landing_page_chengzi")
         self.assertEqual(cfg.export["operation"], "OVERWRITE")
+        self.assertTrue(cfg.export["create_table_if_not_exists"])
+        self.assertEqual(cfg.export["partition_values"]["p_date"], "20260423")
+        self.assertEqual(cfg.export["magnus_conf"]["write_options"]["write.format.default"], "lance")
+        self.assertTrue(cfg.ray_data_checkpoint.enabled)
+        self.assertEqual(
+            cfg.ray_data_checkpoint.dir,
+            "hdfs://haruna/ad_base/addrd_core/addrd_stats/ray_checkpoint/tqs_100_1",
+        )
+        self.assertTrue(cfg.ray_data_checkpoint.delete_no_checkpoint_files)
+        mock_tqs.assert_not_called()
+
+    def test_preloads_demo_tqs_100_export_max_rows_config_loads(self):
+        path = os.path.join(
+            os.getcwd(),
+            "demos",
+            "bytedance",
+            "process_landing_page_on_ray",
+            "configs",
+            "preloads_demo_tqs_100_export_max_rows.yaml",
+        )
+        if not os.path.exists(path):
+            self.skipTest("ByteDance landing page demo configs are not included")
+
+        with patch("data_juicer.core.data.load_strategy.run_tqs_query") as mock_tqs:
+            cfg = init_configs(args=["--config", path, "--ray_address", "local"], load_configs_only=True)
+
+        ops = load_ops(cfg.process)
+        ds_config = cfg.dataset["configs"][0]
+
+        self.assertEqual(ds_config["source"], "tqs")
+        self.assertEqual(ds_config["max_result_rows"], 1000)
+        self.assertEqual(ops[0].image_source, "preloads")
+        self.assertEqual(cfg.export["target"], "magnus")
+        self.assertEqual(
+            cfg.export["table_name"],
+            "ai_data_forge.ccu.landing_page_chengzi_export_max_rows_e2e",
+        )
+        self.assertEqual(cfg.export["operation"], "OVERWRITE")
+        self.assertEqual(cfg.export["max_rows"], 10)
+        self.assertEqual(cfg.export["max_rows_mode"], "limit")
+        self.assertTrue(cfg.export["create_table_if_not_exists"])
         self.assertEqual(cfg.export["partition_values"]["p_date"], "20260423")
         self.assertEqual(cfg.export["magnus_conf"]["write_options"]["write.format.default"], "lance")
         mock_tqs.assert_not_called()

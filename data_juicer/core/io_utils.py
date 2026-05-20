@@ -7,12 +7,13 @@ import inspect
 import json
 import os
 import posixpath
+import re
 import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from jsonargparse import Namespace, namespace_to_dict
 from loguru import logger
@@ -91,8 +92,36 @@ def infer_storage_target_from_path(path: str | None) -> str:
     return "local"
 
 
-def get_pyarrow_filesystem(uri: str):
+def get_webhdfs_pyarrow_filesystem(uri: str, webhdfs_config: Dict[str, Any] | None = None):
+    import fsspec
     import pyarrow.fs as pa_fs
+
+    webhdfs_config = webhdfs_config or {}
+    parsed = urlparse(uri)
+    fs_path = parsed.path or "/"
+
+    filesystem_kwargs = {
+        "host": webhdfs_config.get("host") or parsed.hostname or "localhost",
+        "port": webhdfs_config.get("port", 9870),
+    }
+    if webhdfs_config.get("user") is not None:
+        filesystem_kwargs["user"] = webhdfs_config["user"]
+
+    for key, value in webhdfs_config.items():
+        if key not in {"host", "port", "user"}:
+            filesystem_kwargs[key] = value
+
+    webhdfs_fs = fsspec.filesystem("webhdfs", **filesystem_kwargs)
+    return pa_fs.PyFileSystem(pa_fs.FSSpecHandler(webhdfs_fs)), fs_path
+
+
+def get_pyarrow_filesystem(uri: str, filesystem: str | None = None, storage_options: Dict[str, Any] | None = None):
+    import pyarrow.fs as pa_fs
+
+    if filesystem == "webhdfs":
+        return get_webhdfs_pyarrow_filesystem(uri, storage_options)
+    if filesystem not in {None, "pyarrow"}:
+        raise ValueError(f"Unsupported filesystem [{filesystem}] for URI [{uri}]")
 
     fs, fs_path = pa_fs.FileSystem.from_uri(uri)
     return fs, fs_path
@@ -138,7 +167,12 @@ def copy_uri_to_local(uri: str, local_path: str) -> str:
     return str(local_root)
 
 
-def copy_local_to_uri(local_path: str, uri: str) -> None:
+def copy_local_to_uri(
+    local_path: str,
+    uri: str,
+    filesystem: str | None = None,
+    storage_options: Dict[str, Any] | None = None,
+) -> None:
     if not (uri.startswith("hdfs://") or uri.startswith("s3://") or uri.startswith("file://")):
         src = Path(local_path)
         dst = Path(uri)
@@ -153,7 +187,7 @@ def copy_local_to_uri(local_path: str, uri: str) -> None:
 
     import pyarrow.fs as pa_fs
 
-    fs, fs_path = get_pyarrow_filesystem(uri)
+    fs, fs_path = get_pyarrow_filesystem(uri, filesystem=filesystem, storage_options=storage_options)
     src = Path(local_path)
     if src.is_file():
         ensure_remote_parent(fs, fs_path)
@@ -203,7 +237,109 @@ def import_from_path(import_path: str):
     return getattr(module, attr_name)
 
 
-def export_lark_sheet_to_local(
+def parse_lark_sheet_location(lark_path: str, sheet_id: str | None = None) -> Tuple[str, str]:
+    if not isinstance(lark_path, str) or not lark_path.strip():
+        raise ValueError("Lark loader requires a non-empty `lark_path`.")
+
+    lark_path = lark_path.strip()
+    parsed = urlparse(lark_path)
+    if parsed.scheme or parsed.netloc:
+        spreadsheet_token = posixpath.basename(parsed.path.rstrip("/"))
+        query_sheet_ids = parse_qs(parsed.query).get("sheet", [])
+        url_sheet_id = query_sheet_ids[0] if query_sheet_ids else None
+    else:
+        spreadsheet_token = lark_path.rstrip("/")
+        url_sheet_id = None
+
+    if not spreadsheet_token:
+        raise ValueError("Unable to parse Lark spreadsheet token from `lark_path`.")
+
+    if sheet_id is not None:
+        if not isinstance(sheet_id, str) or not sheet_id.strip():
+            raise ValueError("`sheet_id` must be a non-empty string when configured.")
+        sheet_id = sheet_id.strip()
+
+    if url_sheet_id is not None and sheet_id is not None and url_sheet_id != sheet_id:
+        raise ValueError(
+            f"Lark `sheet_id` conflict: URL query has `{url_sheet_id}`, "
+            f"but config has `{sheet_id}`."
+        )
+
+    resolved_sheet_id = sheet_id or url_sheet_id
+    if not resolved_sheet_id:
+        raise ValueError("Lark loader requires a sheet id in `lark_path` query `sheet` or in `sheet_id`.")
+
+    return spreadsheet_token, resolved_sheet_id
+
+
+def _is_lark_export_permission_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "lark export task creation failed" in message and (
+        "code=1069902" in message
+        or "code=99991672" in message
+        or "no permission" in message
+        or "drive:export:readonly" in message
+        or "docs:document:export" in message
+    )
+
+
+def _normalize_lark_csv_cell(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return ""
+    return value
+
+
+def _write_lark_sheet_values_to_csv(values: list[list[Any]], output_path: str) -> str:
+    ensure_parent(output_path)
+    with open(output_path, "w", encoding="utf-8", newline="") as wf:
+        writer = csv.writer(wf)
+        for row in values:
+            writer.writerow([_normalize_lark_csv_cell(cell) for cell in row])
+    return output_path
+
+
+def read_lark_sheet_to_csv(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    sheet_id: str | None = None,
+    value_render_option: str = "ToString",
+) -> str:
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    encoded_range = quote(sheet_id, safe="")
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.GET)
+        .uri(
+            f"/open-apis/sheets/v2/spreadsheets/{token}/values/{encoded_range}"
+            f"?valueRenderOption={value_render_option}"
+        )
+        .token_types({lark.AccessTokenType.TENANT})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet read failed: code={response.code}, msg={response.msg}")
+
+    content = getattr(getattr(response, "raw", None), "content", None)
+    if content is None:
+        raise RuntimeError("Lark sheet read failed: empty response content")
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    values = payload.get("data", {}).get("valueRange", {}).get("values", [])
+    if not values:
+        raise RuntimeError("Lark sheet read returned no values")
+    return _write_lark_sheet_values_to_csv(values, output_path)
+
+
+def _export_lark_sheet_with_drive(
     lark_path: str,
     lark_app_id: str,
     lark_app_secret: str,
@@ -213,15 +349,13 @@ def export_lark_sheet_to_local(
     sheet_id: str | None = None,
     wait_export_time_seconds: int = 60,
 ) -> str:
-    lark = import_optional_dependency("lark_oapi", extra_name="internal_io")
-    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1", extra_name="internal_io")
+    lark = import_optional_dependency("lark_oapi")
+    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
 
     client = (
         lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
     )
-    token = lark_path.split("/")[-1].split("?")[0]
-    if sheet_id is None and "?" in lark_path:
-        sheet_id = lark_path.split("?")[1].split("=")[1]
 
     request = (
         drive_v1.CreateExportTaskRequest.builder()
@@ -250,7 +384,8 @@ def export_lark_sheet_to_local(
             break
         time.sleep(1)
     if ticket_response is None or ticket_response.data.result.job_status != 0:
-        raise RuntimeError("Lark export task did not finish successfully")
+        job_status = None if ticket_response is None else ticket_response.data.result.job_status
+        raise RuntimeError(f"Lark export task did not finish successfully, job_status={job_status}")
 
     download_request = (
         drive_v1.DownloadExportTaskRequest.builder().file_token(ticket_response.data.result.file_token).build()
@@ -265,6 +400,42 @@ def export_lark_sheet_to_local(
     return output_path
 
 
+def export_lark_sheet_to_local(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    output_path: str,
+    file_extension: str = "csv",
+    document_type: str = "sheet",
+    sheet_id: str | None = None,
+    wait_export_time_seconds: int = 60,
+) -> str:
+    try:
+        return _export_lark_sheet_with_drive(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            file_extension=file_extension,
+            document_type=document_type,
+            sheet_id=sheet_id,
+            wait_export_time_seconds=wait_export_time_seconds,
+        )
+    except RuntimeError as exc:
+        if not _is_lark_export_permission_error(exc):
+            raise
+        if file_extension != "csv" or document_type != "sheet":
+            raise
+        logger.warning("Lark export is not permitted; falling back to sheet values read.")
+        return read_lark_sheet_to_csv(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            output_path=output_path,
+            sheet_id=sheet_id,
+        )
+
+
 def upload_file_to_lark_sheet(
     local_path: str,
     lark_path: str,
@@ -272,8 +443,8 @@ def upload_file_to_lark_sheet(
     lark_app_secret: str,
     cell_range: str,
 ) -> None:
-    lark = import_optional_dependency("lark_oapi", extra_name="internal_io")
-    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1", extra_name="internal_io")
+    lark = import_optional_dependency("lark_oapi")
+    drive_v1 = import_optional_dependency("lark_oapi.api.drive.v1")
 
     client = (
         lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
@@ -332,6 +503,320 @@ def upload_file_to_lark_sheet(
     response = client.request(request)
     if not response.success():
         raise RuntimeError(f"Lark sheet update failed: code={response.code}, msg={response.msg}")
+
+
+_A1_CELL_PATTERN = re.compile(r"^([A-Za-z]+)([1-9][0-9]*)$")
+
+
+def _lark_column_to_index(column_name: str) -> int:
+    column_index = 0
+    for char in column_name.upper():
+        column_index = column_index * 26 + ord(char) - ord("A") + 1
+    return column_index
+
+
+def _lark_index_to_column(column_index: int) -> str:
+    column_name = ""
+    while column_index:
+        column_index, remainder = divmod(column_index - 1, 26)
+        column_name = chr(ord("A") + remainder) + column_name
+    return column_name
+
+
+def _expand_lark_single_cell_range(cell_range: str, values: list[list[Any]] | None) -> str:
+    match = _A1_CELL_PATTERN.match(cell_range)
+    if match is None:
+        return f"{cell_range}:{cell_range}"
+    start_column, start_row = match.groups()
+    row_count = max(len(values or []), 1)
+    column_count = max((len(row) for row in values or []), default=1)
+    end_column = _lark_index_to_column(_lark_column_to_index(start_column) + column_count - 1)
+    end_row = int(start_row) + row_count - 1
+    return f"{cell_range}:{end_column}{end_row}"
+
+
+def _format_lark_sheet_range(
+    sheet_id: str,
+    cell_range: str | None,
+    values: list[list[Any]] | None = None,
+) -> str:
+    if cell_range is None:
+        return sheet_id
+    if not isinstance(cell_range, str):
+        raise ValueError("Lark sheet append `range` must be a string when configured.")
+    cell_range = cell_range.strip()
+    if not cell_range:
+        return sheet_id
+    if "!" in cell_range:
+        sheet_prefix, cell_range = cell_range.split("!", 1)
+    else:
+        sheet_prefix = sheet_id
+    if cell_range == sheet_id:
+        return cell_range
+    if ":" not in cell_range:
+        cell_range = _expand_lark_single_cell_range(cell_range, values)
+    return f"{sheet_prefix}!{cell_range}"
+
+
+def append_values_to_lark_sheet(
+    values: list[list[Any]],
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    cell_range: str | None = None,
+    sheet_id: str | None = None,
+) -> None:
+    if not values:
+        logger.warning("Skip Lark sheet append because staged CSV contains no data rows.")
+        return
+
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+    target_range = _format_lark_sheet_range(sheet_id, cell_range, values=values)
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.POST)
+        .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/values_append")
+        .token_types({lark.AccessTokenType.TENANT})
+        .body({"valueRange": {"range": target_range, "values": values}})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet append failed: code={response.code}, msg={response.msg}")
+
+
+def append_csv_to_lark_sheet(
+    local_path: str,
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    cell_range: str | None = None,
+    skip_header: bool = True,
+    sheet_id: str | None = None,
+) -> None:
+    with open(local_path, encoding="utf-8-sig", newline="") as rf:
+        rows = list(csv.reader(rf))
+    if skip_header and rows:
+        rows = rows[1:]
+    append_values_to_lark_sheet(
+        values=rows,
+        lark_path=lark_path,
+        lark_app_id=lark_app_id,
+        lark_app_secret=lark_app_secret,
+        cell_range=cell_range,
+        sheet_id=sheet_id,
+    )
+
+
+def _get_lark_sheet_metainfo(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+) -> dict[str, Any]:
+    lark = import_optional_dependency("lark_oapi")
+    token = lark_path.rstrip("/").split("/")[-1].split("?")[0]
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.GET)
+        .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/metainfo")
+        .token_types({lark.AccessTokenType.TENANT})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark spreadsheet metainfo failed: code={response.code}, msg={response.msg}")
+    content = getattr(getattr(response, "raw", None), "content", None)
+    if content is None:
+        raise RuntimeError("Lark spreadsheet metainfo failed: empty response content")
+    return json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+
+
+def _first_lark_sheet_id(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+) -> str:
+    payload = _get_lark_sheet_metainfo(lark_path, lark_app_id, lark_app_secret)
+    sheets = payload.get("data", {}).get("sheets", [])
+    if not sheets or not sheets[0].get("sheetId"):
+        raise RuntimeError("Lark spreadsheet metainfo returned no sheets")
+    return sheets[0]["sheetId"]
+
+
+def _lark_sheet_row_count(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    sheet_id: str,
+) -> int:
+    payload = _get_lark_sheet_metainfo(lark_path, lark_app_id, lark_app_secret)
+    for sheet in payload.get("data", {}).get("sheets", []):
+        if sheet.get("sheetId") == sheet_id:
+            return int(sheet.get("rowCount") or 0)
+    raise RuntimeError(f"Lark spreadsheet metainfo returned no sheet `{sheet_id}`")
+
+
+def create_lark_spreadsheet(
+    lark_app_id: str,
+    lark_app_secret: str,
+    title: str,
+) -> str:
+    lark = import_optional_dependency("lark_oapi")
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.POST)
+        .uri("/open-apis/sheets/v3/spreadsheets")
+        .token_types({lark.AccessTokenType.TENANT})
+        .body({"title": title})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark spreadsheet creation failed: code={response.code}, msg={response.msg}")
+    content = getattr(getattr(response, "raw", None), "content", None)
+    if content is None:
+        raise RuntimeError("Lark spreadsheet creation failed: empty response content")
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    spreadsheet = payload.get("data", {}).get("spreadsheet", {})
+    token = spreadsheet.get("spreadsheet_token") or spreadsheet.get("token")
+    if not token:
+        raise RuntimeError("Lark spreadsheet creation returned no spreadsheet token")
+    sheet_id = _first_lark_sheet_id(token, lark_app_id, lark_app_secret)
+    return f"https://bytedance.larkoffice.com/sheets/{token}?sheet={sheet_id}"
+
+
+def _format_lark_overwrite_range(
+    sheet_id: str,
+    cell_range: str | None,
+    values: list[list[Any]],
+) -> str:
+    if cell_range is None:
+        cell_range = "A1"
+    if not isinstance(cell_range, str):
+        raise ValueError("Lark overwrite `range` must be a string when configured.")
+    cell_range = cell_range.strip() or "A1"
+    if "!" in cell_range:
+        sheet_prefix, cell_range = cell_range.split("!", 1)
+    else:
+        sheet_prefix = sheet_id
+    if ":" not in cell_range:
+        cell_range = _expand_lark_single_cell_range(cell_range, values)
+    return f"{sheet_prefix}!{cell_range}"
+
+
+def delete_lark_sheet_rows_after(
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    keep_rows: int,
+    sheet_id: str | None = None,
+) -> None:
+    if keep_rows < 1:
+        return
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+    row_count = _lark_sheet_row_count(lark_path, lark_app_id, lark_app_secret, sheet_id)
+    if row_count <= keep_rows:
+        return
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.DELETE)
+        .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/dimension_range")
+        .token_types({lark.AccessTokenType.TENANT})
+        .body(
+            {
+                "dimension": {
+                    "sheetId": sheet_id,
+                    "majorDimension": "ROWS",
+                    "startIndex": keep_rows + 1,
+                    "endIndex": row_count,
+                }
+            }
+        )
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet row cleanup failed: code={response.code}, msg={response.msg}")
+
+
+def overwrite_values_to_lark_sheet(
+    values: list[list[Any]],
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    cell_range: str | None = None,
+    sheet_id: str | None = None,
+) -> None:
+    if not values:
+        logger.warning("Skip Lark sheet overwrite because staged CSV contains no data rows.")
+        return
+
+    lark = import_optional_dependency("lark_oapi")
+    token, sheet_id = parse_lark_sheet_location(lark_path, sheet_id=sheet_id)
+    target_range = _format_lark_overwrite_range(sheet_id, cell_range, values)
+
+    client = (
+        lark.Client.builder().app_id(lark_app_id).app_secret(lark_app_secret).log_level(lark.LogLevel.ERROR).build()
+    )
+    request = (
+        lark.BaseRequest.builder()
+        .http_method(lark.HttpMethod.PUT)
+        .uri(f"/open-apis/sheets/v2/spreadsheets/{token}/values")
+        .token_types({lark.AccessTokenType.TENANT})
+        .body({"valueRange": {"range": target_range, "values": values}})
+        .build()
+    )
+    response = client.request(request)
+    if not response.success():
+        raise RuntimeError(f"Lark sheet overwrite failed: code={response.code}, msg={response.msg}")
+
+
+def overwrite_csv_to_lark_sheet(
+    local_path: str,
+    lark_path: str,
+    lark_app_id: str,
+    lark_app_secret: str,
+    cell_range: str | None = None,
+    skip_header: bool = False,
+    clear_sheet: bool = True,
+    sheet_id: str | None = None,
+) -> None:
+    with open(local_path, encoding="utf-8-sig", newline="") as rf:
+        rows = list(csv.reader(rf))
+    if skip_header and rows:
+        rows = rows[1:]
+    if clear_sheet and cell_range is None:
+        delete_lark_sheet_rows_after(
+            lark_path=lark_path,
+            lark_app_id=lark_app_id,
+            lark_app_secret=lark_app_secret,
+            keep_rows=len(rows),
+            sheet_id=sheet_id,
+        )
+    overwrite_values_to_lark_sheet(
+        values=rows,
+        lark_path=lark_path,
+        lark_app_id=lark_app_id,
+        lark_app_secret=lark_app_secret,
+        cell_range=cell_range,
+        sheet_id=sheet_id,
+    )
 
 
 def build_tqs_export_sql(
@@ -1347,6 +1832,15 @@ def _normalize_magnus_failure_policy(policy):
     return policy
 
 
+def _normalize_magnus_write_operation(operation):
+    operation = "APPEND" if operation is None else str(operation).upper()
+    if operation == "OVERWRITE_PARTITION":
+        return "OVERWRITE"
+    if operation not in {"APPEND", "OVERWRITE"}:
+        raise ValueError(f"Unsupported Magnus write operation: {operation!r}")
+    return operation
+
+
 def _apply_magnus_failure_policy_marker(magnus_conf, failure_policy):
     if failure_policy == MAGNUS_FAILURE_POLICY_ABORT:
         return magnus_conf
@@ -1432,9 +1926,7 @@ def write_ray_dataset_to_magnus(dataset, table_name: str, **kwargs):
     failure_policy = _normalize_magnus_failure_policy(kwargs.get("magnus_failure_policy"))
     magnus_conf = _normalize_magnus_conf(kwargs.get("magnus_conf", {}) or {})
     operation = kwargs.get("operation", magnus_conf.pop("operation", "APPEND")) or "APPEND"
-    operation = str(operation).upper()
-    if operation not in {"APPEND", "OVERWRITE"}:
-        raise ValueError(f"Unsupported Magnus write operation: {operation!r}")
+    operation = _normalize_magnus_write_operation(operation)
     is_partition_overwrite = operation == "OVERWRITE" and partition_values is not None
     magnus_conf = _apply_magnus_write_defaults(
         magnus_conf,

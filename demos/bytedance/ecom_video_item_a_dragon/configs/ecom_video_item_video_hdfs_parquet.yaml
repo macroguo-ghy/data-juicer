@@ -1,0 +1,44 @@
+# 电商视频-视频
+project_name: "ecom-video-item-video-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+export_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_video_item_sample_stats_daily_v2"
+export_type: "parquet"
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/ecom_video_item_sample_stats_daily_v2/date=20260425"
+      format: "parquet"
+      override_num_blocks: 800
+      skip_zero_row_group_files: true
+
+# TODO: add item_id_video_id_mapper.
+#   Notebook equivalent:
+#   - call ItemInfoRPC first, then ItemAttrRPC.
+#   - write returned video_id to `vid`.
+#   - drop rows whose `vid` is null.
+#
+# TODO: add ecom_video_schema_prepare_pipeline.
+#   Notebook equivalent:
+#   - id = "item_id-{item_id}".
+#   - extra = JSON of source columns except partition field `date`.
+#   - source = "ecom_video_raw_data".
+#   - type = "video"; has_audio_in_video = true.
+#   - for long videos (`item_duration > 120`), set videos/md5 to null.
+#
+# TODO: add guldan_video_frames_mapper.
+#   Notebook equivalent:
+#   - for short videos (`item_duration <= 120`), call Guldan with fps=2.
+#   - store returned frame bytes in `videos`.
+#   - compute md5 from `videos`.
+#   - drop rows whose `videos` or `md5` is null.
+#
+# TODO: add a Ray branch/union pipeline for the short-video and long-video paths.
+#   Notebook equivalent:
+#   - short path: item_duration <= 120 -> Guldan fps=2 -> md5 -> md5 dedup.
+#   - long path: item_duration > 120 -> schema-only rows.
+#   - union short dedup rows with long schema rows before HDFS parquet export.
+process: []

@@ -25,6 +25,7 @@ OP_NAME = "vlm_api_response_mapper"
 CHAT_COMPLETIONS_RESPONSE_PATH = "choices.0.message.content"
 RESPONSES_RESPONSE_PATH = "output.0.content.0.text"
 PROMPT_TEMPLATE_FIELD_PATTERN = re.compile(r"\$\{([^}]+)\}")
+PROMPT_TEMPLATE_FIELD_ONLY_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 RATE_LIMIT_WINDOW_SECONDS = 60.0
 
 
@@ -114,7 +115,92 @@ def _rate_limiter_actor_name(job_id: str) -> str:
 
 @OPERATORS.register_module(OP_NAME)
 class VlmApiResponseMapper(Pipeline):
-    """Call an OpenAI-compatible multimodal chat API for image rows."""
+    """按行调用 OpenAI 兼容的多模态 API。
+
+    请求内容有两种互斥配置方式：
+
+    1. 简单模式：使用 prompt_template/system_prompt 搭配 image_key 或
+       image_keys。mapper 会自动构造单轮 user 请求，并自动追加图片。
+       这是 OCR、图片问答、多图理解等常见批处理任务最短的配置方式。
+
+       Chat 示例：
+       - vlm_api_response_mapper:
+           model: "ep-xxx"
+           base_url: "https://ark-cn-beijing.bytedance.net/api/v3/chat/completions"
+           api_key: "<YOUR_API_KEY>"
+           image_key: "image_url"
+           system_prompt: "你是一个严谨的图片理解助手。"
+           prompt_template: "请回答这个问题：${question}"
+           temperature: 0.0
+           top_p: 0.7
+           thinking:
+             type: "disabled"
+
+       Responses 示例：
+       - vlm_api_response_mapper:
+           model: "ep-xxx"
+           base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+           api_key: "<YOUR_API_KEY>"
+           api_format: "responses"
+           image_keys: ["main_image", "detail_images"]
+           prompt_template: "提取所有可见文字，并用 JSON 返回。"
+           text:
+             format:
+               type: "json_object"
+           store: false
+
+    2. 模板模式：Chat Completions API 使用 messages_template，Responses API
+       使用 input_template。mapper 会递归渲染完整的原生 messages/input
+       结构，不再自动追加 prompt/system/images。需要多轮历史、精确控制
+       文本和图片顺序、配置 image_pixel_limit、file_id 或其他厂商特有
+       content 字段时，使用这种模式。
+
+       Chat 示例：
+       - vlm_api_response_mapper:
+           model: "ep-xxx"
+           base_url: "https://ark-cn-beijing.bytedance.net/api/v3/chat/completions"
+           api_key: "<YOUR_API_KEY>"
+           messages_template:
+             - role: "system"
+               content: "你是 OCR 质量评估助手。"
+             - role: "user"
+               content:
+                 - type: "text"
+                   text: "问题：${question}；元数据：${metadata}"
+                 - type: "image_url"
+                   image_url:
+                     url: "${image_bytes}"
+                     detail: "high"
+
+       Responses 示例：
+       - vlm_api_response_mapper:
+           model: "ep-xxx"
+           base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+           api_key: "<YOUR_API_KEY>"
+           api_format: "responses"
+           input_template:
+             - role: "user"
+               content:
+                 - type: "input_image"
+                   image_url: "${image_url}"
+                   detail: "high"
+                   image_pixel_limit:
+                     min_pixels: 3136
+                     max_pixels: 9031680
+                 - type: "input_text"
+                   text: "请回答：${question}"
+
+    模板渲染规则：
+    - 只支持样本顶层字段。${user.name} 会查找字面字段名 "user.name"，
+      不会当成嵌套路径。
+    - 缺字段会抛 KeyError，然后按 fail_on_error/error_key 处理。
+    - dict/list/tuple 字段值会用 json.dumps(..., ensure_ascii=False)
+      序列化为字符串。
+    - bytes/bytearray/memoryview 仅在整个模板字符串正好是 ${field} 时
+      转为 data URL；二进制值不能嵌入更长的字符串中。
+    - messages_template/input_template 不能和 prompt_template、
+      system_prompt 或 image_keys 混用。
+    """
 
     def __init__(
         self,
@@ -122,6 +208,8 @@ class VlmApiResponseMapper(Pipeline):
         image_keys: list[str] | None = None,
         output_key: str = "ocr_answer",
         prompt_template: str | None = None,
+        messages_template: list[dict[str, Any]] | None = None,
+        input_template: str | list[dict[str, Any]] | None = None,
         system_prompt: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
@@ -130,7 +218,17 @@ class VlmApiResponseMapper(Pipeline):
         api_format: str | None = None,
         timeout: int = 120,
         temperature: float = 0.0,
+        top_p: float | None = None,
         max_tokens: int | None = None,
+        text: dict[str, Any] | None = None,
+        store: bool | None = None,
+        reasoning: dict[str, Any] | None = None,
+        thinking: dict[str, Any] | None = None,
+        previous_response_id: str | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
         image_mime_type: str = "image/png",
         image_detail: str | None = None,
         image_content_template: dict[str, Any] | None = None,
@@ -150,15 +248,13 @@ class VlmApiResponseMapper(Pipeline):
         *args,
         **kwargs,
     ):
-        removed_args = {"prompt", "model_env", "base_url_env", "api_key_env"} & set(kwargs)
-        if removed_args:
-            names = ", ".join(sorted(removed_args))
-            raise TypeError(f"{self.__class__.__name__} no longer supports parameters: {names}")
         super().__init__(*args, **kwargs)
         self.image_key = image_key
         self.image_keys = image_keys
         self.output_key = output_key
         self.prompt_template = prompt_template
+        self.messages_template = messages_template
+        self.input_template = input_template
         self.system_prompt = system_prompt
         self.model = model
         self.base_url = base_url
@@ -169,7 +265,17 @@ class VlmApiResponseMapper(Pipeline):
         self.api_format = api_format
         self.timeout = timeout
         self.temperature = temperature
+        self.top_p = top_p
         self.max_tokens = max_tokens
+        self.text = text
+        self.store = store
+        self.reasoning = reasoning
+        self.thinking = thinking
+        self.previous_response_id = previous_response_id
+        self.response_format = response_format
+        self.stop = stop
+        self.frequency_penalty = frequency_penalty
+        self.presence_penalty = presence_penalty
         self.image_mime_type = image_mime_type
         self.image_detail = image_detail
         self.image_content_template = image_content_template
@@ -189,6 +295,7 @@ class VlmApiResponseMapper(Pipeline):
             raise ValueError("repartition_num_blocks must be positive when set")
         self.repartition_num_blocks = repartition_num_blocks
         self._validate_rate_limits()
+        self._validate_templates()
         self._request_events = deque()
         self._token_events = deque()
         self._rate_limit_next_available_at = 0.0
@@ -490,18 +597,21 @@ class VlmApiResponseMapper(Pipeline):
         return self._chat_completions_payload(sample)
 
     def _chat_completions_payload(self, sample: dict[str, Any]) -> dict[str, Any]:
-        messages = []
-        if self.system_prompt is not None:
-            messages.append({"role": "system", "content": self.system_prompt})
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": self._prompt(sample)},
-                    *self._image_content_parts(sample),
-                ],
-            }
-        )
+        if self.messages_template is not None:
+            messages = self._render_messages_template(sample)
+        else:
+            messages = []
+            if self.system_prompt is not None:
+                messages.append({"role": "system", "content": self.system_prompt})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self._prompt(sample)},
+                        *self._image_content_parts(sample),
+                    ],
+                }
+            )
         payload = {
             "model": self._model(),
             "temperature": self.temperature,
@@ -509,14 +619,26 @@ class VlmApiResponseMapper(Pipeline):
         }
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
+        if self.thinking is not None:
+            payload["thinking"] = self.thinking
+        if self.response_format is not None:
+            payload["response_format"] = self.response_format
+        if self.stop is not None:
+            payload["stop"] = self.stop
+        if self.frequency_penalty is not None:
+            payload["frequency_penalty"] = self.frequency_penalty
+        if self.presence_penalty is not None:
+            payload["presence_penalty"] = self.presence_penalty
         payload.update(self.extra_body)
         return payload
 
     def _responses_payload(self, sample: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            "model": self._model(),
-            "temperature": self.temperature,
-            "input": [
+        if self.input_template is not None:
+            input_value = self._render_input_template(sample)
+        else:
+            input_value = [
                 {
                     "role": "user",
                     "content": [
@@ -524,12 +646,28 @@ class VlmApiResponseMapper(Pipeline):
                         {"type": "input_text", "text": self._prompt(sample)},
                     ],
                 }
-            ],
+            ]
+        payload = {
+            "model": self._model(),
+            "temperature": self.temperature,
+            "input": input_value,
         }
         if self.system_prompt is not None:
             payload["instructions"] = self.system_prompt
         if self.max_tokens is not None:
             payload["max_output_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
+        if self.text is not None:
+            payload["text"] = self.text
+        if self.store is not None:
+            payload["store"] = self.store
+        if self.reasoning is not None:
+            payload["reasoning"] = self.reasoning
+        if self.thinking is not None:
+            payload["thinking"] = self.thinking
+        if self.previous_response_id is not None:
+            payload["previous_response_id"] = self.previous_response_id
         payload.update(self.extra_body)
         return payload
 
@@ -595,15 +733,95 @@ class VlmApiResponseMapper(Pipeline):
             return self._render_prompt_template(self.prompt_template, sample or {})
         return ""
 
-    @staticmethod
-    def _render_prompt_template(template: str, sample: dict[str, Any]) -> str:
+    def _validate_templates(self) -> None:
+        if self.messages_template is not None and self.input_template is not None:
+            raise ValueError("messages_template and input_template cannot be used together")
+        if self.messages_template is not None:
+            if self._is_responses_api():
+                raise ValueError("messages_template can only be used with Chat Completions API")
+            if not isinstance(self.messages_template, list) or not self.messages_template:
+                raise ValueError("messages_template must be a non-empty list")
+            self._validate_template_conflicts("messages_template")
+        if self.input_template is not None:
+            if not self._is_responses_api():
+                raise ValueError("input_template can only be used with Responses API")
+            if isinstance(self.input_template, str):
+                if not self.input_template:
+                    raise ValueError("input_template must be a non-empty string or list")
+            elif not isinstance(self.input_template, list) or not self.input_template:
+                raise ValueError("input_template must be a non-empty string or list")
+            self._validate_template_conflicts("input_template")
+
+    def _validate_template_conflicts(self, template_name: str) -> None:
+        conflicts = []
+        if self.prompt_template is not None:
+            conflicts.append("prompt_template")
+        if self.system_prompt is not None:
+            conflicts.append("system_prompt")
+        if self.image_keys is not None:
+            conflicts.append("image_keys")
+        if conflicts:
+            raise ValueError(f"{template_name} cannot be combined with: {', '.join(conflicts)}")
+
+    def _render_messages_template(self, sample: dict[str, Any]) -> list[dict[str, Any]]:
+        messages = self._render_template_value(self.messages_template, sample)
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages_template must render to a non-empty list")
+        return messages
+
+    def _render_input_template(self, sample: dict[str, Any]) -> str | list[dict[str, Any]]:
+        input_value = self._render_template_value(self.input_template, sample)
+        if isinstance(input_value, str):
+            if not input_value:
+                raise ValueError("input_template must render to a non-empty string or list")
+            return input_value
+        if not isinstance(input_value, list) or not input_value:
+            raise ValueError("input_template must render to a non-empty string or list")
+        return input_value
+
+    def _render_template_value(self, template: Any, sample: dict[str, Any]) -> Any:
+        if isinstance(template, dict):
+            return {key: self._render_template_value(value, sample) for key, value in template.items()}
+        if isinstance(template, list):
+            return [self._render_template_value(value, sample) for value in template]
+        if isinstance(template, tuple):
+            return [self._render_template_value(value, sample) for value in template]
+        if isinstance(template, str):
+            return self._render_prompt_template(template, sample)
+        return template
+
+    def _render_prompt_template(self, template: str, sample: dict[str, Any]) -> Any:
+        only_match = PROMPT_TEMPLATE_FIELD_ONLY_PATTERN.fullmatch(template)
+        if only_match is not None:
+            return self._template_field_value(only_match.group(1).strip(), sample, embedded=False)
+
         def replace(match: re.Match[str]) -> str:
             field_name = match.group(1).strip()
-            if field_name not in sample:
-                raise KeyError(field_name)
-            return str(sample[field_name])
+            return self._template_field_string(field_name, sample)
 
         return PROMPT_TEMPLATE_FIELD_PATTERN.sub(replace, template)
+
+    def _template_field_value(self, field_name: str, sample: dict[str, Any], embedded: bool) -> Any:
+        if field_name not in sample:
+            raise KeyError(field_name)
+        value = sample[field_name]
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            if embedded:
+                raise TypeError(f"binary field {field_name!r} cannot be embedded in a template string")
+            return self._data_url_from_bytes(value)
+        if isinstance(value, tuple):
+            return json.dumps(list(value), ensure_ascii=False)
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False)
+        return value
+
+    def _template_field_string(self, field_name: str, sample: dict[str, Any]) -> str:
+        value = self._template_field_value(field_name, sample, embedded=True)
+        return str(value)
+
+    def _data_url_from_bytes(self, value: bytes | bytearray | memoryview) -> str:
+        encoded = base64.b64encode(bytes(value)).decode("ascii")
+        return f"data:{self.image_mime_type};base64,{encoded}"
 
     def _image_content_parts(self, sample: dict[str, Any]) -> list[dict[str, Any]]:
         parts = []

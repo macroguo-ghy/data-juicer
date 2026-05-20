@@ -10,43 +10,11 @@ ray_data_checkpoint:
 dataset:
   configs:
     - type: remote
-      source: hive
-      table_name: "ad_addrd_stats.site_creative_center_df_stats_daily_sample_v2_chengzi"
-      columns:
-        p_date: "STRING"
-        site_id: "BIGINT"
-        local_stat_time_day: "STRING"
-        external_url: "STRING"
-        thumbnail: "STRING"
-        preload_resources: "STRING"
-        page_public_data: "STRING"
-        site_type: "BIGINT"
-        is_highlight: "BIGINT"
-        cost: "BIGINT"
-        send_count: "BIGINT"
-        show_count: "BIGINT"
-        click_count: "BIGINT"
-        convert_count: "BIGINT"
-        ad_id: "BIGINT"
-        campaign_id: "BIGINT"
-        advertiser_id: "BIGINT"
-        customer_id: "BIGINT"
-        company_id: "BIGINT"
-        first_industry_id: "BIGINT"
-        first_industry_name: "STRING"
-        second_industry_id: "BIGINT"
-        second_industry_name: "STRING"
-        third_industry_id: "BIGINT"
-        ad_first_industry_id: "BIGINT"
-        ad_first_industry_name: "STRING"
-        ad_second_industry_id: "BIGINT"
-        ad_second_industry_name: "STRING"
-        ad_third_industry_id: "BIGINT"
-        ad_third_industry_name: "STRING"
-      filter: |
-        p_date = '20260423'
-        AND preload_resources IS NOT NULL
-      override_num_blocks: 1024
+      source: hdfs
+      path:
+        - "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/site_creative_center_df_stats_daily_sample_v2_chengzi/p_date=20260423/part-00124-cfa2f8b6-9b7a-404b-bb3d-286c2161a222-c000.zstd.parquet"
+        - "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/site_creative_center_df_stats_daily_sample_v2_chengzi/p_date=20260423/part-00123-cfa2f8b6-9b7a-404b-bb3d-286c2161a222-c000.zstd.parquet"
+      override_num_blocks: 600
       concurrency: 32
       ray_remote_args:
         num_cpus: 1
@@ -190,7 +158,7 @@ process:
       save_field: "image_bytes"
       timeout: 2
       retry_times: 1
-      max_concurrent: 1
+      max_concurrent: 4
       filter_non_url: true
       batch_size: 8
       num_proc: 192

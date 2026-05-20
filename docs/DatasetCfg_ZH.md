@@ -3,6 +3,8 @@
 
 本指南概述了如何在 Data-Juicer 框架中使用 YAML 格式配置数据集。允许您指定本地和远程数据集以及数据验证规则。
 
+更完整的 loader 参数解析请参阅 [Loader 与 Export 配置解析](LoaderAndExport_ZH.md)，也可以阅读对应的 [HTML 版本](LoaderAndExport_ZH.html)。
+
 ## 支持的数据集格式
 
 ### 本地数据集
@@ -56,6 +58,48 @@ dataset:
       dump_date: 'latest'
       force_download: false
       url_limit: 2
+```
+
+### 远程 Lark Sheet 数据集
+
+`remote/lark` 数据源会将一个 Lark Sheet 导出为 CSV，然后复用普通 CSV
+加载链路。如果配置的应用可以读取表格、但无法创建 Drive 导出任务，loader
+会自动降级为读取表格单元格并写入暂存 CSV。配合下面 demo pipeline 使用时，源表需要包含 `text` 列。
+
+当前只支持 CSV 加载。sheet id 可以写在 `lark_path` 的 query 参数 `sheet`
+中，也可以通过显式 `sheet_id` 字段指定。如果两边都配置，必须指向同一个 sheet。
+
+```yaml
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      lark_path: https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+```
+
+如果需要读取多个 sheet，配置多条 dataset entry：
+
+```yaml
+dataset:
+  configs:
+    - type: remote
+      source: lark
+      weight: 0.5
+      lark_path: https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id_1>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
+    - type: remote
+      source: lark
+      weight: 0.5
+      lark_path: <spreadsheet_token>
+      sheet_id: <sheet_id_2>
+      lark_app_id: <lark_app_id>
+      lark_app_secret: <lark_app_secret>
+      file_extension: csv
 ```
 
 ### 其他支持的数据集格式
