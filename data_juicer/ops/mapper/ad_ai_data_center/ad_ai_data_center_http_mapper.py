@@ -15,6 +15,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 OP_NAME = "ad_ai_data_center_http_mapper"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 

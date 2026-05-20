@@ -14,6 +14,7 @@ from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "external_eval_data_import_mapper"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 CLOUD_DOC_ALL_PLAIN_VALUES_PATH = "/openapi/cloud-doc/sheets/all-plain-values"
 OUTPUT_FIELD = "externalDataSet"
 SUPPORTED_DATA_TYPES = {"eval_data"}

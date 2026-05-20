@@ -18,6 +18,7 @@ from data_juicer.utils.python_script_utils import PythonScriptRunner
 OP_NAME = "code_review_mapper"
 CONFIG_PAGE_KEY = "code_review_builder"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 

@@ -20,6 +20,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 OP_NAME = "llm_inference_mapper"
 CONFIG_PAGE_KEY = "llm_state_generator"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 SUBMIT_PATH = "/openapi/synthesis/llm-inference/submit"
 RESULT_PATH = "/openapi/synthesis/llm-inference/result"

@@ -17,6 +17,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 
 OP_NAME = "ad_test_processing_timestamp_mapper"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 

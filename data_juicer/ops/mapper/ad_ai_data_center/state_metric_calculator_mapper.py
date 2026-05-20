@@ -19,6 +19,7 @@ from data_juicer.utils.python_script_utils import PythonScriptRunner
 OP_NAME = "state_metric_calculator"
 CONFIG_PAGE_KEY = "state_metric_calculator"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 BATCH_GET_OPERATORS_PATH = "/openapi/state-meta/operators/batch-get"
 
 

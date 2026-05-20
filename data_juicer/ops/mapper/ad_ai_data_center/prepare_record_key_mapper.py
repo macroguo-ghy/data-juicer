@@ -20,6 +20,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 
 OP_NAME = "prepare_record_key_mapper"
 NEED_CTX = True
+OPERATOR_TAG = "business_operator"
 INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
 FAILED_RECORD_KEY_PREFIX = "prepare_record_key_failed:"
 
