@@ -16,7 +16,6 @@ from datasets.formatting.formatting import LazyBatch
 from data_juicer.core.data.schema import Schema
 from data_juicer.core.monitor import Monitor
 from data_juicer.ops import UNFORKABLE
-from data_juicer.ops.base_op import OP
 from data_juicer.utils import cache_utils
 from data_juicer.utils.compress import (
     CompressionOff,
@@ -292,14 +291,6 @@ class NestedDataset(Dataset, DJDataset):
                 setup_mp(mp_context)
 
                 start = time()
-                if type(op).before_operator_started is not OP.before_operator_started:
-                    op.before_operator_started(
-                        dataset=dataset,
-                        context={
-                            "executor_type": "local",
-                            "op_name": op._name,
-                        },
-                    )
                 # run single op
                 run_args = {
                     "dataset": dataset,
@@ -319,7 +310,6 @@ class NestedDataset(Dataset, DJDataset):
                 logger.info(
                     f"[{idx}/{op_num}] OP [{op._name}] Done in " f"{end - start:.3f}s. Left {len(dataset)} samples."
                 )
-                self._call_after_operator_finished(op, dataset, error=None)
 
                 # record the analysis results of the current dataset
                 if enable_insight_mining:
@@ -329,7 +319,6 @@ class NestedDataset(Dataset, DJDataset):
                     adapter.analyze_small_batch(dataset, f"{idx}_{op._name}")
         except:  # noqa: E722
             logger.error(f"An error occurred during Op [{op._name}].")
-            self._call_after_operator_finished(op, dataset, error=traceback.format_exc())
             traceback.print_exc()
             exit(1)
         finally:
@@ -358,28 +347,6 @@ class NestedDataset(Dataset, DJDataset):
                     traceback.print_exc()
                     logger.error("Error occurred when making log summarization")
         return dataset
-
-    @staticmethod
-    def _call_after_operator_finished(op, dataset, error=None):
-        if type(op).after_operator_finished is OP.after_operator_finished:
-            return
-        try:
-            op.after_operator_finished(
-                dataset=dataset,
-                context={
-                    "executor_type": "local",
-                    "op_name": op._name,
-                },
-                error=error,
-            )
-        except Exception as hook_exc:
-            from loguru import logger
-
-            logger.warning(
-                "Failed to run after_operator_finished hook for Op [{}]: {}",
-                op._name,
-                hook_exc,
-            )
 
     def count(self) -> int:
         return self.num_rows

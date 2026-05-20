@@ -10,7 +10,6 @@ audio_key: 'audios'
 executor_type: default                                      # type of executor, support "default" or "ray" for now.
 ray_address: auto                                           # the address of the Ray cluster.
 ray_collect_real_metrics: false                             # whether RayExecutor eagerly materializes/counts Ray Data before export. Cannot be true when export.max_rows is set.
-ray_materialize_after_each_op: false                        # whether RayExecutor materializes Ray Data after each operator and calls after_operator_finished.
 ray_dry_run_plan: false                                     # whether RayExecutor only builds and prints the Ray Data plan without export.
 suffixes: null
 add_suffix: false

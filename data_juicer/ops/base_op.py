@@ -466,14 +466,6 @@ class OP(metaclass=OPMetaClass):
     def process(self, *args, **kwargs):
         raise NotImplementedError
 
-    def before_operator_started(self, dataset=None, context=None):
-        """Hook called before an executor starts this OP."""
-        pass
-
-    def after_operator_finished(self, dataset=None, context=None, error=None):
-        """Hook called when an executor confirms this OP finished or failed."""
-        pass
-
     def use_cuda(self):
         return self.accelerator == "cuda" and is_cuda_available()
 
