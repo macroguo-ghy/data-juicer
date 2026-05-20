@@ -129,6 +129,31 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             stable_hash({"query": "hello"}),
         )
 
+    def test_places_record_key_as_first_output_field(self):
+        op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
+        sample = {
+            "query": "hello",
+            "answer": "world",
+        }
+
+        result = op.process_single(sample)
+
+        self.assertEqual(list(result.keys())[0], RECORD_KEY_FIELD)
+        self.assertEqual(list(result.keys())[1:], ["query", "answer"])
+
+    def test_places_existing_record_key_as_first_output_field(self):
+        op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
+        sample = {
+            "query": "hello",
+            RECORD_KEY_FIELD: "existing-key",
+            "answer": "world",
+        }
+
+        result = op.process_single(sample)
+
+        self.assertEqual(list(result.keys()), [RECORD_KEY_FIELD, "query", "answer"])
+        self.assertEqual(result[RECORD_KEY_FIELD], "existing-key")
+
     def test_preserves_existing_record_key_by_default(self):
         op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
         sample = {

@@ -58,11 +58,10 @@ class PrepareRecordKeyMapper(Mapper):
         try:
             original_sample = copy.deepcopy(sample)
             if not self.overwrite and sample.get(RECORD_KEY_FIELD):
-                output_sample = sample
+                output_sample = self._put_record_key_first(sample, sample[RECORD_KEY_FIELD])
             else:
                 source = self._build_source(sample)
-                sample[RECORD_KEY_FIELD] = self._stable_hash(source)
-                output_sample = sample
+                output_sample = self._put_record_key_first(sample, self._stable_hash(source))
         except Exception as exc:
             self._report_record_failure(
                 locals().get("original_sample", sample),
@@ -142,6 +141,14 @@ class PrepareRecordKeyMapper(Mapper):
             key: value
             for key, value in sample.items()
             if key not in INTERNAL_FIELDS
+        }
+
+    @staticmethod
+    def _put_record_key_first(sample: dict[str, Any], record_key: str) -> dict[str, Any]:
+        sample.pop(RECORD_KEY_FIELD, None)
+        return {
+            RECORD_KEY_FIELD: record_key,
+            **sample,
         }
 
     @staticmethod

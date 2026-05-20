@@ -127,6 +127,30 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_start_allows_missing_task_id_and_task_version(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True, "operatorExecutionId": 10001}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        ctx = self._ctx()
+        ctx.pop("taskId")
+        ctx.pop("taskVersion")
+        client = OperatorExecutionCallbackClient(ctx)
+
+        client.start(started_at=1710000000000)
+
+        payload = fake_client.requests[0]["json_body"]
+        self.assertNotIn("taskId", payload)
+        self.assertNotIn("taskVersion", payload)
+        self.assertEqual(payload["synthesisInstanceId"], 123)
+        self.assertEqual(payload["operatorIndex"], 0)
+        self.assertEqual(payload["operatorName"], "load_external_dataset")
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_start_converts_complex_operator_config_to_json_safe_payload(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,

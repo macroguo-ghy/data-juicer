@@ -68,12 +68,12 @@ class OperatorExecutionCallbackClient:
             started_at = current_time_millis()
         payload = {
             "synthesisInstanceId": self._get_ctx_required_value("synthesisInstanceId"),
-            "taskId": self._get_ctx_required_value("taskId"),
-            "taskVersion": self._get_ctx_required_value("taskVersion"),
             "operatorIndex": self._get_ctx_required_value("operatorIndex"),
             "operatorName": self._get_ctx_required_value("operatorName"),
             "operatorConfig": self._to_json_safe_value(operator_config or {}),
         }
+        self._add_optional_ctx_value(payload, "taskId")
+        self._add_optional_ctx_value(payload, "taskVersion")
         self._add_optional_ctx_value(payload, "flowInstanceId")
         self._add_optional_ctx_value(payload, "flowNodeId")
         self._add_optional_ctx_value(payload, "operatorType")

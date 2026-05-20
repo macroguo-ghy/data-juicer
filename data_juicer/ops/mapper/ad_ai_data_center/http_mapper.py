@@ -12,7 +12,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
     current_time_millis,
 )
 
-OP_NAME = "ad_ai_data_center_http_mapper"
+OP_NAME = "http_mapper"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
@@ -20,7 +20,7 @@ TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 
 
 @OPERATORS.register_module(OP_NAME)
-class AdAiDataCenterHttpMapper(Mapper):
+class HttpMapper(Mapper):
     """Call an HTTP endpoint with selected sample fields and write the result."""
 
     def __init__(
@@ -124,7 +124,7 @@ class AdAiDataCenterHttpMapper(Mapper):
                 template_variable={
                     "operator": OP_NAME,
                     "stage": stage,
-                    "content": AdAiDataCenterHttpMapper._stringify_result_value(content),
+                    "content": HttpMapper._stringify_result_value(content),
                     "errMsg": err_msg,
                 },
                 ctx=ctx,
@@ -244,5 +244,5 @@ class AdAiDataCenterHttpMapper(Mapper):
             return ""
         error = result.get("error")
         if isinstance(error, dict):
-            return error.get("message") or AdAiDataCenterHttpMapper._stringify_result_value(error)
-        return AdAiDataCenterHttpMapper._stringify_result_value(error or result)
+            return error.get("message") or HttpMapper._stringify_result_value(error)
+        return HttpMapper._stringify_result_value(error or result)
