@@ -55,3 +55,4 @@ perf_bench_data/
 # claude
 .claude/
 CLAUDE.md
+/.codex/

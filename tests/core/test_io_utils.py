@@ -23,6 +23,7 @@ pa.register_extension_type = _register_extension_type_once
 from data_juicer.core.io_utils import (
     MAGNUS_FAILURE_POLICY_COMMIT_COMPLETED_UNSAFE,
     _MAGNUS_FAILURE_POLICY_SNAPSHOT_SUMMARY_KEY,
+    _infer_magnus_schema_from_ray_dataset,
     _magnus_table_properties_from_write_options,
     _patch_magnus_datasink_failure_policy,
     _patch_magnus_datasink_worker_file_appender_compat,
@@ -112,6 +113,50 @@ class StrictCheckpointRayDataset(LazyOnlyRayDataset):
         raise AssertionError("checkpoint mode must not eagerly fetch columns")
 
 
+class UnknownSchemaRayDatasetWithArrowBatches:
+    def schema(self, *args, **kwargs):
+        return SimpleNamespace(base_schema=None)
+
+    def iter_batches(self, batch_format="pyarrow", batch_size=8192):
+        if batch_format != "pyarrow":
+            raise ValueError(batch_format)
+        yield pa.Table.from_pylist(
+            [
+                {
+                    "id": "1",
+                    "state": {
+                        "world_state": {"bench_material_ctr": "2.9%"},
+                        "adv_state": [{"adv_id": "9283746510928374", "adv_roi": [0.28, 0.33]}],
+                    },
+                }
+            ]
+        )
+
+
+class UnknownSchemaRayDatasetWithMultipleArrowBatches:
+    def schema(self, *args, **kwargs):
+        return SimpleNamespace(base_schema=None)
+
+    def iter_batches(self, batch_format="pyarrow", batch_size=8192):
+        if batch_format != "pyarrow":
+            raise ValueError(batch_format)
+        yield pa.Table.from_pylist([{"id": "1", "state": {"world_state": {"bench_material_ctr": "2.9%"}}}])
+        yield pa.Table.from_pylist(
+            [
+                {
+                    "id": "2",
+                    "state": {
+                        "world_state": {
+                            "bench_material_ctr": "3.1%",
+                            "extra_metric": "ok",
+                        },
+                        "adv_state": [{"adv_id": "9283746510928374", "adv_roi": [0.28, 0.33]}],
+                    },
+                }
+            ]
+        )
+
+
 class WriteRayDatasetToMagnusTest(unittest.TestCase):
     def test_copy_local_to_remote_directory_removes_stale_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -152,6 +197,30 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
         )
         self.assertEqual(schema.field("site_id").type, pa.int64())
         self.assertEqual(schema.field("has_audio_in_video").type, pa.bool_())
+
+    def test_infer_magnus_schema_from_ray_dataset_falls_back_to_arrow_batches(self):
+        schema = _infer_magnus_schema_from_ray_dataset(UnknownSchemaRayDatasetWithArrowBatches())
+
+        self.assertEqual(schema.field("id").type, pa.string())
+        self.assertEqual(
+            schema.field("state").type.field("world_state").type.field("bench_material_ctr").type,
+            pa.string(),
+        )
+        self.assertEqual(
+            schema.field("state").type.field("adv_state").type.value_type.field("adv_roi").type,
+            pa.list_(pa.float64()),
+        )
+
+    def test_infer_magnus_schema_from_ray_dataset_merges_multiple_arrow_batches(self):
+        schema = _infer_magnus_schema_from_ray_dataset(UnknownSchemaRayDatasetWithMultipleArrowBatches())
+
+        world_state_type = schema.field("state").type.field("world_state").type
+        self.assertEqual(world_state_type.field("bench_material_ctr").type, pa.string())
+        self.assertEqual(world_state_type.field("extra_metric").type, pa.string())
+        self.assertEqual(
+            schema.field("state").type.field("adv_state").type.value_type.field("adv_roi").type,
+            pa.list_(pa.float64()),
+        )
 
     def test_patch_magnus_datasink_unwraps_ray_write_result(self):
         calls = []
@@ -724,6 +793,53 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
             load_table=False,
         )
 
+    def test_create_magnus_table_strips_arrow_metadata_before_sdk_create(self):
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+        schema = pa.schema(
+            [
+                pa.field(
+                    "state",
+                    pa.struct(
+                        [
+                            pa.field("query_time", pa.string(), metadata={b"child_key": b"child_value"}),
+                        ]
+                    ),
+                    metadata={b"field_key": b"field_value"},
+                )
+            ],
+            metadata={b"schema_key": b"schema_value"},
+        )
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=magnus_module):
+            create_magnus_table_if_not_exists("catalog.db.table", schema)
+
+        created_schema = client.create_table.call_args.args[3]
+        self.assertIsNone(created_schema.metadata)
+        self.assertIsNone(created_schema.field("state").metadata)
+        self.assertIsNone(created_schema.field("state").type.field("query_time").metadata)
+
+    def test_create_magnus_table_strips_nested_arrow_metadata_when_top_level_is_clean(self):
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+        schema = pa.schema(
+            [
+                pa.field(
+                    "events",
+                    pa.list_(pa.field("event", pa.struct([pa.field("id", pa.string(), metadata={b"k": b"v"})]))),
+                )
+            ]
+        )
+
+        with patch("data_juicer.core.io_utils.import_optional_dependency", return_value=magnus_module):
+            create_magnus_table_if_not_exists("catalog.db.table", schema)
+
+        created_schema = client.create_table.call_args.args[3]
+        id_field = created_schema.field("events").type.value_field.type.field("id")
+        self.assertIsNone(id_field.metadata)
+
     def test_create_magnus_table_allows_existing_table_without_schema(self):
         client = MagicMock()
         client.exist_table.return_value = True
@@ -1010,6 +1126,72 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
         )
         pyiceberg_ray.write_magnus.assert_called_once_with(
             dataset,
+            identifier="catalog.db.table",
+            operation="APPEND",
+        )
+
+    def test_write_ray_dataset_to_magnus_reuses_materialized_dataset_after_batch_schema_inference(self):
+        class MaterializedRayDataset:
+            def __init__(self):
+                self._schema = pa.schema(
+                    [
+                        pa.field("id", pa.string()),
+                        pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                    ]
+                )
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=None)
+
+            def iter_batches(self, batch_format="pyarrow", batch_size=8192):
+                if batch_format != "pyarrow":
+                    raise ValueError(batch_format)
+                yield pa.Table.from_pylist([{"id": "1", "state": {"ok": True}}], schema=self._schema)
+
+        class UnknownLazyRayDataset:
+            def __init__(self):
+                self.materialized = MaterializedRayDataset()
+                self.materialize_calls = 0
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=None)
+
+            def materialize(self):
+                self.materialize_calls += 1
+                return self.materialized
+
+            def iter_batches(self, *args, **kwargs):
+                raise AssertionError("schema inference should use the materialized dataset")
+
+        dataset = UnknownLazyRayDataset()
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=True,
+                infer_schema_on_create=True,
+            )
+
+        self.assertEqual(dataset.materialize_calls, 1)
+        client.create_table.assert_called_once_with(
+            "catalog",
+            "db",
+            "table",
+            dataset.materialized._schema,
+            properties={},
+            partition_columns=None,
+            load_table=False,
+        )
+        pyiceberg_ray.write_magnus.assert_called_once_with(
+            dataset.materialized,
             identifier="catalog.db.table",
             operation="APPEND",
         )
