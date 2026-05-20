@@ -1,0 +1,30 @@
+project_name: "ray-hdfs-distributed-export-parquet"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path:
+        - "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/site_creative_center_df_stats_daily_sample_v2_chengzi/p_date=20260423/part-00124-cfa2f8b6-9b7a-404b-bb3d-286c2161a222-c000.zstd.parquet"
+      columns:
+        - "p_date"
+        - "site_id"
+        - "external_url"
+      limit: 1000
+      override_num_blocks: 8
+      concurrency: 8
+
+export:
+  target: "hdfs"
+  type: "parquet"
+  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/data_juicer/e2e/ray_hdfs_distributed_export_parquet/{job_id}"
+  filesystem: "pyarrow"
+  mode: "error_if_exists"
+  extra_args:
+    max_rows_per_file: 10000
+    concurrency: 8
+
+process: []

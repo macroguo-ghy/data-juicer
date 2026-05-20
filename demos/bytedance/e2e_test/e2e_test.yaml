@@ -1,0 +1,190 @@
+project_name: "third-site-ocr-seed-main-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/product_core_attribute_sample_stats_daily_v2/20260428_addurl_product_filter_schema_md5_dedup_final/part-20642-a4f293e6-a6aa-4cc5-8d94-68cd079ce329-c000.snappy.parquet"
+      format: "parquet"
+      override_num_blocks: 600
+      limit: 10
+
+export:
+  target: "magnus"
+  table_name: "ai_data_forge.ccu.ghy_orc_test0"
+  operation: "OVERWRITE"
+  create_table_if_not_exists: true
+  partition_columns: [ "p_date" ]
+  partition_values:
+    p_date: "20260428"
+  schema:
+    fields:
+      - name: "id"
+        type: "string"
+      - name: "extra"
+        type: "string"
+      - name: "images"
+        type: "list<binary>"
+      - name: "md5"
+        type: "string"
+      - name: "source"
+        type: "string"
+      - name: "texts"
+        type: "string"
+      - name: "audios"
+        type: "string"
+      - name: "videos"
+        type: "string"
+      - name: "has_audio_in_video"
+        type: "bool"
+      - name: "type"
+        type: "string"
+      - name: "ocr_result"
+        type: "string"
+      - name: "image_index"
+        type: "int64"
+      - name: "text_richness_score"
+        type: "float64"
+      - name: "char_score"
+        type: "float64"
+      - name: "area_score"
+        type: "float64"
+      - name: "ocr_text"
+        type: "list<string>"
+      - name: "ocr_bbox"
+        type: "list<list<float64>>"
+      - name: "ocr_answer"
+        type: "string"
+      - name: "vlm_error"
+        type: "string"
+      - name: "ocr_type"
+        type: "string"
+      - name: "ocr_type_en"
+        type: "string"
+      - name: "messages"
+        type: "list<struct<role:string,content:string>>"
+      - name: "p_date"
+        type: "string"
+  magnus_conf:
+    concurrency: 8
+    ray_remote_args:
+      num_cpus: 1
+    write_options:
+      write:
+        format:
+          default: "lance"
+      magnus:
+        ray:
+          write:
+            disable_repartition: "true"
+            disable_sort: "true"
+
+process:
+  - image_ocr_mapper:
+      image_key: "images"
+      ocr_result_key: "ocr_result"
+      psm: "lab.ocrx.fusion_general"
+      caller: "ad.ai.data_forge_merlin"
+      expected_caller_psm: "ad.ai.data_forge_merlin"
+      dag: "text_tag"
+      split_size: 10
+      qps: 200
+      batch_size: 1
+      num_proc: 256
+      num_cpus: 1
+  - aligned_list_field_flatten_mapper:
+      field_keys: ["images", "ocr_result"]
+      wrap_value_keys: ["images"]
+      index_key: "image_index"
+      id_key: "id"
+      passthrough_types:
+        md5: "string"
+      batch_size: 100
+      num_proc: 128
+      num_cpus: 1
+  - ocr_text_richness_mapper:
+      ocr_result_key: "ocr_result"
+      char_max: 300
+      area_max_ratio: 0.6
+      batch_size: 100
+      num_proc: 128
+      num_cpus: 1
+  - numeric_probability_sampling_filter:
+      field_key: "text_richness_score"
+      hash_key: "id"
+      low_threshold: 0.2
+      high_threshold: 0.5
+      base_sample_prob: 0.01
+      sampling_power: 2.0
+      seed: "third_site_ocr_seed_main"
+      batch_size: 100
+      num_proc: 128
+      num_cpus: 1
+  - vlm_api_response_mapper:
+      image_key: "images"
+      output_key: "ocr_answer"
+      error_key: "vlm_error"
+      prompt_template: |
+        """你将看到一张或多张图像，请根据图像内容判断：这些图像适用于下列哪些能力类别的评测或数据构建（可多选），并且针对其中部分类别生产问题。
+        类别定义：
+        1）版面结构解析：关注页面中区块/段落/表格/标题/页眉页脚等布局与层级结构，而不仅仅是逐行文字识别。
+        问题要求：不生产问题
+        2）数值计算与推理：图中包含价格、数量、金额、百分比、日期、度量单位等数值信息，针对数值构建需要数值计算、比较与推理来求解的问题
+        问题要求：问题中尽量不要泄露图像中具体的数值，而是通过指代引导，禁止提问中直接暴露解答需要的所有数值。
+        3）指令式区域定位与KIE：根据自然语言指令抽取指定关键信息（如发票抬头、收货地址、证件号码、菜单中某道菜的价格等）。
+        4）长文档理解：图像是多页文档的一部分，或单页中包含大段连贯文本，需要跨段落、跨页面综合理解和问答，而不仅是局部字段抽取。
+        5）图表语义理解：图片主体部分含有清晰的折线图、柱状图、饼图等可视化图表，需要理解坐标轴、图例、单位和数值关系，支持问答、比较、趋势推断等。
+        问题要求：
+        1）用多样的方式提问
+        2）问题关注图像中不同的信息，而不是单一信息
+        3）每个类型生产1-3个不同的问题，再问题合理并且有一定难度的情况下才生产多个问题。
+        4）提出的问题需要依赖图像内容才能解答
+
+        输出要求：
+        - 使用JSON格式输出一个对象，其中：
+          - "labels"：字符串数组，元素必须从 ["版面结构解析","数值计算与推理","指令式区域定位与KIE","长文档理解","图表语义理解"] 中选择，允许多选；
+          - "reason"：字符串，简要说明为什么选择这些类别，以及为什么其它类别不适用（如有）；
+          - "qa"：对象，其键为已选类别名，值为一个对象，包含：
+            - "question"：为该类别设计的、只能依赖图像内容作答的问题；
+            - "answer"：该问题在图像上的唯一标准答案，以字符串形式给出。
+
+        示例输出：
+        {
+          "labels": ["版面结构解析", "指令式区域定位与KIE"],
+          "reason": "页面包含多栏文字和一个带表头的表格，适合做版面结构解析；同时有清晰的收件人信息区域，可根据指令定位并抽取字段。",
+          "qa": {
+            "指令式区域定位与KIE": {
+              "question1": "收件人的姓名是什么？",
+              "answer1": "张三",
+              "question2": "请识别发件人的邮政编码",
+              "answer2": "331100",
+              "question3": "图中右下方显示的地址是？",
+              "answer3": "上海市松江区坡子街310号"
+            }
+          }
+        }"""
+      model: "ep-20251120143951-rw5vv"
+      base_url: "https://ark-cn-beijing.bytedance.net/api/v3/responses"
+      api_key: "<YOUR_API_KEY>"
+      temperature: 0.0
+      timeout: 120
+      rpm: 2500
+      tpm: 5000000
+      estimated_tokens_per_request: 3500
+      image_token_divisor: 1764
+      max_image_tokens: 5120
+      image_tokens_per_image: 5120
+      batch_size: 1
+      num_proc: 800
+      num_cpus: 1
+  - ocr_answer_category_mapper:
+      answer_key: "ocr_answer"
+      type_key: "ocr_type"
+      type_en_key: "ocr_type_en"
+      messages_key: "messages"
+      batch_size: 100
+      num_proc: 64
+      num_cpus: 1

@@ -92,8 +92,36 @@ def infer_storage_target_from_path(path: str | None) -> str:
     return "local"
 
 
-def get_pyarrow_filesystem(uri: str):
+def get_webhdfs_pyarrow_filesystem(uri: str, webhdfs_config: Dict[str, Any] | None = None):
+    import fsspec
     import pyarrow.fs as pa_fs
+
+    webhdfs_config = webhdfs_config or {}
+    parsed = urlparse(uri)
+    fs_path = parsed.path or "/"
+
+    filesystem_kwargs = {
+        "host": webhdfs_config.get("host") or parsed.hostname or "localhost",
+        "port": webhdfs_config.get("port", 9870),
+    }
+    if webhdfs_config.get("user") is not None:
+        filesystem_kwargs["user"] = webhdfs_config["user"]
+
+    for key, value in webhdfs_config.items():
+        if key not in {"host", "port", "user"}:
+            filesystem_kwargs[key] = value
+
+    webhdfs_fs = fsspec.filesystem("webhdfs", **filesystem_kwargs)
+    return pa_fs.PyFileSystem(pa_fs.FSSpecHandler(webhdfs_fs)), fs_path
+
+
+def get_pyarrow_filesystem(uri: str, filesystem: str | None = None, storage_options: Dict[str, Any] | None = None):
+    import pyarrow.fs as pa_fs
+
+    if filesystem == "webhdfs":
+        return get_webhdfs_pyarrow_filesystem(uri, storage_options)
+    if filesystem not in {None, "pyarrow"}:
+        raise ValueError(f"Unsupported filesystem [{filesystem}] for URI [{uri}]")
 
     fs, fs_path = pa_fs.FileSystem.from_uri(uri)
     return fs, fs_path
@@ -139,7 +167,12 @@ def copy_uri_to_local(uri: str, local_path: str) -> str:
     return str(local_root)
 
 
-def copy_local_to_uri(local_path: str, uri: str) -> None:
+def copy_local_to_uri(
+    local_path: str,
+    uri: str,
+    filesystem: str | None = None,
+    storage_options: Dict[str, Any] | None = None,
+) -> None:
     if not (uri.startswith("hdfs://") or uri.startswith("s3://") or uri.startswith("file://")):
         src = Path(local_path)
         dst = Path(uri)
@@ -154,7 +187,7 @@ def copy_local_to_uri(local_path: str, uri: str) -> None:
 
     import pyarrow.fs as pa_fs
 
-    fs, fs_path = get_pyarrow_filesystem(uri)
+    fs, fs_path = get_pyarrow_filesystem(uri, filesystem=filesystem, storage_options=storage_options)
     src = Path(local_path)
     if src.is_file():
         ensure_remote_parent(fs, fs_path)

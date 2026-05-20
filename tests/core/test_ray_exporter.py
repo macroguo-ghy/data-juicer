@@ -1,9 +1,12 @@
 import copy
+import builtins
 import os
 import os.path as osp
 import shutil
 import unittest
 from unittest.mock import MagicMock, patch
+
+from pyarrow.fs import FileInfo, FileType, LocalFileSystem
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
 from data_juicer.core.ray_exporter import RayExporter
@@ -34,6 +37,187 @@ class TestRayExporterCheckpoint(unittest.TestCase):
 
         dataset.drop_columns.assert_called_once_with([Fields.stats, HashKeys.hash])
         export_method.assert_called_once()
+
+
+class TestRayExporterHDFS(unittest.TestCase):
+    def test_hdfs_export_resolves_filesystem_path_and_defaults_to_error_if_exists(self):
+        class FakeDataset:
+            def __init__(self):
+                self.drop_columns = MagicMock(return_value=self)
+                self.write_parquet = MagicMock()
+
+            def columns(self):
+                return ["text"]
+
+        dataset = FakeDataset()
+        fake_filesystem = MagicMock()
+        fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.NotFound)
+
+        with patch(
+            "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+            return_value=(fake_filesystem, "/path/output_dir"),
+        ) as mock_get_filesystem:
+            exporter = RayExporter(
+                "hdfs://cluster/path/output_dir",
+                export_type="parquet",
+                filesystem="pyarrow",
+            )
+            exporter.export(dataset)
+
+        mock_get_filesystem.assert_called_once_with(
+            "hdfs://cluster/path/output_dir",
+            filesystem="pyarrow",
+            storage_options=None,
+        )
+        dataset.write_parquet.assert_called_once()
+        args, kwargs = dataset.write_parquet.call_args
+        self.assertEqual(args[0], "/path/output_dir")
+        self.assertIs(kwargs["filesystem"], fake_filesystem)
+        self.assertNotIn("mode", kwargs)
+        fake_filesystem.get_file_info.assert_called_once_with("/path/output_dir")
+
+    def test_hdfs_mode_resolution_does_not_depend_on_ray_savemode_module(self):
+        real_import = builtins.__import__
+
+        def fail_savemode_import(name, *args, **kwargs):
+            if name == "ray.data._internal.savemode":
+                raise ModuleNotFoundError("No module named 'ray.data._internal.savemode'")
+            return real_import(name, *args, **kwargs)
+
+        fake_filesystem = MagicMock()
+        fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.NotFound)
+
+        with (
+            patch("builtins.__import__", side_effect=fail_savemode_import),
+            patch(
+                "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+                return_value=(fake_filesystem, "/path/output_dir"),
+            ),
+        ):
+            RayExporter(
+                "hdfs://cluster/path/output_dir",
+                export_type="parquet",
+                filesystem="pyarrow",
+                mode="error_if_exists",
+            )
+
+    def test_hdfs_jsonl_append_maps_mode_and_warns(self):
+        class FakeDataset:
+            def __init__(self):
+                self.write_datasink = MagicMock()
+
+            def columns(self):
+                return ["text"]
+
+        dataset = FakeDataset()
+        fake_filesystem = LocalFileSystem()
+
+        with (
+            patch(
+                "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+                return_value=(fake_filesystem, "/path/output_jsonl_dir"),
+            ),
+            patch("data_juicer.core.ray_exporter.logger.warning") as mock_warning,
+        ):
+            exporter = RayExporter(
+                "hdfs://cluster/path/output_jsonl_dir",
+                export_type="jsonl",
+                filesystem="pyarrow",
+                mode="append",
+            )
+            exporter.export(dataset)
+
+        dataset.write_datasink.assert_called_once()
+        datasink = dataset.write_datasink.call_args.args[0]
+        self.assertEqual(datasink.path, "/path/output_jsonl_dir")
+        if getattr(datasink, "mode", None) is not None:
+            self.assertEqual(datasink.mode.value, "append")
+        mock_warning.assert_called_once()
+
+    def test_hdfs_overwrite_deletes_existing_directory_before_write(self):
+        fake_filesystem = MagicMock()
+        fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.Directory)
+
+        with patch(
+            "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+            return_value=(fake_filesystem, "/path/output_dir"),
+        ):
+            RayExporter(
+                "hdfs://cluster/path/output_dir",
+                export_type="parquet",
+                mode="overwrite",
+            )
+
+        fake_filesystem.delete_dir.assert_called_once_with("/path/output_dir")
+
+    def test_hdfs_jsonl_datasink_drops_mode_for_older_ray_file_datasink(self):
+        class FakeDataset:
+            def write_datasink(self, *args, **kwargs):
+                pass
+
+        with patch("data_juicer.core.ray_exporter._JsonlDatasink") as mock_datasink:
+            RayExporter.write_jsonl_datasink(
+                FakeDataset(),
+                "/path/output_jsonl_dir",
+                {
+                    "filesystem": LocalFileSystem(),
+                    "mode": "append",
+                    "num_rows_per_file": 100,
+                },
+            )
+
+        _, kwargs = mock_datasink.call_args
+        self.assertNotIn("mode", kwargs)
+
+    def test_write_others_maps_max_rows_per_file_for_older_ray_parquet_signature(self):
+        class FakeDataset:
+            def __init__(self):
+                self.received_kwargs = None
+
+            def write_parquet(self, path, *, min_rows_per_file=None, concurrency=None, **arrow_parquet_args):
+                self.received_kwargs = {
+                    "path": path,
+                    "min_rows_per_file": min_rows_per_file,
+                    "concurrency": concurrency,
+                    "arrow_parquet_args": arrow_parquet_args,
+                }
+
+        dataset = FakeDataset()
+        RayExporter.write_others(
+            dataset,
+            "/path/output_dir",
+            export_format="parquet",
+            export_extra_args={"max_rows_per_file": 1000, "concurrency": 8},
+        )
+
+        self.assertEqual(dataset.received_kwargs["min_rows_per_file"], 1000)
+        self.assertEqual(dataset.received_kwargs["concurrency"], 8)
+        self.assertNotIn("max_rows_per_file", dataset.received_kwargs["arrow_parquet_args"])
+
+    def test_hdfs_export_rejects_unknown_mode(self):
+        with self.assertRaisesRegex(ValueError, "export.mode"):
+            RayExporter(
+                "hdfs://cluster/path/output_dir",
+                export_type="parquet",
+                mode="bad-mode",
+            )
+
+    def test_hdfs_error_if_exists_rejects_existing_path_before_write(self):
+        fake_filesystem = MagicMock()
+        fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.Directory)
+
+        with (
+            patch(
+                "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+                return_value=(fake_filesystem, "/path/output_dir"),
+            ),
+            self.assertRaisesRegex(FileExistsError, "already exists"),
+        ):
+            RayExporter(
+                "hdfs://cluster/path/output_dir",
+                export_type="parquet",
+                mode="error_if_exists",
+            )
 
 
 class TestRayExporter(DataJuicerTestCaseBase):

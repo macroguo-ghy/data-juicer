@@ -1,0 +1,21 @@
+project_name: single_sample_operator_debug
+executor_type: ray
+ray_address: auto
+job_id: single_sample_operator_debug
+export_path: ./outputs/single_sample_operator_debug/unused.jsonl
+
+debug:
+  enabled: true
+  sample_json: '{"text": "  hello\tworld  ", "sample_id": "demo-1"}'
+  output:
+    path: hdfs://haruna/tmp/data-juicer-debug/{job_id}/{debug_run_id}/trace.jsonl
+    type: jsonl
+  bytes_output:
+    mode: summary
+    preview_bytes: 64
+  include_traceback: true
+
+process:
+  - whitespace_normalization_mapper: {}
+  - text_length_filter:
+      min_len: 1

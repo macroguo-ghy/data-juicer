@@ -16,6 +16,7 @@ from data_juicer.core.io_utils import (
     copy_uri_to_local,
     export_lark_sheet_to_local,
     get_pyarrow_filesystem,
+    get_webhdfs_pyarrow_filesystem,
     infer_local_name_from_uri,
     make_staging_dir,
     materialize_duckdb_query,
@@ -52,29 +53,6 @@ _RAY_PARQUET_READ_KWARGS = {
 }
 
 
-def _get_webhdfs_pyarrow_filesystem(uri: str, webhdfs_config: Dict[str, Any] | None = None):
-    import fsspec
-    import pyarrow.fs as pa_fs
-
-    webhdfs_config = webhdfs_config or {}
-    parsed = urlparse(uri)
-    fs_path = parsed.path or "/"
-
-    filesystem_kwargs = {
-        "host": webhdfs_config.get("host") or parsed.hostname or "localhost",
-        "port": webhdfs_config.get("port", 9870),
-    }
-    if webhdfs_config.get("user") is not None:
-        filesystem_kwargs["user"] = webhdfs_config["user"]
-
-    for key, value in webhdfs_config.items():
-        if key not in {"host", "port", "user"}:
-            filesystem_kwargs[key] = value
-
-    webhdfs_fs = fsspec.filesystem("webhdfs", **filesystem_kwargs)
-    return pa_fs.PyFileSystem(pa_fs.FSSpecHandler(webhdfs_fs)), fs_path
-
-
 def _validate_ray_hdfs_filesystem(filesystem_type: str) -> None:
     if filesystem_type not in {"pyarrow", "webhdfs"}:
         raise ValueError(
@@ -84,8 +62,33 @@ def _validate_ray_hdfs_filesystem(filesystem_type: str) -> None:
 
 
 def _validate_hdfs_uri(uri: str) -> None:
-    if not uri.startswith("hdfs://"):
+    if not isinstance(uri, str) or not uri.startswith("hdfs://"):
         raise ValueError(f"Expected an HDFS URI starting with `hdfs://`, got [{uri}].")
+
+
+def _validate_hdfs_path_config(path: str | list[str]) -> None:
+    if isinstance(path, str):
+        _validate_hdfs_uri(path)
+        return
+    if not isinstance(path, list) or not path:
+        raise ValueError("Expected a non-empty HDFS URI string or list of HDFS URI strings.")
+    for uri in path:
+        _validate_hdfs_uri(uri)
+
+
+def _validate_hdfs_paths_share_filesystem(paths: list[str]) -> None:
+    if len(paths) <= 1:
+        return
+    first = urlparse(paths[0])
+    for path in paths[1:]:
+        parsed = urlparse(path)
+        if (parsed.scheme, parsed.netloc) != (first.scheme, first.netloc):
+            raise ValueError("All HDFS paths in one Ray HDFS loader must use the same filesystem.")
+
+
+def _validate_positive_int(value: int) -> None:
+    if isinstance(value, bool) or value <= 0:
+        raise ValueError("Expected a positive integer")
 
 
 def _is_countable_parquet_metadata_file(path: str) -> bool:
@@ -95,33 +98,180 @@ def _is_countable_parquet_metadata_file(path: str) -> bool:
     return True
 
 
-def _count_parquet_rows_from_filesystem(filesystem, path: str) -> int | None:
+@dataclass(frozen=True)
+class _ParquetReadPlan:
+    paths: str | list[str]
+    schema: pa.Schema | None = None
+    row_count: int | None = None
+    skipped_empty_file_count: int = 0
+
+
+def _parquet_files_from_filesystem(filesystem, path: str | list[str]) -> list[str] | None:
+    import pyarrow.fs as pa_fs
+
+    if isinstance(path, list):
+        parquet_paths = []
+        for item_path in path:
+            item_parquet_paths = _parquet_files_from_filesystem(filesystem, item_path)
+            if item_parquet_paths is None:
+                return None
+            parquet_paths.extend(item_parquet_paths)
+        return parquet_paths
+
+    file_info = filesystem.get_file_info(path)
+    if file_info.type == pa_fs.FileType.NotFound:
+        return []
+    if file_info.type == pa_fs.FileType.File:
+        return [path] if _is_countable_parquet_metadata_file(path) else []
+    if file_info.type == pa_fs.FileType.Directory:
+        selector = pa_fs.FileSelector(path, recursive=True)
+        return sorted(
+            info.path
+            for info in filesystem.get_file_info(selector)
+            if info.type == pa_fs.FileType.File and _is_countable_parquet_metadata_file(info.path)
+        )
+    return None
+
+
+def _ray_parquet_sample_indices(num_files: int) -> list[int]:
+    if num_files <= 0:
+        return []
     try:
-        import pyarrow.fs as pa_fs
+        from ray.data._internal.datasource import parquet_datasource as ray_parquet
+
+        sample_ratio = ray_parquet.PARQUET_ENCODING_RATIO_ESTIMATE_SAMPLING_RATIO
+        min_samples = ray_parquet.PARQUET_ENCODING_RATIO_ESTIMATE_MIN_NUM_SAMPLES
+        max_samples = ray_parquet.PARQUET_ENCODING_RATIO_ESTIMATE_MAX_NUM_SAMPLES
+    except Exception:
+        sample_ratio = 0.01
+        min_samples = 2
+        max_samples = 10
+
+    num_samples = int(num_files * sample_ratio)
+    min_num_samples = min(min_samples, num_files)
+    max_num_samples = min(max_samples, num_files)
+    num_samples = max(min(num_samples, max_num_samples), min_num_samples)
+    if num_samples <= 1:
+        return [0]
+    return [
+        int(idx * (num_files - 1) / (num_samples - 1))
+        for idx in range(num_samples)
+    ]
+
+
+def _filter_ray_sampled_zero_row_group_files(
+    filesystem,
+    path: str | list[str],
+    parquet_paths: list[str],
+) -> _ParquetReadPlan:
+    import pyarrow.parquet as pq
+
+    readable_paths = list(parquet_paths)
+    metadata_cache = {}
+    schema = None
+    skipped_empty_file_count = 0
+    first_skipped_path = None
+
+    while readable_paths:
+        zero_row_group_paths = set()
+        for sample_idx in _ray_parquet_sample_indices(len(readable_paths)):
+            parquet_path = readable_paths[sample_idx]
+            metadata = metadata_cache.get(parquet_path)
+            if metadata is None:
+                metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
+                metadata_cache[parquet_path] = metadata
+            if schema is None:
+                schema = metadata.schema.to_arrow_schema()
+            if metadata.num_row_groups == 0:
+                zero_row_group_paths.add(parquet_path)
+
+        if not zero_row_group_paths:
+            break
+
+        skipped_empty_file_count += len(zero_row_group_paths)
+        if first_skipped_path is None:
+            first_skipped_path = next(iter(zero_row_group_paths))
+        readable_paths = [
+            parquet_path
+            for parquet_path in readable_paths
+            if parquet_path not in zero_row_group_paths
+        ]
+
+    if skipped_empty_file_count:
+        logger.warning(
+            "Skipping {} Ray-sampled parquet file(s) with 0 row groups under {}. "
+            "First skipped file: {}",
+            skipped_empty_file_count,
+            path,
+            first_skipped_path,
+        )
+        return _ParquetReadPlan(
+            paths=readable_paths,
+            schema=schema,
+            skipped_empty_file_count=skipped_empty_file_count,
+        )
+    return _ParquetReadPlan(paths=path, schema=schema)
+
+
+def _build_parquet_read_plan_from_filesystem(
+    filesystem,
+    path: str | list[str],
+    *,
+    filter_for_ray_sampling_only: bool = False,
+) -> _ParquetReadPlan:
+    try:
         import pyarrow.parquet as pq
 
-        file_info = filesystem.get_file_info(path)
-        if file_info.type == pa_fs.FileType.NotFound:
-            return None
-        if file_info.type == pa_fs.FileType.File:
-            paths = [path] if _is_countable_parquet_metadata_file(path) else []
-        elif file_info.type == pa_fs.FileType.Directory:
-            selector = pa_fs.FileSelector(path, recursive=True)
-            paths = [
-                info.path
-                for info in filesystem.get_file_info(selector)
-                if info.type == pa_fs.FileType.File and _is_countable_parquet_metadata_file(info.path)
-            ]
-        else:
-            return None
+        parquet_paths = _parquet_files_from_filesystem(filesystem, path)
+        if parquet_paths is None:
+            return _ParquetReadPlan(paths=path)
+        if filter_for_ray_sampling_only:
+            return _filter_ray_sampled_zero_row_group_files(filesystem, path, parquet_paths)
 
+        readable_paths = []
         row_count = 0
-        for parquet_path in paths:
-            row_count += pq.read_metadata(parquet_path, filesystem=filesystem).num_rows
-        return row_count
+        schema = None
+        skipped_empty_file_count = 0
+        first_skipped_path = None
+        for parquet_path in parquet_paths:
+            metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
+            if schema is None:
+                schema = metadata.schema.to_arrow_schema()
+            row_count += metadata.num_rows
+            if metadata.num_row_groups == 0:
+                skipped_empty_file_count += 1
+                if first_skipped_path is None:
+                    first_skipped_path = parquet_path
+                continue
+            readable_paths.append(parquet_path)
+
+        if skipped_empty_file_count:
+            logger.warning(
+                "Skipping {} parquet file(s) with 0 row groups under {}. First skipped file: {}",
+                skipped_empty_file_count,
+                path,
+                first_skipped_path,
+            )
+            return _ParquetReadPlan(
+                paths=readable_paths,
+                schema=schema,
+                row_count=row_count,
+                skipped_empty_file_count=skipped_empty_file_count,
+            )
+        return _ParquetReadPlan(paths=path, schema=schema, row_count=row_count)
     except Exception as exc:
-        logger.debug("Failed to count parquet rows from metadata for {}: {}", path, exc)
-        return None
+        logger.debug("Failed to build parquet read plan from metadata for {}: {}", path, exc)
+        return _ParquetReadPlan(paths=path)
+
+
+def _count_parquet_rows_from_filesystem(filesystem, path: str | list[str]) -> int | None:
+    return _build_parquet_read_plan_from_filesystem(filesystem, path).row_count
+
+
+def _limit_parquet_row_count(row_count: int | None, limit: int | None) -> int | None:
+    if row_count is None or limit is None:
+        return row_count
+    return min(row_count, limit)
 
 
 @dataclass(frozen=True)
@@ -149,6 +299,12 @@ class StrategyKey:
             and fnmatch.fnmatch(other.data_type, self.data_type)
             and fnmatch.fnmatch(other.data_source, self.data_source)
         )
+
+
+@dataclass(frozen=True)
+class RayDataCheckpointSupport:
+    supported: bool
+    reason: str = ""
 
 
 class DataLoadStrategy(ABC, ConfigValidator):
@@ -181,6 +337,12 @@ class DataLoadStrategy(ABC, ConfigValidator):
             }
         )
         return read_kwargs
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            False,
+            "loader does not declare Ray Data checkpoint support",
+        )
 
     @abstractmethod
     def load_data(self, **kwargs) -> DJDataset:
@@ -392,6 +554,12 @@ class DefaultStagedRemoteLoadStrategy(StagedLocalLoadMixin, DefaultDataLoadStrat
 
 
 class RayStagedRemoteLoadStrategy(StagedLocalLoadMixin, RayDataLoadStrategy):
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "stages data to local files and loads through Ray file datasource",
+        )
+
     def _load_staged_local_dataset(self, local_path: str, **kwargs):
         ds_config = dict(self.ds_config)
         ds_config["type"] = "local"
@@ -417,6 +585,12 @@ class RayLocalJsonDataLoadStrategy(RayDataLoadStrategy):
     # TODO ray defaults to json
 
     CONFIG_VALIDATION_RULES = {"required_fields": ["path"], "field_types": {"path": str}, "custom_validators": {}}
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "loads local files through Ray file datasource",
+        )
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
@@ -790,6 +964,12 @@ class RayS3DataLoadStrategy(RayDataLoadStrategy):
         },
     }
 
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "loads S3 files through Ray file datasource",
+        )
+
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
         from data_juicer.core.data.ray_dataset import RayDataset
@@ -906,17 +1086,25 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
     CONFIG_VALIDATION_RULES = {
         "required_fields": ["path"],
         "field_types": {
-            "path": str,
             "format": str,
             "filesystem": str,
             "webhdfs": dict,
             "load_kwargs": dict,
+            "limit": int,
+            "skip_zero_row_group_files": bool,
         },
         "custom_validators": {
-            "path": _validate_hdfs_uri,
+            "path": _validate_hdfs_path_config,
             "filesystem": _validate_ray_hdfs_filesystem,
+            "limit": _validate_positive_int,
         },
     }
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "loads HDFS parquet files through Ray file datasource",
+        )
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
@@ -938,19 +1126,64 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
 
         try:
             filesystem_type = self.ds_config.get("filesystem", "pyarrow")
-            if filesystem_type == "webhdfs":
-                filesystem, fs_path = _get_webhdfs_pyarrow_filesystem(
-                    hdfs_uri,
-                    self.ds_config.get("webhdfs"),
+            if isinstance(hdfs_uri, list):
+                _validate_hdfs_paths_share_filesystem(hdfs_uri)
+                if filesystem_type == "webhdfs":
+                    filesystem, _ = get_webhdfs_pyarrow_filesystem(
+                        hdfs_uri[0],
+                        self.ds_config.get("webhdfs"),
+                    )
+                    fs_path = [urlparse(uri).path or "/" for uri in hdfs_uri]
+                else:
+                    filesystem, first_fs_path = get_pyarrow_filesystem(hdfs_uri[0])
+                    fs_path = [first_fs_path]
+                    for uri in hdfs_uri[1:]:
+                        _, item_fs_path = get_pyarrow_filesystem(uri)
+                        fs_path.append(item_fs_path)
+            else:
+                if filesystem_type == "webhdfs":
+                    filesystem, fs_path = get_webhdfs_pyarrow_filesystem(
+                        hdfs_uri,
+                        self.ds_config.get("webhdfs"),
+                    )
+                else:
+                    filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
+            skip_zero_row_group_files = self.ds_config.get("skip_zero_row_group_files", True)
+            if skip_zero_row_group_files:
+                read_plan = _build_parquet_read_plan_from_filesystem(
+                    filesystem,
+                    fs_path,
+                    filter_for_ray_sampling_only=True,
                 )
             else:
-                filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
-            dataset = ray.data.read_parquet(fs_path, filesystem=filesystem, **read_kwargs)
+                read_plan = _ParquetReadPlan(paths=fs_path)
+            if read_plan.paths == []:
+                schema = read_plan.schema or pa.schema([])
+                columns = read_kwargs.get("columns")
+                if columns:
+                    schema = pa.schema([field for field in schema if field.name in columns])
+                empty_table = pa.Table.from_batches([], schema=schema)
+                from_arrow_kwargs = {}
+                if read_kwargs.get("override_num_blocks") is not None:
+                    from_arrow_kwargs["override_num_blocks"] = read_kwargs["override_num_blocks"]
+                dataset = ray.data.from_arrow(empty_table, **from_arrow_kwargs)
+            else:
+                dataset = ray.data.read_parquet(read_plan.paths, filesystem=filesystem, **read_kwargs)
+            limit = self.ds_config.get("limit")
+            if limit is not None:
+                dataset = dataset.limit(limit)
             return RayDataset(
                 dataset,
-                dataset_path=hdfs_uri,
+                dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
                 cfg=self.cfg,
-                row_count_getter=lambda: _count_parquet_rows_from_filesystem(filesystem, fs_path),
+                row_count_getter=lambda: (
+                    _limit_parquet_row_count(
+                        read_plan.row_count
+                        if read_plan.row_count is not None
+                        else _count_parquet_rows_from_filesystem(filesystem, fs_path),
+                        limit,
+                    )
+                ),
             )
         except Exception as e:
             raise RuntimeError(
@@ -1044,6 +1277,12 @@ class DefaultTQSDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrat
 @DataLoadStrategyRegistry.register("ray", "remote", "tqs")
 class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
     CONFIG_VALIDATION_RULES = DefaultTQSDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            False,
+            "TQS loader is intended for tests and does not provide a supported Ray Data checkpoint source boundary",
+        )
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
@@ -1144,6 +1383,12 @@ class RayHiveDataLoadStrategy(RayDataLoadStrategy):
             },
         },
     }
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "loads Hive table data through bytedray read datasource",
+        )
 
     def load_data(self, **kwargs):
         import ray
@@ -1329,6 +1574,12 @@ class DefaultMagnusDataLoadStrategy(DefaultDataLoadStrategy):
 @DataLoadStrategyRegistry.register("ray", "remote", "magnus")
 class RayMagnusDataLoadStrategy(RayDataLoadStrategy):
     CONFIG_VALIDATION_RULES = DefaultMagnusDataLoadStrategy.CONFIG_VALIDATION_RULES
+
+    def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
+        return RayDataCheckpointSupport(
+            True,
+            "loads Magnus table data through Ray datasource with read task identifiers",
+        )
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)

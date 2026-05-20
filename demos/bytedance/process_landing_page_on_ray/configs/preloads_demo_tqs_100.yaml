@@ -3,11 +3,6 @@ executor_type: "ray"
 ray_address: "auto"
 min_common_dep_num_to_combine: 0
 
-ray_data_checkpoint:
-  enabled: true
-  dir: "hdfs://haruna/ad_base/addrd_core/addrd_stats/ray_checkpoint/landing_page_tqs_100"
-  delete_no_checkpoint_files: true
-
 dataset:
   configs:
     - type: remote
@@ -59,6 +54,7 @@ export:
   target: "magnus"
   table_name: "ai_data_forge.ccu.landing_page_chengzi"
   operation: "OVERWRITE"
+  create_table_if_not_exists: true
   partition_columns: ["p_date"]
   partition_values:
     p_date: "20260423"
@@ -194,7 +190,7 @@ process:
       save_field: "image_bytes"
       timeout: 2
       retry_times: 3
-      max_concurrent: 1
+      max_concurrent: 4
       filter_non_url: true
       batch_size: 8
       num_proc: 48

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
+import pyarrow as pa
 from loguru import logger
 
 from data_juicer.core.exporter import Exporter
@@ -23,7 +24,32 @@ from data_juicer.core.io_utils import (
     _ray_dataset_columns,
 )
 from data_juicer.core.ray_exporter import RayExporter
+from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE
 from data_juicer.utils.constant import Fields, HashKeys
+
+
+def _quota_reserve_batch(table: pa.Table, *, quota_actor):
+    if table.num_rows == 0:
+        return table
+
+    import ray
+
+    accepted = ray.get(quota_actor.reserve.remote(table.num_rows))
+    if accepted:
+        return table
+    return table.slice(0, 0)
+
+
+class _ExportQuotaActor:
+    def __init__(self, target_rows):
+        self.target_rows = target_rows
+        self.accepted_rows = 0
+
+    def reserve(self, rows):
+        if self.accepted_rows >= self.target_rows:
+            return False
+        self.accepted_rows += rows
+        return True
 
 
 class ExportManager:
@@ -41,9 +67,13 @@ class ExportManager:
             self.file_exporter = self._build_file_exporter(self.path)
 
     def export(self, dataset, columns=None):
+        dataset = self._limit_dataset_for_export(dataset)
         if self.target in {"local", "s3"}:
             if self.executor_type == "ray":
-                return self.file_exporter.export(dataset, columns=columns)
+                if self._is_quota_reservation_enabled():
+                    dataset, columns = self._prepare_dataset_for_export(dataset, columns=columns)
+                    dataset = self._reserve_quota_for_export(dataset)
+                return self.file_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
             return self.file_exporter.export(dataset)
 
         if self.target == "hdfs":
@@ -57,6 +87,63 @@ class ExportManager:
         if self.target == "magnus":
             return self._export_to_magnus(dataset, columns=columns)
         raise NotImplementedError(f"Unsupported export target [{self.target}]")
+
+    def _limit_dataset_for_export(self, dataset):
+        max_rows = self.export_cfg.get("max_rows")
+        if max_rows is None:
+            return dataset
+
+        max_rows_mode = self.export_cfg.get("max_rows_mode", "limit")
+        if max_rows_mode == "quota_reservation":
+            return dataset
+
+        # Apply the row limit before target-specific sinks so Ray can keep it
+        # lazy and push it upstream when the operator plan allows.
+        if callable(getattr(dataset, "limit", None)):
+            return dataset.limit(max_rows)
+        if callable(getattr(dataset, "select", None)):
+            return dataset.select(range(min(max_rows, len(dataset))))
+        return dataset
+
+    def _is_quota_reservation_enabled(self):
+        return (
+            self.export_cfg.get("max_rows") is not None
+            and self.export_cfg.get("max_rows_mode", "limit") == "quota_reservation"
+        )
+
+    def _reserve_quota_for_export(self, dataset):
+        if not self._is_quota_reservation_enabled():
+            return dataset
+
+        map_batches = getattr(dataset, "map_batches", None)
+        if not callable(map_batches):
+            raise RuntimeError("`export.max_rows_mode=quota_reservation` requires a Ray Dataset with `map_batches`.")
+
+        import ray
+
+        max_rows = self.export_cfg["max_rows"]
+        quota_actor = ray.remote(num_cpus=0)(_ExportQuotaActor).remote(max_rows)
+        batch_size = self.export_cfg.get("max_rows_quota_batch_size") or DEFAULT_BATCH_SIZE
+        quota_dataset = map_batches(
+            _quota_reserve_batch,
+            batch_format="pyarrow",
+            batch_size=batch_size,
+            fn_kwargs={"quota_actor": quota_actor},
+        )
+        materialize = getattr(quota_dataset, "materialize", None)
+        if callable(materialize):
+            # Ray file sinks may run schema/sample actions before the actual write.
+            # Materializing here keeps the stateful quota actor from being consumed
+            # by those pre-write actions and then reused with an exhausted quota.
+            return materialize()
+        return quota_dataset
+
+    def _ray_file_export_columns(self, columns):
+        if self._is_quota_reservation_enabled() and columns is None:
+            # RayExporter would otherwise call dataset.columns() after quota mapping,
+            # which can execute a tiny read and consume quota before the real sink write.
+            return []
+        return columns
 
     def export_compute_stats(self, dataset, export_path):
         exporter = Exporter(
@@ -109,6 +196,7 @@ class ExportManager:
             filename = target_name or f"dataset.{export_type}"
         stage_path = os.path.join(stage_dir, filename)
         dataset, columns = self._prepare_dataset_for_export(dataset, columns=columns)
+        dataset = self._reserve_quota_for_export(dataset)
 
         if self.executor_type == "ray" and self.target in {"lark", "tos"}:
             self._export_ray_single_file(dataset, stage_path, columns=columns, export_type=export_type)
@@ -116,7 +204,7 @@ class ExportManager:
 
         stage_exporter = self._build_file_exporter(stage_path)
         if self.executor_type == "ray":
-            stage_exporter.export(dataset, columns=columns)
+            stage_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
         else:
             stage_exporter.export(dataset)
         return stage_path
@@ -143,8 +231,69 @@ class ExportManager:
         )
 
     def _export_to_hdfs(self, dataset, columns=None):
+        if self._use_ray_distributed_hdfs_export():
+            self._validate_ray_distributed_hdfs_export()
+            dataset = self._reserve_quota_for_export(dataset)
+            extra_args = merge_dicts(self.export_cfg.get("extra_args"), {})
+            hdfs_exporter = RayExporter(
+                self.path,
+                self._hdfs_export_type(),
+                0,
+                keep_stats_in_res_ds=getattr(self.cfg, "keep_stats_in_res_ds", True),
+                keep_hashes_in_res_ds=getattr(self.cfg, "keep_hashes_in_res_ds", False),
+                filesystem=self.export_cfg.get("filesystem"),
+                webhdfs=self.export_cfg.get("webhdfs"),
+                mode=self.export_cfg.get("mode"),
+                **extra_args,
+            )
+            return hdfs_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+
         stage_path = self._export_via_staging(dataset, columns=columns)
-        copy_local_to_uri(stage_path, self.path)
+        copy_local_to_uri(
+            stage_path,
+            self.path,
+            filesystem=self.export_cfg.get("filesystem"),
+            storage_options=self.export_cfg.get("webhdfs"),
+        )
+
+    def validate_ray_data_checkpoint_sink(self):
+        if self.target == "hdfs" and not self._use_ray_distributed_hdfs_export():
+            raise ValueError(
+                "Ray Data checkpointing with HDFS export requires Ray distributed HDFS parquet/jsonl export."
+            )
+        if self.target == "hdfs":
+            mode = self.export_cfg.get("mode") or "error_if_exists"
+            if mode in {"error_if_exists", "overwrite"}:
+                logger.warning(
+                    f"Ray Data checkpointing is enabled with HDFS export.mode={mode}. "
+                    "This mode can still help the same Ray job retry failed tasks, "
+                    "but it has limited value for cross-job recovery after resubmission; "
+                    "use `export.mode: append` if preserving already written part files is required."
+                )
+
+    def _use_ray_distributed_hdfs_export(self):
+        return (
+            self.executor_type == "ray"
+            and self.target == "hdfs"
+            and self._hdfs_export_type() in {"parquet", "jsonl"}
+        )
+
+    def _hdfs_export_type(self):
+        return self.export_cfg.get("type") or self._suffix_from_path(self.path) or "jsonl"
+
+    def _validate_ray_distributed_hdfs_export(self):
+        if self.export_cfg.get("shard_size", 0):
+            raise ValueError(
+                "Ray distributed HDFS export does not support `export.shard_size`; "
+                "use Ray writer row-based options in `export.extra_args` instead."
+            )
+        if self._looks_like_file_path(self.path):
+            raise ValueError("Ray distributed HDFS export requires a directory path, not a file-like path.")
+
+    @staticmethod
+    def _looks_like_file_path(path: str | None) -> bool:
+        suffix = ExportManager._suffix_from_path(path)
+        return suffix in {"parquet", "json", "jsonl", "csv"}
 
     def _export_to_hive(self, dataset, columns=None):
         if self.executor_type != "ray":
@@ -162,6 +311,7 @@ class ExportManager:
         ray_dataset, columns = self._prepare_dataset_for_export(ray_dataset, columns=columns)
         if columns:
             ray_dataset = ray_dataset.select_columns(columns)
+        ray_dataset = self._reserve_quota_for_export(ray_dataset)
 
         write_hive_table = getattr(ray_dataset, "write_hive_table", None)
         if write_hive_table is None:
@@ -264,6 +414,7 @@ class ExportManager:
     def _export_to_magnus(self, dataset, columns=None):
         dataset, _ = self._prepare_dataset_for_export(dataset, columns=columns)
         if hasattr(dataset, "column_names"):
+            dataset = self._reserve_quota_for_export(dataset)
             return write_hf_dataset_to_magnus(
                 dataset,
                 self.export_cfg["table_name"],
@@ -277,6 +428,7 @@ class ExportManager:
                 batch_size=self.export_cfg.get("batch_size", 2000),
             )
         if hasattr(dataset, "columns"):
+            dataset = self._reserve_quota_for_export(dataset)
             return write_ray_dataset_to_magnus(
                 dataset,
                 self.export_cfg["table_name"],
@@ -294,8 +446,9 @@ class ExportManager:
                 ),
             )
         if hasattr(dataset, "data") and hasattr(dataset.data, "columns"):
+            ray_dataset = self._reserve_quota_for_export(dataset.data)
             return write_ray_dataset_to_magnus(
-                dataset.data,
+                ray_dataset,
                 self.export_cfg["table_name"],
                 partition_columns=self.export_cfg.get("partition_columns"),
                 partition_values=self.export_cfg.get("partition_values"),

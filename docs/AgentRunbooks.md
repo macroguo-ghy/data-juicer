@@ -1,5 +1,103 @@
 # Agent Runbooks
 
+## Online Ray E2E Submission And Debugging
+
+Use [Online Ray E2E Submission And Debug Runbook](OnlineRayE2ERunbook.md) when submitting a Data-Juicer Ray job through `ad.ai.data_forge` `LaunchMerlinFederalJob`, checking Federal job status, opening Ray UI, and locating failures through Merlin, Ray, and Data-Juicer logs.
+
+## Online HDFS Read-Only Inspection
+
+Use this flow when inspecting production HDFS paths such as `hdfs://haruna/...` from a local Mac or another environment that cannot resolve the production HDFS nameservice directly. Do not rely on local `hdfs dfs` in that case; it may fail with errors such as `UnknownHostException: haruna` even when the file is valid online.
+
+Call `ad.ai.data_forge.ExecuteHdfsCommand` through BITS so the HDFS command runs in the service environment:
+
+```bash
+cat >/tmp/dj_hdfs_cmd.json <<'JSON'
+{
+  "command_line": "hdfs dfs -ls hdfs://haruna/path/to/file-or-dir",
+  "user_context": {
+    "username": "<your-username>",
+    "user_role": "",
+    "user_email": "<your-email>"
+  },
+  "base": {
+    "log_id": "",
+    "caller": "",
+    "addr": "",
+    "client": "",
+    "traffic_env": {"open": false, "env": ""},
+    "extra": {}
+  }
+}
+JSON
+
+bytedcli --json bits rpc-call ad.ai.data_forge ExecuteHdfsCommand \
+  --idl-version codex/use-python-311 \
+  --idl-source branch \
+  --zone CN \
+  --idc hl \
+  --env ppe_terranova \
+  --cluster default \
+  --body-file /tmp/dj_hdfs_cmd.json | tee /tmp/dj_hdfs_cmd.response.json
+```
+
+Allowed command shape:
+
+```text
+hdfs dfs <read_command> <hdfs_uri>
+```
+
+Use only the supported read commands:
+
+- `-ls`: existence, owner, size, and timestamp.
+- `-tail`: tail of text logs or small text files.
+- `-cat`: small text files only. Do not use this for parquet/orc.
+- `-get`: download a file through the RPC response. Binary output is returned as base64. The service-side limit is 200 MB; do not use it for larger files.
+
+Inspect the normalized service response:
+
+```bash
+jq -r '.data.resp_body_json | {
+  status_code,
+  status_message,
+  output_encoding,
+  bytes_read,
+  command
+}' /tmp/dj_hdfs_cmd.response.json
+```
+
+For a binary `-get` response, decode it explicitly:
+
+```bash
+jq -r '.data.resp_body_json.output' /tmp/dj_hdfs_cmd.response.json \
+  | base64 -d > /tmp/input.parquet
+
+python3 - <<'PY'
+import pyarrow.parquet as pq
+
+path = "/tmp/input.parquet"
+pf = pq.ParquetFile(path)
+print("rows", pf.metadata.num_rows)
+print("row_groups", pf.num_row_groups)
+print(pf.schema_arrow)
+PY
+```
+
+`-get` is limited to files no larger than 200 MB. Large-but-allowed parquet files can still be too big for the default local Node heap used by `bytedcli` because the RPC response is JSON plus base64. If `-get` fails locally with `JavaScript heap out of memory`, retry with a larger heap:
+
+```bash
+NODE_OPTIONS='--max-old-space-size=12288' \
+bytedcli --json bits rpc-call ad.ai.data_forge ExecuteHdfsCommand \
+  --idl-version codex/use-python-311 \
+  --idl-source branch \
+  --zone CN \
+  --idc hl \
+  --env ppe_terranova \
+  --cluster default \
+  --body-file /tmp/dj_hdfs_cmd.json > /tmp/dj_hdfs_cmd.response.json
+```
+
+Prefer `-ls` for large production files when you only need existence and size. For files over 200 MB, use Ray job logical plans, driver logs, or a small online sample job for schema investigation instead of `-get`.
+
 ## Local Ray E2E Testing
 
 Use this flow when doing a small local end-to-end Ray/Data-Juicer run that reads a few rows from TQS/Hive and exports local parquet.
@@ -14,7 +112,7 @@ PYTHONPATH="$PWD" RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
 ```
 
 - Prefer `--ray_address local` for Mac local debugging. In this environment, `ray start --head` can report success but leave no usable GCS listener, while `ray.init(address="local")` starts an in-process local Ray instance that works for small E2E checks.
-- Treat `ray_data_checkpoint` as unavailable for now. Do not design, test, or explain the Ray/Data-Juicer path assuming checkpoint is enabled unless the user explicitly says this limitation has changed.
+- `ray_data_checkpoint` is available only for validated Ray file-source to sink paths. For HDFS export, use Ray distributed HDFS parquet/jsonl export so the Ray Data plan stays lazy until the sink write. Checkpoint validation is not tied to one `export.mode`, but cross-job recovery is: `error_if_exists` can fail on an existing partial output directory, `overwrite` drops previous progress, and `append` can preserve part files with at-least-once semantics.
 - For TQS/Hive small-sample debugging, set the dataset config to `read_mode: "client_result"` and a small `max_result_rows`. This avoids writing TQS output to HDFS and is only appropriate for small result sets.
 - If local Consul/service discovery fails with errors like `no available translator for data.olap...`, set `tqs_enable_domain: true` in the dataset config so `bytedtqs` uses the cluster domain directly.
 - TQS partition checks may reject dynamic partition subqueries. Use a static partition predicate such as `p_date = 'YYYYMMDD'` for the local E2E YAML. The latest partition can be checked through the Hive catalog before the run.
@@ -42,7 +140,46 @@ Only terminate a process when its command line clearly belongs to the current te
 
 ## Mac HDFS E2E Testing
 
-Use this flow when validating HDFS parquet loading on a Mac with Docker Desktop. It starts a disposable single-node HDFS inside Docker, writes a few parquet parts, and reads them through the Data-Juicer Ray HDFS loader.
+Use this flow when validating HDFS parquet loading or HDFS export behavior on a Mac with Docker Desktop. Prefer the shared local HDFS container described below; do not tear it down as routine test cleanup, because multiple agents may share it for HDFS e2e validation.
+
+### Shared Local HDFS Environment
+
+The preferred shared environment is a single-node HDFS container:
+
+- Container name: `dj-arm-hdfs`
+- NameNode RPC: `hdfs://localhost:9000`
+- WebHDFS / NameNode HTTP: `http://localhost:9870`
+- DataNode HTTP: `http://localhost:9864`
+- DataNode transfer / IPC: `localhost:9866` and `localhost:9867`
+- Local Hadoop copy: `/Users/bytedance/tmp/dj_hadoop_libexec`
+- Local Hadoop config: `/Users/bytedance/tmp/dj_mac_hdfs_conf`
+- Local HDFS data dir: `/Users/bytedance/tmp/dj_mac_hdfs_data`
+
+Do not run `docker rm -f dj-arm-hdfs` during normal cleanup. Keep per-test datasets under unique HDFS paths such as `/datasets/<test-name>-<timestamp>` or `/tmp/<test-name>-<timestamp>`, and delete only those paths when needed. Rebuild the shared container only when it is missing, unhealthy, or its mounted Hadoop files are no longer usable.
+
+Check the shared environment before each HDFS e2e:
+
+```bash
+docker ps --filter name=dj-arm-hdfs --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+curl -sS 'http://localhost:9870/webhdfs/v1/?op=GETFILESTATUS&user.name=root'
+```
+
+Check WebHDFS write/read without relying on the container's `hdfs` CLI:
+
+```bash
+test_path="/tmp/dj_hdfs_write_check_$(date +%Y%m%d_%H%M%S)"
+printf ok > /tmp/dj_hdfs_write_check_local
+curl -sS -X PUT "http://localhost:9870/webhdfs/v1${test_path}?op=MKDIRS&user.name=root"
+curl -sS -L -X PUT -T /tmp/dj_hdfs_write_check_local \
+  "http://localhost:9870/webhdfs/v1${test_path}/ok.txt?op=CREATE&overwrite=true&user.name=root"
+curl -sS -L "http://localhost:9870/webhdfs/v1${test_path}/ok.txt?op=OPEN&user.name=root"
+```
+
+On this Mac setup, WebHDFS is the reliable validation path. PyArrow's native HDFS filesystem still requires a local `libhdfs.dylib`; if `pyarrow.fs.FileSystem.from_uri("hdfs://localhost:9000/...")` fails with `Unable to load libhdfs`, treat native HDFS export/copy as blocked by local environment rather than by the shared HDFS service.
+
+### Rebuild Only If The Shared Environment Is Invalid
+
+Use the setup below only when the shared `dj-arm-hdfs` environment is missing or unhealthy. It starts a single-node HDFS inside Docker, writes a few parquet parts, and reads them through the Data-Juicer Ray HDFS loader.
 
 - Prefer a native arm64 Java image on Apple Silicon. The public `apache/hadoop` image may be amd64-only; running Hadoop and Ray together under QEMU can make NameNode/DataNode or Ray workers fail for reasons unrelated to Data-Juicer.
 - Keep all generated files under `/Users/bytedance/tmp` or `/tmp`. Do not commit Hadoop configs, HDFS data directories, parquet parts, or Docker scratch files.
@@ -88,12 +225,12 @@ cat > /Users/bytedance/tmp/dj_mac_hdfs_conf/hdfs-site.xml <<'XML'
 XML
 ```
 
-- Start the disposable HDFS container:
+- Start or rebuild the shared HDFS container. Only remove `dj-arm-hdfs` here after the health check above has shown it is invalid:
 
 ```bash
-docker rm -f dj-mac-hdfs >/dev/null 2>&1 || true
+docker rm -f dj-arm-hdfs >/dev/null 2>&1 || true
 docker pull eclipse-temurin:17-jdk
-docker run -d --name dj-mac-hdfs \
+docker run -d --name dj-arm-hdfs \
   -p 9000:9000 -p 9870:9870 -p 9864:9864 -p 9866:9866 -p 9867:9867 \
   -v /Users/bytedance/tmp/dj_hadoop_libexec:/opt/hadoop:ro \
   -v /Users/bytedance/tmp/dj_mac_hdfs_conf:/etc/hadoop:ro \
@@ -117,7 +254,7 @@ docker run -d --name dj-mac-hdfs \
 - Confirm HDFS health before testing Data-Juicer:
 
 ```bash
-docker exec dj-mac-hdfs bash -lc '
+docker exec dj-arm-hdfs bash -lc '
   export HADOOP_HOME=/opt/hadoop HADOOP_CONF_DIR=/etc/hadoop PATH=/opt/hadoop/bin:$PATH
   jps
   hdfs dfsadmin -report | head -n 40
@@ -143,9 +280,9 @@ pq.write_table(
 )
 PY
 
-docker exec dj-mac-hdfs bash -lc 'rm -rf /tmp/dj_hdfs_parts && mkdir -p /tmp/dj_hdfs_parts'
-docker cp /tmp/dj_hdfs_parts/. dj-mac-hdfs:/tmp/dj_hdfs_parts/
-docker exec dj-mac-hdfs bash -lc '
+docker exec dj-arm-hdfs bash -lc 'rm -rf /tmp/dj_hdfs_parts && mkdir -p /tmp/dj_hdfs_parts'
+docker cp /tmp/dj_hdfs_parts/. dj-arm-hdfs:/tmp/dj_hdfs_parts/
+docker exec dj-arm-hdfs bash -lc '
   export HADOOP_HOME=/opt/hadoop HADOOP_CONF_DIR=/etc/hadoop PATH=/opt/hadoop/bin:$PATH
   hdfs dfs -rm -r -f /datasets/demo >/dev/null 2>&1 || true
   hdfs dfs -mkdir -p /datasets/demo
@@ -191,10 +328,9 @@ ray.shutdown()
 PY
 ```
 
-- Clean up only the resources created for this test:
+- Clean up only per-test resources. Do not remove the shared `dj-arm-hdfs` container unless it is invalid and you are rebuilding it:
 
 ```bash
-docker rm -f dj-mac-hdfs
 ./.venv/bin/ray stop --force || true
 ps -axo pid,ppid,stat,etime,command | grep -i '[r]ay' || true
 ```

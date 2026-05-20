@@ -96,21 +96,10 @@ class TempDirManager:
 
 
 class RayDataCheckpointManager:
-    # Ray Data checkpointing is temporarily unavailable in the current runtime.
-    # Keep the config field parseable, but force the execution entry off.
-    _AVAILABLE = False
-
     def __init__(self, cfg):
         self.cfg = cfg
         self.checkpoint_cfg = getattr(cfg, "ray_data_checkpoint", None)
-        requested_enabled = bool(getattr(self.checkpoint_cfg, "enabled", False))
-        if requested_enabled and not self._AVAILABLE:
-            logger.warning(
-                "Ray Data checkpointing is temporarily unavailable; "
-                "ignoring `ray_data_checkpoint.enabled=True`."
-            )
-            self.checkpoint_cfg.enabled = False
-        self.enabled = requested_enabled and self._AVAILABLE
+        self.enabled = bool(getattr(self.checkpoint_cfg, "enabled", False))
         self.context = None
         self.original_values = {}
 
@@ -181,7 +170,7 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
 
         1. Support Filter, Mapper and Exact Deduplicator operators for now.
         2. Only support loading `.json` files.
-        3. Advanced functions, such as checkpoint, are not supported.
+        3. Ray Data checkpointing is supported when `ray_data_checkpoint.enabled` is true.
 
     """
 
@@ -251,10 +240,18 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         :param skip_return: skip return for API called.
         :return: processed dataset.
         """
+        checkpoint_cfg = getattr(self.cfg, "ray_data_checkpoint", None)
+        ray_data_checkpoint_enabled = bool(getattr(checkpoint_cfg, "enabled", False))
+        if ray_data_checkpoint_enabled:
+            if skip_export:
+                raise ValueError("Ray Data checkpointing requires an export sink; `skip_export=True` is not supported.")
+            self.datasetbuilder.validate_ray_data_checkpoint_support()
+            validate_checkpoint_sink = getattr(self.exporter, "validate_ray_data_checkpoint_sink", None)
+            if callable(validate_checkpoint_sink):
+                validate_checkpoint_sink()
+
         with RayDataCheckpointManager(self.cfg) as ray_data_checkpoint:
             dry_run_plan = bool(getattr(self.cfg, "ray_dry_run_plan", False))
-            if ray_data_checkpoint.enabled and skip_export:
-                raise ValueError("Ray Data checkpointing requires an export sink; `skip_export=True` is not supported.")
 
             # 1. load data
             logger.info("Loading dataset with Ray...")

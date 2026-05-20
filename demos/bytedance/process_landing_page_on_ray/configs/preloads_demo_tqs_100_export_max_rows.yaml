@@ -1,28 +1,62 @@
-project_name: "landing-page-preloads-ray"
+project_name: "landing-page-preloads-tqs-100-export-max-rows-ray"
 executor_type: "ray"
 ray_address: "auto"
 min_common_dep_num_to_combine: 0
-ray_data_checkpoint:
-  enabled: true
-  dir: "hdfs://haruna/ad_base/addrd_core/addrd_stats/ray_checkpoint/landing_page_preloads_1"
-  delete_no_checkpoint_files: true
 
 dataset:
   configs:
     - type: remote
-      source: hdfs
-      path:
-        - "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/site_creative_center_df_stats_daily_sample_v2_chengzi/p_date=20260423/part-00124-cfa2f8b6-9b7a-404b-bb3d-286c2161a222-c000.zstd.parquet"
-        - "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/site_creative_center_df_stats_daily_sample_v2_chengzi/p_date=20260423/part-00123-cfa2f8b6-9b7a-404b-bb3d-286c2161a222-c000.zstd.parquet"
-      override_num_blocks: 600
-      concurrency: 32
-      ray_remote_args:
-        num_cpus: 1
+      source: tqs
+      read_mode: "client_result"
+      max_result_rows: 1000
+      tqs_app_id: "<YOUR_TQS_APP_ID>"
+      tqs_app_key: "<YOUR_TQS_APP_KEY>"
+      user_name: "guohongyu.7"
+      tqs_cluster: "cn"
+      tqs_timeout: 120
+      query: |
+        SELECT
+          CAST(p_date AS STRING) AS p_date,
+          CAST(site_id AS BIGINT) AS site_id,
+          CAST(local_stat_time_day AS STRING) AS local_stat_time_day,
+          CAST(external_url AS STRING) AS external_url,
+          CAST(thumbnail AS STRING) AS thumbnail,
+          CAST(preload_resources AS STRING) AS preload_resources,
+          CAST(page_public_data AS STRING) AS page_public_data,
+          CAST(site_type AS BIGINT) AS site_type,
+          CAST(is_highlight AS BIGINT) AS is_highlight,
+          CAST(cost AS BIGINT) AS cost,
+          CAST(send_count AS BIGINT) AS send_count,
+          CAST(show_count AS BIGINT) AS show_count,
+          CAST(click_count AS BIGINT) AS click_count,
+          CAST(convert_count AS BIGINT) AS convert_count,
+          CAST(ad_id AS BIGINT) AS ad_id,
+          CAST(campaign_id AS BIGINT) AS campaign_id,
+          CAST(advertiser_id AS BIGINT) AS advertiser_id,
+          CAST(customer_id AS BIGINT) AS customer_id,
+          CAST(company_id AS BIGINT) AS company_id,
+          CAST(first_industry_id AS BIGINT) AS first_industry_id,
+          CAST(first_industry_name AS STRING) AS first_industry_name,
+          CAST(second_industry_id AS BIGINT) AS second_industry_id,
+          CAST(second_industry_name AS STRING) AS second_industry_name,
+          CAST(third_industry_id AS BIGINT) AS third_industry_id,
+          CAST(ad_first_industry_id AS BIGINT) AS ad_first_industry_id,
+          CAST(ad_first_industry_name AS STRING) AS ad_first_industry_name,
+          CAST(ad_second_industry_id AS BIGINT) AS ad_second_industry_id,
+          CAST(ad_second_industry_name AS STRING) AS ad_second_industry_name,
+          CAST(ad_third_industry_id AS BIGINT) AS ad_third_industry_id,
+          CAST(ad_third_industry_name AS STRING) AS ad_third_industry_name
+        FROM ad_addrd_stats.site_creative_center_df_stats_daily_sample_v2_chengzi
+        WHERE p_date = '20260423'
+          AND preload_resources is not null and preload_resources != '[]'
 
 export:
   target: "magnus"
-  table_name: "ai_data_forge.ccu.landing_page_chengzi_lance"
+  table_name: "ai_data_forge.ccu.landing_page_chengzi_export_max_rows_e2e"
   operation: "OVERWRITE"
+  max_rows: 10
+  max_rows_mode: "limit"
+  create_table_if_not_exists: true
   partition_columns: ["p_date"]
   partition_values:
     p_date: "20260423"
@@ -113,7 +147,7 @@ process:
         ad_second_industry_name: "string"
         ad_third_industry_id: "int64"
         ad_third_industry_name: "string"
-      num_proc: 128
+      num_proc: 32
   - list_field_flatten_mapper:
       field_key: "images"
       index_key: "__dj_landing_page_image_index"
@@ -152,40 +186,40 @@ process:
         ad_second_industry_name: "string"
         ad_third_industry_id: "int64"
         ad_third_industry_name: "string"
-      num_proc: 128
+      num_proc: 32
   - download_file_mapper:
       download_field: "images"
       save_field: "image_bytes"
       timeout: 2
-      retry_times: 1
+      retry_times: 3
       max_concurrent: 4
       filter_non_url: true
       batch_size: 8
-      num_proc: 192
+      num_proc: 48
       num_cpus: 1
   - image_bytes_prune_mapper:
       image_key: "images"
       image_bytes_key: "image_bytes"
       valid_image_count_key: "valid_image_count"
-      num_proc: 128
+      num_proc: 32
       num_cpus: 1
   - specified_numeric_field_filter:
       field_key: "valid_image_count"
       min_value: 1
-      num_proc: 128
+      num_proc: 32
   - image_bytes_exact_dedup_mapper:
       image_key: "images"
       image_bytes_key: "image_bytes"
       md5_key: "md5"
       valid_image_count_key: "valid_image_count"
-      num_proc: 128
+      num_proc: 32
       num_cpus: 1
   - ray_document_deduplicator:
       text_key: "md5"
       lowercase: false
       ignore_non_character: false
-      dedup_set_num: 16
-      num_proc: 128
+      dedup_set_num: 4
+      num_proc: 32
   - landing_page_image_schema_finalize_mapper:
       image_bytes_key: "image_bytes"
       md5_key: "md5"
@@ -252,4 +286,4 @@ process:
         ad_third_industry_id: "int64"
         ad_third_industry_name: "string"
       batch_size: 32
-      num_proc: 128
+      num_proc: 32

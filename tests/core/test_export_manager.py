@@ -20,7 +20,8 @@ def _register_extension_type_once(extension_type):
 
 pa.register_extension_type = _register_extension_type_once
 
-from data_juicer.core.export_manager import ExportManager
+from data_juicer.core.export_manager import ExportManager, _quota_reserve_batch
+from data_juicer.core.io_utils import _flatten_dotted_options
 from data_juicer.utils.constant import Fields, HashKeys
 
 
@@ -33,6 +34,49 @@ class RayLikeDataset:
 
     def columns(self, *args, **kwargs):
         return self._columns
+
+
+class HFDatasetLike:
+    def __init__(self, rows):
+        self.rows = rows
+        self.selected_range = None
+
+    def __len__(self):
+        return len(self.rows)
+
+    def select(self, row_range):
+        selected_range = list(row_range)
+        selected = HFDatasetLike([self.rows[index] for index in selected_range])
+        selected.selected_range = selected_range
+        return selected
+
+
+class RayLimitDataset(RayLikeDataset):
+    def __init__(self, columns, label="original"):
+        super().__init__(columns)
+        self.label = label
+        self.limited_dataset = None
+        self.limit = MagicMock(side_effect=self._limit)
+
+    def _limit(self, max_rows):
+        self.limited_dataset = RayLimitDataset(self._columns, label=f"limit-{max_rows}")
+        return self.limited_dataset
+
+
+class RayQuotaDataset(RayLikeDataset):
+    def __init__(self, columns):
+        super().__init__(columns)
+        self.map_batches = MagicMock(return_value=self)
+
+
+class RayQuotaUnknownColumnsDataset(RayQuotaDataset):
+    def __init__(self):
+        super().__init__(columns=None)
+
+    def columns(self, *args, **kwargs):
+        if kwargs.get("fetch_if_missing") is False:
+            return None
+        raise AssertionError("quota reservation must not fetch columns after quota mapping")
 
 
 class ExportManagerTest(unittest.TestCase):
@@ -68,6 +112,349 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(manager.export_cfg["type"], "parquet")
         self.assertEqual(manager.export_cfg["extra_args"], {"compression": "snappy"})
 
+    def test_export_max_rows_limits_hf_like_dataset_before_hdfs_export(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.jsonl",
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+        dataset = HFDatasetLike([{"id": 1}, {"id": 2}, {"id": 3}])
+
+        with patch.object(manager, "_export_to_hdfs") as mock_export_to_hdfs:
+            manager.export(dataset)
+
+        exported_dataset = mock_export_to_hdfs.call_args.args[0]
+        self.assertEqual(exported_dataset.selected_range, [0, 1])
+        self.assertEqual(len(exported_dataset), 2)
+
+    @patch("data_juicer.core.export_manager.copy_local_to_uri")
+    def test_non_ray_hdfs_export_passes_webhdfs_filesystem_options(self, mock_copy_local_to_uri):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://localhost:9000/tmp/result.parquet",
+                "type": "parquet",
+                "filesystem": "webhdfs",
+                "webhdfs": {"host": "localhost", "port": 9870, "user": "root"},
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        with patch.object(manager, "_export_via_staging", return_value="/tmp/result.parquet"):
+            manager._export_to_hdfs(dataset=object(), columns=None)
+
+        mock_copy_local_to_uri.assert_called_once_with(
+            "/tmp/result.parquet",
+            "hdfs://localhost:9000/tmp/result.parquet",
+            filesystem="webhdfs",
+            storage_options={"host": "localhost", "port": 9870, "user": "root"},
+        )
+
+    @patch("data_juicer.core.export_manager.RayExporter")
+    @patch("data_juicer.core.export_manager.copy_local_to_uri")
+    def test_ray_hdfs_parquet_export_uses_distributed_writer_not_staging(
+        self,
+        mock_copy_local_to_uri,
+        mock_ray_exporter,
+    ):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+                "filesystem": "pyarrow",
+                "mode": "overwrite",
+                "extra_args": {"max_rows_per_file": 100, "concurrency": 8},
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset(["text"])
+        exporter = MagicMock()
+        mock_ray_exporter.return_value = exporter
+
+        with patch.object(manager, "_export_via_staging") as mock_staging:
+            manager._export_to_hdfs(dataset=dataset, columns=["text"])
+
+        mock_staging.assert_not_called()
+        mock_copy_local_to_uri.assert_not_called()
+        mock_ray_exporter.assert_called_once_with(
+            "hdfs://cluster/path/output_dir",
+            "parquet",
+            0,
+            keep_stats_in_res_ds=False,
+            keep_hashes_in_res_ds=False,
+            filesystem="pyarrow",
+            webhdfs=None,
+            mode="overwrite",
+            max_rows_per_file=100,
+            concurrency=8,
+        )
+        exporter.export.assert_called_once_with(dataset, columns=["text"])
+
+    @patch("data_juicer.core.export_manager.RayExporter")
+    def test_ray_hdfs_jsonl_export_uses_distributed_writer(self, mock_ray_exporter):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_jsonl_dir",
+                "type": "jsonl",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        manager._export_to_hdfs(dataset=RayLikeDataset(["text"]), columns=None)
+
+        mock_ray_exporter.assert_called_once()
+        self.assertEqual(mock_ray_exporter.call_args.args[:3], ("hdfs://cluster/path/output_jsonl_dir", "jsonl", 0))
+
+    def test_ray_hdfs_distributed_export_rejects_file_like_path(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.parquet",
+                "type": "parquet",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(ValueError, "directory path"):
+            manager._export_to_hdfs(dataset=RayLikeDataset(["text"]))
+
+    def test_ray_hdfs_distributed_export_rejects_shard_size(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+                "shard_size": 1024,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(ValueError, "export.shard_size"):
+            manager._export_to_hdfs(dataset=RayLikeDataset(["text"]))
+
+    @patch("data_juicer.core.export_manager.copy_local_to_uri")
+    def test_ray_hdfs_unsupported_format_keeps_staging_export(self, mock_copy_local_to_uri):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.csv",
+                "type": "csv",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with patch.object(manager, "_export_via_staging", return_value="/tmp/result.csv") as mock_staging:
+            manager._export_to_hdfs(dataset=RayLikeDataset(["text"]))
+
+        mock_staging.assert_called_once()
+        mock_copy_local_to_uri.assert_called_once_with(
+            "/tmp/result.csv",
+            "hdfs://cluster/path/result.csv",
+            filesystem=None,
+            storage_options=None,
+        )
+
+    def test_ray_data_checkpoint_requires_distributed_hdfs_sink_for_hdfs_export(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.csv",
+                "type": "csv",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(ValueError, "parquet/jsonl"):
+            manager.validate_ray_data_checkpoint_sink()
+
+    def test_ray_data_checkpoint_warns_when_hdfs_mode_has_limited_cross_job_recovery(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with patch("data_juicer.core.export_manager.logger.warning") as mock_warning:
+            manager.validate_ray_data_checkpoint_sink()
+
+        mock_warning.assert_called_once()
+        self.assertIn("export.mode=error_if_exists", mock_warning.call_args.args[0])
+        self.assertIn("cross-job recovery", mock_warning.call_args.args[0])
+
+    def test_ray_data_checkpoint_does_not_warn_for_hdfs_append_mode(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "jsonl",
+                "mode": "append",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with patch("data_juicer.core.export_manager.logger.warning") as mock_warning:
+            manager.validate_ray_data_checkpoint_sink()
+
+        mock_warning.assert_not_called()
+
+    def test_export_max_rows_limits_ray_dataset_before_hive_export(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hive",
+                "table_name": "db.table_name",
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLimitDataset(["id"])
+
+        manager.export(dataset)
+
+        dataset.limit.assert_called_once_with(2)
+        self.assertIsNotNone(dataset.limited_dataset)
+        dataset.write_hive_table.assert_not_called()
+        dataset.limited_dataset.write_hive_table.assert_called_once_with(table_name="db.table_name")
+
+    @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
+    def test_export_max_rows_limits_ray_dataset_before_magnus_export(self, mock_write_ray_dataset_to_magnus):
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "magnus_conf": {},
+                "max_rows": 2,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLimitDataset(["id"])
+
+        manager.export(dataset)
+
+        dataset.limit.assert_called_once_with(2)
+        self.assertIs(mock_write_ray_dataset_to_magnus.call_args.args[0], dataset.limited_dataset)
+
+    @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
+    def test_export_quota_reservation_maps_ray_batches_before_magnus_export(self, mock_write_ray_dataset_to_magnus):
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "magnus_conf": {},
+                "max_rows": 2,
+                "max_rows_mode": "quota_reservation",
+                "max_rows_quota_batch_size": 4,
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayQuotaDataset(["id"])
+
+        with patch("ray.remote") as mock_ray_remote:
+            actor_cls = MagicMock()
+            actor_handle = object()
+            actor_cls.remote.return_value = actor_handle
+
+            def remote_decorator(**kwargs):
+                self.assertEqual(kwargs, {"num_cpus": 0})
+                return lambda cls: actor_cls
+
+            mock_ray_remote.side_effect = remote_decorator
+
+            manager.export(dataset)
+
+        mock_ray_remote.assert_called_once_with(num_cpus=0)
+        actor_cls.remote.assert_called_once_with(2)
+        dataset.map_batches.assert_called_once()
+        _, kwargs = dataset.map_batches.call_args
+        self.assertIs(kwargs["fn_kwargs"]["quota_actor"], actor_handle)
+        self.assertEqual(kwargs["batch_format"], "pyarrow")
+        self.assertEqual(kwargs["batch_size"], 4)
+        self.assertIs(mock_write_ray_dataset_to_magnus.call_args.args[0], dataset)
+
+    def test_export_quota_reservation_local_export_avoids_post_quota_column_fetch(self):
+        cfg = self._make_cfg(
+            {
+                "target": "local",
+                "path": "./outputs/result.parquet",
+                "type": "parquet",
+                "max_rows": 2,
+                "max_rows_mode": "quota_reservation",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayQuotaUnknownColumnsDataset()
+
+        with patch("ray.remote") as mock_ray_remote:
+            actor_cls = MagicMock()
+            actor_handle = object()
+            actor_cls.remote.return_value = actor_handle
+            mock_ray_remote.side_effect = lambda **kwargs: (lambda cls: actor_cls)
+            manager.file_exporter.export = MagicMock()
+
+            manager.export(dataset)
+
+        dataset.map_batches.assert_called_once()
+        manager.file_exporter.export.assert_called_once_with(dataset, columns=[])
+
+    def test_export_quota_reservation_requires_ray_map_batches(self):
+        cfg = self._make_cfg(
+            {
+                "target": "local",
+                "path": "./outputs/result.jsonl",
+                "max_rows": 2,
+                "max_rows_mode": "quota_reservation",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(RuntimeError, "map_batches"):
+            manager._reserve_quota_for_export(object())
+
+    def test_export_quota_reservation_materializes_reserved_dataset(self):
+        cfg = self._make_cfg(
+            {
+                "target": "local",
+                "path": "./outputs/result.jsonl",
+                "max_rows": 2,
+                "max_rows_mode": "quota_reservation",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayQuotaDataset(["id"])
+        materialized_dataset = object()
+        dataset.materialize = MagicMock(return_value=materialized_dataset)
+
+        with patch("ray.remote") as mock_ray_remote:
+            actor_cls = MagicMock()
+            mock_ray_remote.side_effect = lambda **kwargs: (lambda cls: actor_cls)
+
+            reserved_dataset = manager._reserve_quota_for_export(dataset)
+
+        self.assertIs(reserved_dataset, materialized_dataset)
+        dataset.map_batches.assert_called_once()
+        dataset.materialize.assert_called_once_with()
+
+    def test_quota_reserve_batch_accepts_whole_batch_until_target_is_reached(self):
+        table = pa.Table.from_pylist([{"id": 1}, {"id": 2}])
+        quota_actor = MagicMock()
+        quota_actor.reserve.remote.side_effect = ["accepted", "rejected"]
+
+        with patch("ray.get", side_effect=[True, False]):
+            accepted = _quota_reserve_batch(table, quota_actor=quota_actor)
+            rejected = _quota_reserve_batch(table, quota_actor=quota_actor)
+
+        quota_actor.reserve.remote.assert_any_call(2)
+        self.assertEqual(accepted.num_rows, 2)
+        self.assertEqual(rejected.num_rows, 0)
+        self.assertEqual(rejected.schema, table.schema)
+
     def test_bytedance_magnus_demo_configs_write_lance(self):
         demo_root = os.path.join(os.getcwd(), "demos", "bytedance")
         if not os.path.isdir(demo_root):
@@ -87,7 +474,9 @@ class ExportManagerTest(unittest.TestCase):
                 if export_config.get("target") != "magnus":
                     continue
                 magnus_configs.append(os.path.relpath(path, os.getcwd()))
-                write_options = ((export_config.get("magnus_conf") or {}).get("write_options") or {})
+                write_options = _flatten_dotted_options(
+                    ((export_config.get("magnus_conf") or {}).get("write_options") or {})
+                )
                 if write_options.get("write.format.default") != "lance":
                     missing_lance_configs.append(os.path.relpath(path, os.getcwd()))
 

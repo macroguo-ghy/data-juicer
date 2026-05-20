@@ -227,6 +227,8 @@ dataset:
       format: parquet
       filesystem: pyarrow
       columns: ["text", "label"]
+      limit: 1000
+      skip_zero_row_group_files: true
       override_num_blocks: 128
 ```
 
@@ -236,8 +238,10 @@ dataset:
 | --- | --- | --- | --- |
 | `path` | 是 | 无 | 必须以 `hdfs://` 开头。 |
 | `format` | 否 | `parquet` | Ray HDFS 直读当前只支持 Parquet。 |
-| `filesystem` | 否 | `pyarrow` | 支持 `pyarrow` 或 `webhdfs`。 |
-| `webhdfs` | 否 | `{}` | `filesystem: webhdfs` 时传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
+| `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
+| `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
+| `limit` | 否 | 无 | Ray HDFS 直读 Parquet 后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
+| `skip_zero_row_group_files` | 否 | `true` | 是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |
 | `columns`、`parallelism`、`num_cpus`、`num_gpus`、`memory`、`ray_remote_args`、`tensor_column_schema`、`partition_filter`、`partitioning`、`shuffle`、`include_paths`、`file_extensions`、`concurrency`、`override_num_blocks` | 否 | 无 | 会转发给 Ray Parquet reader 的白名单参数。 |
 
@@ -433,8 +437,10 @@ export:
   target: local
   path: ./outputs/result.jsonl
   type: jsonl
-  shard_size: 0
   in_parallel: false
+  max_rows: null
+  max_rows_mode: limit
+  max_rows_quota_batch_size: null
   extra_args: {}
 ```
 
@@ -445,10 +451,15 @@ export:
 | `target` | 从 `export_path` 推断 | 自动推断 | 导出目标：`local`、`s3`、`hdfs`、`hive`、`lark`、`tos`、`magnus`。 |
 | `path` | `export_path` | 无 | 输出路径。local/s3/hdfs 使用；部分远端目标作为暂存类型推断来源。 |
 | `type` | `export_type` | 从路径后缀推断 | 输出格式。 |
-| `shard_size` | `export_shard_size` | `0` | 分片大小，字节。`0` 表示单文件。 |
 | `in_parallel` | `export_in_parallel` | `false` | 默认模式单文件导出是否并行。 |
+| `max_rows` | 无 | `null` | 控制传给导出 sink 的行数，必须是正整数。 |
+| `max_rows_mode` | 无 | `limit` | `limit`：默认实现，导出行数不超过 `max_rows`，Ray 模式会在写入前应用 `Dataset.limit(max_rows)` 并尽量保留 lazy limit 下推能力。`quota_reservation`：Ray-only，按 pyarrow batch 整批放行直到至少达到 `max_rows`，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 `max_rows`。 |
+| `max_rows_quota_batch_size` | 无 | 算子默认 batch size | 仅 `max_rows_mode: quota_reservation` 生效。batch 越大，actor 调用越少，但超出 `max_rows` 的行数可能越多。 |
+| `shard_size` | `export_shard_size` | `0` | 废弃字段。旧式本地文件导出仍可识别；新配置不要继续使用。Ray HDFS 分布式导出不支持该字段，需要控制文件大小或行数时使用目标 sink 的 `extra_args`。 |
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
+
+`export.max_rows` 只控制传给 sink 的数据规模，不改变写入模式；例如 `OVERWRITE` 仍会覆盖目标，只是写入受控后的数据。`limit` 模式下，Ray limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 `max_rows` 行的上游工作。`quota_reservation` 控制的是进入 sink 输入流的数据，不是写入提交计数器；它会在真正 sink 前增加一次 materialize 屏障，用来避免 Ray 写入前的 schema/sample 动作重复执行带状态的 quota reservation。任务重试或 sink 失败时不提供 exactly-once 计数保证。`ray_collect_real_metrics: true` 不能和 `export.max_rows` 同时配置，因为导出前的 eager `materialize()` / `count()` 会破坏 lazy limit 路径。
 
 导出前，默认会移除中间字段：
 
@@ -492,6 +503,8 @@ Ray 模式支持：`jsonl`、`json`、`parquet`、`csv`、`tfrecords`、`webdata
 
 ## HDFS Export
 
+### 默认模式
+
 ```yaml
 export:
   target: hdfs
@@ -504,6 +517,54 @@ export:
 - 先导出到本地 `work_dir/.io_cache/export/...`。
 - 再通过 PyArrow filesystem 复制到 HDFS。
 - `type` 可显式设置；不设置时依次从 `path` 后缀、默认值推断。
+
+### Ray 分布式模式
+
+Ray 模式下，`parquet` 和 `jsonl` 可以直接由 Ray workers 分布式写入 HDFS 目录，避免先写到 driver 本地再复制到 HDFS。该路径适合大规模输出，也是 `ray_data_checkpoint.enabled: true` 与 HDFS export 配合时的要求。
+
+```yaml
+executor_type: ray
+export:
+  target: hdfs
+  type: parquet
+  path: hdfs://cluster/path/output_dir
+  filesystem: pyarrow
+  mode: error_if_exists
+  extra_args:
+    max_rows_per_file: 10000
+    concurrency: 64
+```
+
+```yaml
+executor_type: ray
+export:
+  target: hdfs
+  type: jsonl
+  path: hdfs://cluster/path/output_dir
+  filesystem: pyarrow
+  mode: error_if_exists
+  extra_args:
+    num_rows_per_file: 10000
+    concurrency: 64
+```
+
+参数：
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `path` | 是 | 无 | 目标 HDFS 目录，必须以 `hdfs://` 开头。Ray 分布式 HDFS export 要求目录路径，不能是 `*.parquet`、`*.json`、`*.jsonl`、`*.csv` 这类文件路径。 |
+| `type` | 否 | 从路径后缀推断，否则 `jsonl` | Ray 分布式 HDFS export 当前支持 `parquet`、`jsonl`。其他格式仍走默认 staging copy 路径；开启 `ray_data_checkpoint` 时会提前报错。 |
+| `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
+| `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
+| `mode` | 否 | `error_if_exists` | 写入模式。`error_if_exists`：目标已存在时失败；`overwrite`：写入前删除已有目标；`append`：直接追加 part 文件，重试或重跑可能产生重复文件。checkpoint 的可启用性不依赖具体 `mode`，但失败后重提任务的恢复语义依赖 `mode`。 |
+| `extra_args` | 否 | `{}` | 传给 Ray writer / datasink 的参数，例如 `concurrency`、`ray_remote_args`、`min_rows_per_file`、`num_rows_per_file`、`max_rows_per_file`。旧版 byted-ray 的 parquet writer 不支持 `max_rows_per_file` 时会兼容映射到 `min_rows_per_file`。JSONL 推荐使用 `num_rows_per_file` 或 `min_rows_per_file`。 |
+
+限制：
+
+- Ray 分布式 HDFS export 不支持 `export.shard_size`；需要控制文件大小或行数时使用 `export.extra_args` 中的 Ray writer 参数。
+- `ray_data_checkpoint.enabled: true` 的硬要求是 Ray 文件 source 到文件 sink 的 lazy 路径；HDFS export 场景需要使用上述 Ray 分布式 `parquet/jsonl` 写入路径。
+- checkpoint 与 `export.mode` 没有硬绑定，但恢复语义不同。`error_if_exists` / `overwrite` 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，`error_if_exists` 可能因输出目录已存在而失败，`overwrite` 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。
+- `mode: append` 才可能保留已经写出的 part 文件，但第一版只提供 at-least-once 语义，不提供 exactly-once；同一次任务重试、用户重跑或局部失败后再次提交都可能产生重复 part。
 
 ## Hive Export
 
@@ -763,8 +824,8 @@ dataset:
   configs:
     - type: remote
       source: lark
-      lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
-      lark_app_id: "cli_a52ccb9c37fbd00c"
+      lark_path: "https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>"
+      lark_app_id: "<lark_app_id>"
       lark_app_secret: "<lark_app_secret>"
       file_extension: csv
 
@@ -775,8 +836,8 @@ process:
 export:
   target: lark
   mode: append
-  lark_path: "https://bytedance.larkoffice.com/sheets/VAN2s7ekUhiUmFtf2TFcpMJInvc?sheet=b53d81"
-  lark_app_id: "cli_a52ccb9c37fbd00c"
+  lark_path: "https://bytedance.larkoffice.com/sheets/<spreadsheet_token>?sheet=<sheet_id>"
+  lark_app_id: "<lark_app_id>"
   lark_app_secret: "<lark_app_secret>"
   type: csv
   skip_header: true

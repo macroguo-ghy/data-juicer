@@ -1,0 +1,38 @@
+# 短剧
+project_name: "ecom-playlet-ray"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+export_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_playlet"
+export_type: "parquet"
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/playlet/20260204"
+      format: "parquet"
+      override_num_blocks: 800
+      skip_zero_row_group_files: true
+
+# TODO: add ecom_playlet_schema_prepare_pipeline.
+#   Notebook equivalent:
+#   - id = "vid-{video_id}".
+#   - extra = JSON of source columns except partition field `p_date`.
+#   - source = "ecom_playlet_raw_data".
+#   - type = "video"; has_audio_in_video = true.
+#
+# TODO: add guldan_video_frames_mapper.
+#   Notebook equivalent:
+#   - split source rows with randomSplit([0.1, 0.9], seed=42).
+#   - fps branch: call Guldan with fps=1 and write `videos`.
+#   - fixed-frame branch: call Guldan with frame_num=10 and write `videos`.
+#   - compute md5 from `videos`.
+#   - drop rows whose `videos` or `md5` is null.
+#
+# TODO: add a Ray branch/union pipeline for fps1 and fix10 paths.
+#   Notebook equivalent:
+#   - fps1 path: 10% sample -> Guldan fps=1 -> md5 -> md5 dedup.
+#   - fix10 path: 90% sample -> Guldan fixed 10 frames -> md5 -> md5 dedup.
+#   - union both dedup result sets before HDFS parquet export.
+process: []
