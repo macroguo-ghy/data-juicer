@@ -22,12 +22,22 @@ class FakeHttpClient:
             "params": params,
             "json_body": json_body,
         })
+        if self.endpoint.endswith("/openapi/dataset/export-to-sheet"):
+            data = {
+                "sheetUrl": "https://bytedance.feishu.cn/sheets/sht-test",
+            }
+        elif self.endpoint.endswith("/openapi/eval/evalsets/sync-from-lance"):
+            data = {
+                "evalSetId": 123,
+            }
+        else:
+            data = {}
         return {
             "ok": True,
             "status_code": 200,
             "data": {
                 "code": 0,
-                "data": {},
+                "data": data,
             },
             "text": None,
             "error": None,
@@ -100,9 +110,10 @@ class AfterExportHookTest(unittest.TestCase):
     def test_adc_result_sync_calls_sheet_and_eval_set_openapis(self):
         run_after_export_hook(self._export_cfg())
 
-        self.assertEqual(len(FakeHttpClient.requests), 2)
+        self.assertEqual(len(FakeHttpClient.requests), 3)
         sheet_request = FakeHttpClient.requests[0]
         eval_request = FakeHttpClient.requests[1]
+        notification_request = FakeHttpClient.requests[2]
 
         self.assertEqual(
             sheet_request["endpoint"],
@@ -148,6 +159,26 @@ class AfterExportHookTest(unittest.TestCase):
                 "state": "state_json",
             },
         })
+        self.assertEqual(
+            notification_request["endpoint"],
+            "https://ai-data-center.bytedance.net/api/openapi/lark/message/template-card/send-to-user",
+        )
+        self.assertEqual(notification_request["headers"], {
+            "Content-Type": "application/json",
+            "User-Account": "wangjianda.667",
+            "x-tt-env": "ppe_sirius3",
+            "x-use-ppe": "1",
+        })
+        self.assertEqual(notification_request["json_body"]["userEmailOrAccount"], "wangjianda.667")
+        self.assertEqual(notification_request["json_body"]["templateId"], "AAqtBYKVfi75b")
+        self.assertEqual(notification_request["json_body"]["templateVariable"], {
+            "title": "数据合成结果同步完成",
+            "sheetStatus": "SUCCESS",
+            "sheetUrl": "https://bytedance.feishu.cn/sheets/sht-test",
+            "evalSetStatus": "SUCCESS",
+            "evalSetId": 123,
+            "spaceId": 1,
+        })
 
     @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FakeHttpClient)
     def test_disabled_hook_is_skipped(self):
@@ -162,7 +193,7 @@ class AfterExportHookTest(unittest.TestCase):
     def test_fail_on_error_false_does_not_raise(self):
         run_after_export_hook(self._export_cfg())
 
-        self.assertEqual(len(FailingHttpClient.requests), 2)
+        self.assertEqual(len(FailingHttpClient.requests), 3)
 
     @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FailingHttpClient)
     def test_fail_on_error_true_raises(self):
@@ -188,6 +219,22 @@ class AfterExportHookTest(unittest.TestCase):
         run_after_export_hook(export_cfg)
 
         self.assertEqual(FakeHttpClient.requests[0]["headers"]["space-id"], "9")
+        notification_request = FakeHttpClient.requests[1]
+        self.assertEqual(notification_request["json_body"]["templateVariable"]["spaceId"], 9)
+
+    @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FailingHttpClient)
+    def test_notification_summarizes_target_failures_without_raising_when_fail_on_error_false(self):
+        run_after_export_hook(self._export_cfg())
+
+        notification_request = FailingHttpClient.requests[2]
+        self.assertEqual(notification_request["json_body"]["templateVariable"], {
+            "title": "数据合成结果同步失败",
+            "sheetStatus": "FAILED",
+            "sheetUrl": "",
+            "evalSetStatus": "FAILED",
+            "evalSetId": "",
+            "spaceId": 1,
+        })
 
 
 if __name__ == "__main__":

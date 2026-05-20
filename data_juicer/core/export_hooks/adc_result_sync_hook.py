@@ -9,6 +9,11 @@ from data_juicer.utils.http_utils import HttpClient
 
 EXPORT_TO_SHEET_PATH = "/openapi/dataset/export-to-sheet"
 SYNC_EVAL_SET_FROM_LANCE_PATH = "/openapi/eval/evalsets/sync-from-lance"
+RESULT_SYNC_NOTIFICATION_PATH = "/openapi/lark/message/template-card/send-to-user"
+RESULT_SYNC_NOTIFICATION_TEMPLATE_ID = "AAqtBYKVfi75b"
+STATUS_SUCCESS = "SUCCESS"
+STATUS_FAILED = "FAILED"
+STATUS_SKIPPED = "SKIPPED"
 
 
 class AdcResultSyncHook:
@@ -33,38 +38,50 @@ class AdcResultSyncHook:
         if not isinstance(targets, list):
             raise ValueError("after_export_hook.sync.targets must be a list")
 
+        sync_results = {}
+        failed_target_types = []
         for target in targets:
             if not isinstance(target, dict):
                 raise ValueError("after_export_hook.sync.targets item must be a dictionary")
             if target.get("enabled", True) is False:
                 continue
+            target_type = target.get("type")
             try:
-                self._sync_target(target)
+                sync_results[target_type] = {
+                    "status": STATUS_SUCCESS,
+                    "data": self._sync_target(target),
+                }
             except Exception as exc:
-                logger.warning("After export hook target failed [{}]: {}", target.get("type"), exc)
-                if self.hook_cfg.get("fail_on_error", False):
-                    raise ValueError(f"After export hook target failed: {target.get('type')}") from exc
+                logger.warning("After export hook target failed [{}]: {}", target_type, exc)
+                failed_target_types.append(target_type)
+                sync_results[target_type] = {
+                    "status": STATUS_FAILED,
+                    "data": {},
+                }
 
-    def _sync_target(self, target: dict[str, Any]) -> None:
+        self._send_result_sync_notification(sync_results)
+        if failed_target_types and self.hook_cfg.get("fail_on_error", False):
+            raise ValueError(f"After export hook target failed: {failed_target_types[0]}")
+
+    def _sync_target(self, target: dict[str, Any]) -> dict[str, Any]:
         target_type = target.get("type")
         if target_type == "sheet":
-            self._sync_sheet(target)
-            return
+            return self._sync_sheet(target)
         if target_type == "eval_set":
-            self._sync_eval_set(target)
-            return
+            return self._sync_eval_set(target)
         raise ValueError(f"Unsupported after_export_hook sync target type: {target_type}")
 
-    def _sync_sheet(self, target: dict[str, Any]) -> None:
+    def _sync_sheet(self, target: dict[str, Any]) -> dict[str, Any]:
         payload = {
             "datasourceType": "lance",
             "datasourceName": self.table_name,
         }
         if target.get("sheetTitle") is not None:
             payload["sheetTitle"] = target.get("sheetTitle")
-        self._post(EXPORT_TO_SHEET_PATH, payload, headers=self._base_headers())
+        result = self._post(EXPORT_TO_SHEET_PATH, payload, headers=self._base_headers())
+        return self._openapi_data(result)
 
-    def _sync_eval_set(self, target: dict[str, Any]) -> None:
+    def _sync_eval_set(self, target: dict[str, Any]) -> dict[str, Any]:
         target_cfg = self._require_dict(target.get("target"), "eval_set.target")
         payload = {
             "source": {
@@ -82,7 +99,49 @@ class AdcResultSyncHook:
         space_id = target_cfg.get("spaceId", self.ctx.get("spaceId"))
         headers = self._base_headers()
         headers["space-id"] = str(self._require_value(space_id, "ctx.spaceId or target.spaceId"))
-        self._post(SYNC_EVAL_SET_FROM_LANCE_PATH, payload, headers=headers)
+        result = self._post(SYNC_EVAL_SET_FROM_LANCE_PATH, payload, headers=headers)
+        data = self._openapi_data(result)
+        data.setdefault("spaceId", space_id)
+        return data
+
+    def _send_result_sync_notification(self, sync_results: dict[str, dict[str, Any]]) -> None:
+        try:
+            self._post(
+                RESULT_SYNC_NOTIFICATION_PATH,
+                {
+                    "userEmailOrAccount": self.user_account,
+                    "templateId": RESULT_SYNC_NOTIFICATION_TEMPLATE_ID,
+                    "templateVariable": self._build_notification_variable(sync_results),
+                },
+                headers=self._base_headers(),
+            )
+        except Exception as exc:
+            logger.warning("Failed to send after export result sync notification: {}", exc)
+
+    def _build_notification_variable(self, sync_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        sheet_result = sync_results.get("sheet", {})
+        eval_set_result = sync_results.get("eval_set", {})
+        sheet_data = sheet_result.get("data") or {}
+        eval_set_data = eval_set_result.get("data") or {}
+        sheet_status = sheet_result.get("status", STATUS_SKIPPED)
+        eval_set_status = eval_set_result.get("status", STATUS_SKIPPED)
+        return {
+            "title": self._notification_title([result.get("status") for result in sync_results.values()]),
+            "sheetStatus": sheet_status,
+            "sheetUrl": sheet_data.get("sheetUrl") or sheet_data.get("url") or "",
+            "evalSetStatus": eval_set_status,
+            "evalSetId": eval_set_data.get("evalSetId") or eval_set_data.get("id") or "",
+            "spaceId": eval_set_data.get("spaceId") or self.ctx.get("spaceId") or "",
+        }
+
+    @staticmethod
+    def _notification_title(statuses: list[str]) -> str:
+        statuses = set(statuses)
+        if STATUS_FAILED not in statuses:
+            return "数据合成结果同步完成"
+        if STATUS_SUCCESS in statuses:
+            return "数据合成结果同步部分失败"
+        return "数据合成结果同步失败"
 
     def _post(self, path: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         client = HttpClient(
@@ -96,6 +155,14 @@ class AdcResultSyncHook:
             raise ValueError(f"ADC result sync request failed: {result['error']}")
         self._validate_openapi_result(result.get("data"))
         return result
+
+    @staticmethod
+    def _openapi_data(result: dict[str, Any]) -> dict[str, Any]:
+        envelope = result.get("data")
+        if not isinstance(envelope, dict):
+            return {}
+        data = envelope.get("data")
+        return data if isinstance(data, dict) else {}
 
     def _base_headers(self) -> dict[str, str]:
         headers = {
