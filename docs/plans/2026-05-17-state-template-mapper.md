@@ -150,5 +150,5 @@ Focused tests:
 Broader ADC mapper regression:
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper tests.ops.mapper.test_llm_inference_mapper tests.ops.mapper.test_ad_ai_data_center_http_mapper tests.ops.mapper.test_python_script_mapper tests.ops.mapper.test_prepare_record_key_mapper tests.ops.mapper.test_external_eval_data_import_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper tests.ops.mapper.test_llm_inference_mapper tests.ops.mapper.test_http_mapper tests.ops.mapper.test_python_script_mapper tests.ops.mapper.test_prepare_record_key_mapper tests.ops.mapper.test_external_eval_data_import_mapper
 ```

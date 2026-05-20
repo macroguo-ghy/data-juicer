@@ -32,7 +32,7 @@ class TestCardNotificationTest(unittest.TestCase):
             "taskId": 30001,
             "taskVersion": 1,
             "operatorIndex": 0,
-            "operatorName": "ad_ai_data_center_http_mapper",
+            "operatorName": "http_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
         }
@@ -51,7 +51,7 @@ class TestCardNotificationTest(unittest.TestCase):
         result = send_test_card_notification(
             template_id="AAqt1lQ72dVxK",
             template_variable={
-                "operator": "ad_ai_data_center_http_mapper",
+                "operator": "http_mapper",
                 "stage": "开始",
                 "content": "{}",
                 "errMsg": "",
@@ -79,7 +79,7 @@ class TestCardNotificationTest(unittest.TestCase):
                     "userEmailOrAccount": "wangjianda.667",
                     "templateId": "AAqt1lQ72dVxK",
                     "templateVariable": {
-                        "operator": "ad_ai_data_center_http_mapper",
+                        "operator": "http_mapper",
                         "stage": "开始",
                         "content": "{}",
                         "errMsg": "",

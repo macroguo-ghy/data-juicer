@@ -23,7 +23,7 @@ HttpClient
 `HttpClient` 作为稳定复用层，供后续算子使用：
 
 ```text
-AdAiDataCenterHttpMapper
+HttpMapper
         |
         v
 HttpClient
@@ -253,7 +253,7 @@ endpoint = ctx["openapiBaseUrl"].rstrip("/") + "/openapi/cloud-doc/sheets/all-pl
 
 ### 8.1 通用 HTTP 算子
 
-`ad_ai_data_center_http_mapper` 只负责 sample 字段映射：
+`http_mapper` 只负责 sample 字段映射：
 
 ```python
 payload = {
@@ -331,7 +331,7 @@ tests/utils/test_http_utils.py
 
 ### 9.2 后续算子单测
 
-后续 `ad_ai_data_center_http_mapper` 的测试只验证字段映射：
+后续 `http_mapper` 的测试只验证字段映射：
 
 - `input_fields` 是否进入 payload。
 - 成功响应是否写入 `output_field`。
@@ -343,7 +343,7 @@ tests/utils/test_http_utils.py
 
 ```bash
 RUN_REAL_AD_AI_DATA_CENTER_HTTP_TEST=1 ./.venv/bin/python -m unittest \
-  tests.ops.mapper.test_ad_ai_data_center_http_mapper.AdAiDataCenterHttpMapperTest.test_dimension_and_metric_curl_sends_real_http_request_without_cookie
+  tests.ops.mapper.test_http_mapper.HttpMapperTest.test_dimension_and_metric_curl_sends_real_http_request_without_cookie
 
 RUN_REAL_EXTERNAL_EVAL_DATA_IMPORT_TEST=1 ./.venv/bin/python -m unittest \
   tests.ops.mapper.test_external_eval_data_import_mapper.ExternalEvalDataImportMapperTest.test_lark_wiki_doc_url_sends_real_request_and_processes_result
@@ -361,8 +361,8 @@ tests/utils/test_http_utils.py
 后续再新增：
 
 ```text
-data_juicer/ops/mapper/ad_ai_data_center/ad_ai_data_center_http_mapper.py
-tests/ops/mapper/test_ad_ai_data_center_http_mapper.py
+data_juicer/ops/mapper/ad_ai_data_center/http_mapper.py
+tests/ops/mapper/test_http_mapper.py
 ```
 
 LLM 和 Code 专用算子等协议稳定后再建设。

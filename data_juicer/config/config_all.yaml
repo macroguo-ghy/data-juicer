@@ -461,8 +461,6 @@ process:
       model_params: {}                                        # Parameters for initializing the API model.
       sampling_params: {}                                     # Extra parameters passed to the API call.
   - punctuation_normalization_mapper:                       # normalize unicode punctuations to English punctuations.
-  - ad_test_processing_timestamp_mapper:                    # Add the current processing timestamp to each sample.
-      field_name: 'processing_timestamp'                       # Field name used to store the Unix timestamp.
   - python_file_mapper:                                     # executing Python lambda function defined in a file.
       file_path: ''                                           # The path to the Python file containing the function to be executed.
       function_name: 'process_single'                         # The name of the function defined in the file to be executed.
