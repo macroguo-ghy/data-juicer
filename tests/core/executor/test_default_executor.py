@@ -1,5 +1,8 @@
 import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 from datasets import load_dataset
 from data_juicer.core import DefaultExecutor, NestedDataset
 from data_juicer.config import init_configs
@@ -108,6 +111,80 @@ class DefaultExecutorTest(DataJuicerTestCaseBase):
         executor = DefaultExecutor(cfg)
         with self.assertRaises(ValueError):
             executor.sample_data(sample_algo='unknown_algo')
+
+
+class DefaultExecutorAfterExportHookTest(unittest.TestCase):
+    def _build_executor(self, tmp_dir):
+        executor = DefaultExecutor.__new__(DefaultExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'noop': {}}],
+            op_fusion=False,
+            adaptive_batch_size=False,
+            open_tracer=False,
+            open_monitor=False,
+            use_cache=False,
+            cache_compress=None,
+            export_path=os.path.join(tmp_dir, 'unused.jsonl'),
+            export={
+                "target": "magnus",
+                "table_name": "zsy_test.default.output_table",
+                "after_export_hook": {
+                    "enabled": True,
+                },
+            },
+            dataset=None,
+            dataset_path=None,
+        )
+        executor.work_dir = tmp_dir
+        executor.executor_type = 'default'
+        executor.adapter = MagicMock()
+        executor.exporter = SimpleNamespace(export=MagicMock())
+        executor.ckpt_manager = None
+        executor.pipeline_dag = SimpleNamespace(nodes=[object()], edges=[], parallel_groups=[])
+        executor.log_job_start = MagicMock()
+        executor._initialize_dag_execution = MagicMock()
+        executor._pre_execute_operations_with_dag_monitoring = MagicMock()
+        executor._post_execute_operations_with_dag_monitoring = MagicMock()
+        executor.log_job_complete = MagicMock()
+        return executor
+
+    def test_run_calls_after_export_hook_after_successful_export(self):
+        class FakeDataset:
+            def process(self, ops, **kwargs):
+                return self
+
+        tmp_dir = 'tmp/test_default_executor_after_export_hook/'
+        os.makedirs(tmp_dir, exist_ok=True)
+        executor = self._build_executor(tmp_dir)
+        dataset = FakeDataset()
+
+        with (
+            patch('data_juicer.core.executor.default_executor.load_ops', return_value=[]),
+            patch('data_juicer.core.executor.default_executor.run_after_export_hook') as mock_hook,
+        ):
+            result = executor.run(dataset=dataset)
+
+        self.assertIs(result, dataset)
+        executor.exporter.export.assert_called_once_with(dataset)
+        mock_hook.assert_called_once_with(executor.cfg.export)
+
+    def test_run_does_not_call_after_export_hook_when_export_is_skipped(self):
+        class FakeDataset:
+            def process(self, ops, **kwargs):
+                return self
+
+        tmp_dir = 'tmp/test_default_executor_after_export_hook/'
+        os.makedirs(tmp_dir, exist_ok=True)
+        executor = self._build_executor(tmp_dir)
+
+        with (
+            patch('data_juicer.core.executor.default_executor.load_ops', return_value=[]),
+            patch('data_juicer.core.executor.default_executor.run_after_export_hook') as mock_hook,
+        ):
+            executor.run(dataset=FakeDataset(), skip_export=True)
+
+        executor.exporter.export.assert_not_called()
+        mock_hook.assert_not_called()
 
 
 if __name__ == '__main__':

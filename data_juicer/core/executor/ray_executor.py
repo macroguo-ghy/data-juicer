@@ -13,6 +13,7 @@ from data_juicer.core.data.ray_dataset import RayDataset
 from data_juicer.core.executor import ExecutorBase
 from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin
+from data_juicer.core.export_hooks import run_after_export_hook
 from data_juicer.core.export_manager import ExportManager
 from data_juicer.core.data.ray_dataset import get_configured_ray_columns
 from data_juicer.core.io_utils import build_arrow_schema_from_config
@@ -318,7 +319,10 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
                     duration = time.time() - start_time
                     output_rows = None
                 else:
-                    dataset = dataset.process(ops, tracer=self.tracer)
+                    process_kwargs = {"tracer": self.tracer}
+                    if getattr(self.cfg, "ray_materialize_after_each_op", False):
+                        process_kwargs["materialize_after_each_op"] = True
+                    dataset = dataset.process(ops, **process_kwargs)
 
                     collect_real_metrics = getattr(self.cfg, "ray_collect_real_metrics", False)
                     if ray_data_checkpoint.enabled:
@@ -356,6 +360,7 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
                 if not skip_export and not dry_run_plan:
                     logger.info("Exporting dataset to disk...")
                     self.exporter.export(dataset.data, columns=columns)
+                    run_after_export_hook(getattr(self.cfg, "export", None))
                 tend = time.time()
                 logger.info(f"All Ops are done in {tend - tstart:.3f}s.")
 

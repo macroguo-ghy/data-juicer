@@ -654,6 +654,14 @@ def build_base_parser() -> ArgumentParser:
         "default to preserve Ray Data lazy streaming execution for large datasets.",
     )
     parser.add_argument(
+        "--ray_materialize_after_each_op",
+        type=bool,
+        default=False,
+        help="Whether RayExecutor should materialize the Ray Dataset after each "
+        "operator and call the operator after_operator_finished hook. Disabled "
+        "by default to preserve Ray Data lazy pipeline optimization.",
+    )
+    parser.add_argument(
         "--ray_dry_run_plan",
         type=bool,
         default=False,
