@@ -3,6 +3,7 @@ from datasets import Dataset, DatasetDict
 from datasets.formatting.formatting import LazyBatch
 from data_juicer.core.data import NestedDataset, wrap_func_with_nested_access
 from data_juicer.core.data.dj_dataset import nested_obj_factory, NestedDatasetDict, NestedQueryDict
+from data_juicer.ops import Mapper
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
 
@@ -130,6 +131,87 @@ class TestNestedDataset(DataJuicerTestCaseBase):
         texts = self.dataset.get_column('text', k=2)
         self.assertEqual(texts[0], 'Hello')
         self.assertEqual(texts[1], 'World')
+
+    def test_process_calls_before_hook_once_per_operator(self):
+        events = []
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def before_operator_started(self, dataset=None, context=None):
+                events.append(("before", self._name, context["executor_type"]))
+
+            def process_single(self, sample):
+                events.append(("process", sample["text"]))
+                return sample
+
+        dataset = NestedDataset(Dataset.from_list([{"text": "hello"}]))
+
+        dataset.process([HookMapper(auto_op_parallelism=False)], open_monitor=False)
+
+        self.assertEqual(events, [("before", "hook_mapper", "local"), ("process", "hello")])
+
+    def test_process_calls_after_hook_once_after_operator_finishes(self):
+        events = []
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                events.append(("process", sample["text"]))
+                return sample
+
+            def after_operator_finished(self, dataset=None, context=None, error=None):
+                events.append(("after", self._name, context["executor_type"], error))
+
+        dataset = NestedDataset(Dataset.from_list([{"text": "hello"}]))
+
+        dataset.process([HookMapper(auto_op_parallelism=False)], open_monitor=False)
+
+        self.assertEqual(events, [("process", "hello"), ("after", "hook_mapper", "local", None)])
+
+    def test_process_calls_after_hook_with_error_when_operator_fails(self):
+        events = []
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                events.append(("process", sample["text"]))
+                raise RuntimeError("process failed")
+
+            def after_operator_finished(self, dataset=None, context=None, error=None):
+                events.append(("after", context["executor_type"], str(error)))
+
+        dataset = NestedDataset(Dataset.from_list([{"text": "hello"}]))
+
+        with self.assertRaises(SystemExit):
+            dataset.process([HookMapper(auto_op_parallelism=False)], open_monitor=False)
+
+        self.assertEqual(events[0], ("process", "hello"))
+        self.assertEqual(events[1][0:2], ("after", "local"))
+        self.assertIn("process failed", events[1][2])
+
+    def test_process_preserves_operator_failure_when_after_hook_fails(self):
+        events = []
+
+        class HookMapper(Mapper):
+            _name = "hook_mapper"
+
+            def process_single(self, sample):
+                events.append("process")
+                raise RuntimeError("process failed")
+
+            def after_operator_finished(self, dataset=None, context=None, error=None):
+                events.append("after")
+                raise RuntimeError("hook failed")
+
+        dataset = NestedDataset(Dataset.from_list([{"text": "hello"}]))
+
+        with self.assertRaises(SystemExit):
+            dataset.process([HookMapper(auto_op_parallelism=False)], open_monitor=False)
+
+        self.assertEqual(events, ["process", "after"])
 
     def test_get(self):
         """Test get method for NestedDataset"""

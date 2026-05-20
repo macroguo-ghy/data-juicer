@@ -13,6 +13,7 @@ from data_juicer.core.data.dataset_builder import DatasetBuilder
 from data_juicer.core.executor import ExecutorBase
 from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin
+from data_juicer.core.export_hooks import run_after_export_hook
 from data_juicer.core.export_manager import ExportManager
 from data_juicer.core.tracer import Tracer
 from data_juicer.ops import load_ops
@@ -206,6 +207,7 @@ class DefaultExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         if not skip_export:
             logger.info("Exporting dataset to disk...")
             self.exporter.export(dataset)
+            run_after_export_hook(getattr(self.cfg, "export", None))
         # compress the last dataset after exporting
         if self.cfg.use_cache and self.cfg.cache_compress:
             from data_juicer.utils.compress import compress
