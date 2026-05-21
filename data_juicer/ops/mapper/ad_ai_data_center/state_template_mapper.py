@@ -15,6 +15,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "state_template_mapper"
+OP_DISPLAY_NAME = "State 模板生成"
 CONFIG_PAGE_KEY = "state_template_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
