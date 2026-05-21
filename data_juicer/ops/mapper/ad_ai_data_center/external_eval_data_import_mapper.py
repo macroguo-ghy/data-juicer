@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import add_record_log_id_header
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
@@ -72,7 +73,7 @@ class ExternalEvalDataImportMapper(Mapper):
         ctx = self._get_ctx()
         user_account = self._get_ctx_required_value(ctx, "userAccount")
         endpoint = self._build_openapi_url(ctx, CLOUD_DOC_ALL_PLAIN_VALUES_PATH)
-        sheets = self._load_sheets(endpoint, user_account)
+        sheets = self._load_sheets(endpoint, user_account, sample)
         parsed_data = self._parse_eval_data(sheets)
         context = {
             "data_type": self.data_type,
@@ -83,16 +84,18 @@ class ExternalEvalDataImportMapper(Mapper):
         sample[self.output_field] = result
         return sample
 
-    def _load_sheets(self, endpoint: str, user_account: str) -> list[dict[str, Any]]:
+    def _load_sheets(self, endpoint: str, user_account: str, sample: dict[str, Any]) -> list[dict[str, Any]]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "user-account": user_account,
+        }
+        add_record_log_id_header(headers, sample)
         client = HttpClient(
             endpoint=endpoint,
             method="POST",
             timeout=self.timeout,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "user-account": user_account,
-            },
+            headers=headers,
         )
         result = client.request(json_body={"docUrl": self.sheet_url})
         if not result["ok"]:

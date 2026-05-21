@@ -4,6 +4,7 @@ import json
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import add_record_log_id_header
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
@@ -82,7 +83,7 @@ class HttpMapper(Mapper):
                     for field in self.input_fields
                 }
             }
-            result = self._build_client(ctx).request(json_body=payload)
+            result = self._build_client(ctx, sample).request(json_body=payload)
             if result["ok"]:
                 sample[self.output_field] = self._stringify_result_value(
                     result["data"] if result["data"] is not None else result["text"]
@@ -133,9 +134,10 @@ class HttpMapper(Mapper):
         except Exception as exc:
             logger.warning("Failed to send test card notification: {}", exc)
 
-    def _build_client(self, ctx):
+    def _build_client(self, ctx, sample=None):
         headers = dict(self.headers)
         headers["user-account"] = self._get_user_account(ctx)
+        add_record_log_id_header(headers, sample)
         return HttpClient(
             endpoint=self.endpoint,
             method=self.method,

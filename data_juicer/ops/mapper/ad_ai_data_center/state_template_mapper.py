@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import add_record_log_id_header
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
@@ -63,7 +64,7 @@ class StateTemplateMapper(Mapper):
         record_started_at = current_time_millis()
         input_sample = copy.deepcopy(sample)
         try:
-            state_template = self._get_state_template(ctx)
+            state_template = self._get_state_template(ctx, sample)
             sample[self.output_field] = state_template
         except Exception as exc:
             self._report_record_failure(
@@ -97,16 +98,16 @@ class StateTemplateMapper(Mapper):
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
 
-    def _get_state_template(self, ctx: dict[str, Any]) -> str:
+    def _get_state_template(self, ctx: dict[str, Any], sample: dict[str, Any]) -> str:
         if self._state_template_cache is None:
-            self._state_template_cache = self._generate_state_template(ctx)
+            self._state_template_cache = self._generate_state_template(ctx, sample)
         return self._state_template_cache
 
-    def _generate_state_template(self, ctx: dict[str, Any]) -> str:
+    def _generate_state_template(self, ctx: dict[str, Any], sample: dict[str, Any]) -> str:
         client = HttpClient(
             endpoint=self._build_openapi_url(ctx, GENERATE_JSON_PATH),
             method="POST",
-            headers=self._build_headers(ctx),
+            headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
         )
         result = client.request(

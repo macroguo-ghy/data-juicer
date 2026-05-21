@@ -13,6 +13,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper imp
     OP_NAME,
     StateMetricCalculatorMapper,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 from data_juicer.utils.operator_execution_callback_utils import RECORD_KEY_FIELD
 
 
@@ -199,6 +200,7 @@ process:
         dataset = Dataset.from_list([
             {
                 RECORD_KEY_FIELD: "record-1",
+                ADC_LOG_ID_FIELD: "log-001",
                 "material_id": "1854168911595796",
                 "state": {
                     "101": 0.41,
@@ -231,6 +233,7 @@ process:
                 "user-account": "wangjianda.667",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
+                "x-tt-logid": "log-001",
             },
             timeout=30.0,
         )

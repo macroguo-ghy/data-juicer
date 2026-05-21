@@ -8,6 +8,10 @@ from enum import IntEnum
 from typing import Any
 
 from data_juicer.utils.http_utils import HttpClient
+from data_juicer.utils.adc_record_context import (
+    ADC_LOG_ID_FIELD,
+    TT_LOG_ID_HEADER,
+)
 
 OPERATOR_EXECUTION_API_PREFIX = "/openapi/synthesis/operator-execution"
 RECORD_KEY_FIELD = "__adc_record_key"
@@ -159,7 +163,11 @@ class OperatorExecutionCallbackClient:
         self._add_optional_value(payload, "properties", properties)
         self._add_optional_value(payload, "startedAt", started_at)
         self._add_optional_value(payload, "finishedAt", finished_at)
-        return self._post("record", payload)
+        return self._post(
+            "record",
+            payload,
+            record_log_id=self._extract_record_log_id(input_data, output_data),
+        )
 
     def failed(
         self,
@@ -192,11 +200,16 @@ class OperatorExecutionCallbackClient:
         self._add_optional_value(payload, "properties", properties)
         return self._post("finalize", payload)
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        record_log_id: Any | None = None,
+    ) -> dict[str, Any]:
         client = HttpClient(
             endpoint=self._build_url(path),
             method="POST",
-            headers=self._build_headers(),
+            headers=self._build_headers(record_log_id=record_log_id),
             timeout=self.timeout,
         )
         result = client.request(json_body=payload)
@@ -208,7 +221,7 @@ class OperatorExecutionCallbackClient:
     def _build_url(self, path: str) -> str:
         return f"{self.api_base.rstrip('/')}/{OPERATOR_EXECUTION_API_PREFIX.strip('/')}/{path.lstrip('/')}"
 
-    def _build_headers(self) -> dict[str, str]:
+    def _build_headers(self, record_log_id: Any | None = None) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "user-account": self.user_account,
@@ -217,7 +230,16 @@ class OperatorExecutionCallbackClient:
             value = self.ctx.get(key)
             if value:
                 headers[key] = str(value)
+        if record_log_id not in (None, ""):
+            headers[TT_LOG_ID_HEADER] = str(record_log_id)
         return headers
+
+    @staticmethod
+    def _extract_record_log_id(*values: Any) -> Any | None:
+        for value in values:
+            if isinstance(value, dict) and value.get(ADC_LOG_ID_FIELD) not in (None, ""):
+                return value[ADC_LOG_ID_FIELD]
+        return None
 
     def _get_ctx_required_value(self, key: str) -> Any:
         if not isinstance(self.ctx, dict) or self.ctx.get(key) in (None, ""):

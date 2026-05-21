@@ -14,6 +14,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.http_mapper import (
     NEED_CTX,
     RECORD_KEY_FIELD,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 
 
 class FakeHttpClient:
@@ -170,6 +171,7 @@ process:
             "prompt": "hi",
             "extra": "keep",
             RECORD_KEY_FIELD: "record-1",
+            ADC_LOG_ID_FIELD: "log-001",
         }])
         op = HttpMapper(
             endpoint="http://example.test/invoke",
@@ -188,6 +190,7 @@ process:
             headers={
                 "X-Test": "1",
                 "user-account": "tester@example.com",
+                "x-tt-logid": "log-001",
             },
             timeout=30.0,
         )
@@ -206,6 +209,7 @@ process:
                 "prompt": "hi",
                 "extra": "keep",
                 RECORD_KEY_FIELD: "record-1",
+                ADC_LOG_ID_FIELD: "log-001",
             },
             output_data=result[0],
             started_at=ANY,
