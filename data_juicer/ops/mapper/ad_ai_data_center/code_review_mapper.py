@@ -16,6 +16,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "code_review_mapper"
+OP_DISPLAY_NAME = "代码审核"
 CONFIG_PAGE_KEY = "code_review_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"

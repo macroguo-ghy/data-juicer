@@ -13,6 +13,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "http_mapper"
+OP_DISPLAY_NAME = "HTTP 请求"
 CONFIG_PAGE_KEY = "adAiDataCenterHttp"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"

@@ -13,6 +13,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "external_eval_data_import_mapper"
+OP_DISPLAY_NAME = "导入外部评测数据"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
 CLOUD_DOC_ALL_PLAIN_VALUES_PATH = "/openapi/cloud-doc/sheets/all-plain-values"

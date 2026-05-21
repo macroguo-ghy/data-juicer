@@ -154,6 +154,32 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         self.assertEqual(list(result.keys()), [RECORD_KEY_FIELD, "query", "answer"])
         self.assertEqual(result[RECORD_KEY_FIELD], "existing-key")
 
+    def test_reuses_source_field_as_record_key(self):
+        op = PrepareRecordKeyMapper(
+            source_field="questions_id",
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+        sample = {
+            "questions_id": 1854168911595796,
+            "query": "hello",
+        }
+
+        result = op.process_single(sample)
+
+        self.assertEqual(list(result.keys())[0], RECORD_KEY_FIELD)
+        self.assertEqual(result[RECORD_KEY_FIELD], "1854168911595796")
+        self.assertEqual(result["questions_id"], 1854168911595796)
+
+    def test_reuse_source_field_rejects_missing_or_empty_value(self):
+        op = PrepareRecordKeyMapper(source_field="questions_id", ctx=self._ctx())
+
+        with self.assertRaisesRegex(ValueError, "sample.questions_id must be provided"):
+            op.process_single({"query": "hello"})
+
+        with self.assertRaisesRegex(ValueError, "sample.questions_id must be provided"):
+            op.process_single({"questions_id": ""})
+
     def test_preserves_existing_record_key_by_default(self):
         op = PrepareRecordKeyMapper(source_fields=["query"], ctx=self._ctx())
         sample = {
@@ -327,6 +353,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
 
         self.mock_callback.start.assert_called_once_with(
             operator_config={
+                "source_field": None,
                 "source_fields": ["query"],
                 "overwrite": False,
             }
@@ -369,6 +396,7 @@ dataset_path: /private/tmp/not-used.jsonl
 export_path: /private/tmp/out.jsonl
 process:
   - prepare_record_key_mapper:
+      source_field: questions_id
       source_fields:
         - query
         - answer
@@ -398,6 +426,7 @@ process:
         self.assertEqual(OP_NAME, "prepare_record_key_mapper")
         self.assertEqual(NEED_CTX, True)
         self.assertIsInstance(ops[0], PrepareRecordKeyMapper)
+        self.assertEqual(ops[0].source_field, "questions_id")
         self.assertEqual(ops[0].ctx["operatorName"], "prepare_record_key_mapper")
 
 

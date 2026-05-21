@@ -19,6 +19,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "prepare_record_key_mapper"
+OP_DISPLAY_NAME = "准备记录唯一键"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
 INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
@@ -31,6 +32,7 @@ class PrepareRecordKeyMapper(Mapper):
 
     def __init__(
         self,
+        source_field: str | None = None,
         source_fields: list[str] | None = None,
         overwrite: bool = False,
         ctx: dict | None = None,
@@ -40,6 +42,8 @@ class PrepareRecordKeyMapper(Mapper):
         """
         Initialization method.
 
+        :param source_field: optional sample field whose value is reused as
+            the record key. If set, this takes precedence over source_fields.
         :param source_fields: optional fields used to build the record key.
             If empty, all non-internal sample fields are used.
         :param overwrite: whether to overwrite an existing record key.
@@ -48,6 +52,7 @@ class PrepareRecordKeyMapper(Mapper):
         :param kwargs: extra args.
         """
         super().__init__(*args, **kwargs)
+        self.source_field = source_field
         self.source_fields = list(source_fields or [])
         self.overwrite = overwrite
         self.ctx = ctx
@@ -60,8 +65,8 @@ class PrepareRecordKeyMapper(Mapper):
             if not self.overwrite and sample.get(RECORD_KEY_FIELD):
                 output_sample = self._put_record_key_first(sample, sample[RECORD_KEY_FIELD])
             else:
-                source = self._build_source(sample)
-                output_sample = self._put_record_key_first(sample, self._stable_hash(source))
+                record_key = self._build_record_key(sample)
+                output_sample = self._put_record_key_first(sample, record_key)
         except Exception as exc:
             self._report_record_failure(
                 locals().get("original_sample", sample),
@@ -124,12 +129,22 @@ class PrepareRecordKeyMapper(Mapper):
             callback_client = OperatorExecutionCallbackClient(self.ctx)
             callback_client.start(
                 operator_config={
+                    "source_field": self.source_field,
                     "source_fields": self.source_fields,
                     "overwrite": self.overwrite,
                 }
             )
             self._operator_execution_callback_client = callback_client
         return self._operator_execution_callback_client
+
+    def _build_record_key(self, sample: dict[str, Any]) -> str:
+        if self.source_field:
+            value = sample.get(self.source_field)
+            if value in (None, ""):
+                raise ValueError(f"sample.{self.source_field} must be provided")
+            return str(value)
+        source = self._build_source(sample)
+        return self._stable_hash(source)
 
     def _build_source(self, sample: dict[str, Any]):
         if self.source_fields:

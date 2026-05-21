@@ -16,6 +16,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "python_script_mapper"
+OP_DISPLAY_NAME = "Python 脚本处理"
 CONFIG_PAGE_KEY = "python_script_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"

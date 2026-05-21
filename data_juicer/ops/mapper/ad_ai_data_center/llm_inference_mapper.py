@@ -18,6 +18,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "llm_inference_mapper"
+OP_DISPLAY_NAME = "LLM 推理"
 CONFIG_PAGE_KEY = "llm_state_generator"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"

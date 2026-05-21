@@ -17,6 +17,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 
 OP_NAME = "state_metric_calculator"
+OP_DISPLAY_NAME = "State 指标计算"
 CONFIG_PAGE_KEY = "state_metric_calculator"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
