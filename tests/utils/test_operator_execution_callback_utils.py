@@ -8,6 +8,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     OperatorExecutionStatus,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 
 
 class FakeHttpClient:
@@ -221,6 +222,67 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 }
             }],
         )
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_passes_optional_record_log_id_header(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            input_data={
+                "text": "input",
+                ADC_LOG_ID_FIELD: "log-001",
+            },
+            output_data={"text": "output"},
+        )
+
+        mock_client_cls.assert_called_once_with(
+            endpoint=(
+                "https://ai-data-center.bytedance.net/api"
+                "/openapi/synthesis/operator-execution/record"
+            ),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "user-account": "wangjianda.667",
+                "x-tt-env": "ppe_sirius2",
+                "x-use-ppe": "1",
+                "x-tt-logid": "log-001",
+            },
+            timeout=30.0,
+        )
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_omits_empty_record_log_id_header(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_success(
+            record_key="adc-record-001",
+            input_data={
+                "text": "input",
+                ADC_LOG_ID_FIELD: "",
+            },
+            output_data={"text": "output"},
+        )
+
+        headers = mock_client_cls.call_args.kwargs["headers"]
+        self.assertNotIn("x-tt-logid", headers)
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_report_record_success_converts_complex_values_to_json_safe_payload(self, mock_client_cls):
