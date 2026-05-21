@@ -19,7 +19,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "prepare_record_key_mapper"
-OP_DISPLAY_NAME = "准备记录唯一键"
+OP_DISPLAY_NAME = "生成唯一键"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
 INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
