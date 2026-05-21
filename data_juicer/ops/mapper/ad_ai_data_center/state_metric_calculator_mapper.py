@@ -8,6 +8,7 @@ from typing import Any
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import add_record_log_id_header
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
@@ -115,7 +116,7 @@ class StateMetricCalculatorMapper(Mapper):
             logger.warning("Failed to finish operator execution callback: {}", exc)
 
     def _calculate_metric_outputs(self, sample: dict[str, Any]) -> dict[str, Any]:
-        details = self._get_operator_details()
+        details = self._get_operator_details(sample)
         self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
         metrics = []
         for operator_config in self.operators:
@@ -337,22 +338,22 @@ class StateMetricCalculatorMapper(Mapper):
             return parsed_value
         return value
 
-    def _get_operator_details(self) -> dict[int, dict[str, Any]]:
+    def _get_operator_details(self, sample: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
         if self._operator_details is not None:
             return self._operator_details
         try:
-            self._operator_details = self._fetch_operator_details()
+            self._operator_details = self._fetch_operator_details(sample)
         except Exception as exc:
             self._operator_details_error = f"Failed to fetch state metric operators: {exc}"
             self._operator_details = {}
         return self._operator_details
 
-    def _fetch_operator_details(self) -> dict[int, dict[str, Any]]:
+    def _fetch_operator_details(self, sample: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
         ctx = self._get_ctx()
         client = HttpClient(
             endpoint=self._build_openapi_url(ctx, BATCH_GET_OPERATORS_PATH),
             method="POST",
-            headers=self._build_headers(ctx),
+            headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
         )
         result = client.request(

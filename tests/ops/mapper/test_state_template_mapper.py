@@ -13,6 +13,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.state_template_mapper import (
     OP_NAME,
     StateTemplateMapper,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 from data_juicer.utils.operator_execution_callback_utils import RECORD_KEY_FIELD
 
 
@@ -163,6 +164,7 @@ process:
         dataset = Dataset.from_list([{
             "text": "row",
             RECORD_KEY_FIELD: "record-1",
+            ADC_LOG_ID_FIELD: "log-001",
         }])
 
         result = op.run(dataset).to_list()
@@ -179,6 +181,7 @@ process:
                 "user-account": "wangjianda.667",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
+                "x-tt-logid": "log-001",
             },
             timeout=30.0,
         )
@@ -196,6 +199,7 @@ process:
             input_data={
                 "text": "row",
                 RECORD_KEY_FIELD: "record-1",
+                ADC_LOG_ID_FIELD: "log-001",
             },
             output_data=result[0],
             started_at=ANY,

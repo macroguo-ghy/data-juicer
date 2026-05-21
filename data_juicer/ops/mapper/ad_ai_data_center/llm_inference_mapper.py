@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import add_record_log_id_header
 from data_juicer.utils.http_utils import HttpClient
 from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
@@ -92,9 +93,9 @@ class LLMInferenceMapper(Mapper):
         input_sample = copy.deepcopy(sample)
         try:
             prompt = self._build_prompt(sample)
-            submit_data = self._submit(prompt, ctx)
+            submit_data = self._submit(prompt, ctx, sample)
             task_id = self._get_required_response_value(submit_data, "taskId")
-            result_data = self._poll_result(task_id, ctx)
+            result_data = self._poll_result(task_id, ctx, sample)
             output = result_data.get("output")
             self._ensure_json_serializable(output)
 
@@ -161,21 +162,23 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("prompt must be a non-empty string")
         return prompt
 
-    def _submit(self, prompt: str, ctx: dict[str, Any]) -> dict[str, Any]:
+    def _submit(self, prompt: str, ctx: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
         return self._post_openapi(
             path=SUBMIT_PATH,
             ctx=ctx,
+            sample=sample,
             json_body={
                 "prompt": prompt,
                 "model": self.model,
             },
         )
 
-    def _poll_result(self, task_id: str, ctx: dict[str, Any]) -> dict[str, Any]:
+    def _poll_result(self, task_id: str, ctx: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(self.max_poll_attempts):
             data = self._post_openapi(
                 path=RESULT_PATH,
                 ctx=ctx,
+                sample=sample,
                 json_body={
                     "taskId": task_id,
                 },
@@ -192,11 +195,17 @@ class LLMInferenceMapper(Mapper):
             f"LLM inference task {task_id} did not finish after {self.max_poll_attempts} polls"
         )
 
-    def _post_openapi(self, path: str, ctx: dict[str, Any], json_body: dict[str, Any]) -> dict[str, Any]:
+    def _post_openapi(
+        self,
+        path: str,
+        ctx: dict[str, Any],
+        sample: dict[str, Any],
+        json_body: dict[str, Any],
+    ) -> dict[str, Any]:
         client = HttpClient(
             endpoint=self._build_openapi_url(ctx, path),
             method="POST",
-            headers=self._build_headers(ctx),
+            headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
         )
         result = client.request(json_body=json_body)

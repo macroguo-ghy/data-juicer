@@ -13,6 +13,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.external_eval_data_import_mapper i
     OP_NAME,
     ExternalEvalDataImportMapper,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 
 
 class FakeHttpClient:
@@ -139,6 +140,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
         )
         dataset = Dataset.from_list([{
             "id": "row-1",
+            ADC_LOG_ID_FIELD: "log-001",
         }])
 
         result = op.run(dataset).to_list()
@@ -154,6 +156,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "user-account": "wangjianda.667",
+                "x-tt-logid": "log-001",
             },
         )
         self.assertEqual(
