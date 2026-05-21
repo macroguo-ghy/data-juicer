@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import math
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 from data_juicer.utils.operator_execution_callback_utils import (
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
@@ -22,7 +24,7 @@ OP_NAME = "prepare_record_key_mapper"
 OP_DISPLAY_NAME = "生成唯一键"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
-INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD}
+INTERNAL_FIELDS = {"ctx", RECORD_KEY_FIELD, ADC_LOG_ID_FIELD}
 FAILED_RECORD_KEY_PREFIX = "prepare_record_key_failed:"
 
 
@@ -161,8 +163,10 @@ class PrepareRecordKeyMapper(Mapper):
     @staticmethod
     def _put_record_key_first(sample: dict[str, Any], record_key: str) -> dict[str, Any]:
         sample.pop(RECORD_KEY_FIELD, None)
+        sample.pop(ADC_LOG_ID_FIELD, None)
         return {
             RECORD_KEY_FIELD: record_key,
+            ADC_LOG_ID_FIELD: uuid.uuid4().hex,
             **sample,
         }
 

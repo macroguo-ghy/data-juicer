@@ -16,6 +16,7 @@ from data_juicer.ops.mapper.ad_ai_data_center.prepare_record_key_mapper import (
     RECORD_KEY_FIELD,
     PrepareRecordKeyMapper,
 )
+from data_juicer.utils.adc_record_context import ADC_LOG_ID_FIELD
 
 
 def stable_hash(value):
@@ -139,7 +140,10 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         result = op.process_single(sample)
 
         self.assertEqual(list(result.keys())[0], RECORD_KEY_FIELD)
-        self.assertEqual(list(result.keys())[1:], ["query", "answer"])
+        self.assertEqual(list(result.keys())[1], ADC_LOG_ID_FIELD)
+        self.assertEqual(list(result.keys())[2:], ["query", "answer"])
+        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
+        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
 
     def test_places_existing_record_key_as_first_output_field(self):
         op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
@@ -151,8 +155,25 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
 
         result = op.process_single(sample)
 
-        self.assertEqual(list(result.keys()), [RECORD_KEY_FIELD, "query", "answer"])
+        self.assertEqual(list(result.keys()), [RECORD_KEY_FIELD, ADC_LOG_ID_FIELD, "query", "answer"])
         self.assertEqual(result[RECORD_KEY_FIELD], "existing-key")
+        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
+        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
+
+    def test_generates_log_id_from_record_key_and_excludes_it_from_hash_source(self):
+        op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
+        sample = {
+            "query": "hello",
+            ADC_LOG_ID_FIELD: "stale-log-id",
+        }
+
+        result = op.process_single(sample)
+
+        expected_key = stable_hash({"query": "hello"})
+        self.assertEqual(result[RECORD_KEY_FIELD], expected_key)
+        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
+        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
+        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "stale-log-id")
 
     def test_reuses_source_field_as_record_key(self):
         op = PrepareRecordKeyMapper(
