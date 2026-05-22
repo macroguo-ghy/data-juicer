@@ -184,6 +184,7 @@ process:
                 "x-tt-logid": "log-001",
             },
             timeout=30.0,
+            retry_attempts=3,
         )
         self.assertEqual(fake_client.requests, [{
             "json_body": {

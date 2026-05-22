@@ -38,6 +38,7 @@ class StateMetricCalculatorMapper(Mapper):
         operators: list[dict] | None = None,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -51,6 +52,7 @@ class StateMetricCalculatorMapper(Mapper):
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -63,6 +65,8 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("result_mode must be object")
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
         self.operators = self._normalize_operators(operators)
 
         self.state_key = state_key
@@ -71,6 +75,7 @@ class StateMetricCalculatorMapper(Mapper):
         self.fail_policy = fail_policy
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self._operator_details: dict[int, dict[str, Any]] | None = None
         self._operator_details_error: str | None = None
         self._calculate_runners: dict[int, PythonScriptRunner] = {}
@@ -443,6 +448,7 @@ class StateMetricCalculatorMapper(Mapper):
             method="POST",
             headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
         result = client.request(
             json_body={

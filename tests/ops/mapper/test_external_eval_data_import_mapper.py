@@ -152,6 +152,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             ),
             method="POST",
             timeout=30.0,
+            retry_attempts=3,
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",

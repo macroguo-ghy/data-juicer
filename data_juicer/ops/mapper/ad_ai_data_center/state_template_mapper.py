@@ -33,6 +33,7 @@ class StateTemplateMapper(Mapper):
         output_field: str = "state_template",
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -43,6 +44,7 @@ class StateTemplateMapper(Mapper):
         :param output_field: field used to store the generated state template string.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -51,11 +53,14 @@ class StateTemplateMapper(Mapper):
             raise ValueError("state_meta_group_items must be a non-empty dictionary")
         if not output_field:
             raise ValueError("output_field must be provided")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
 
         self.state_meta_group_items = copy.deepcopy(state_meta_group_items)
         self.output_field = output_field
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self._state_template_cache = None
         self._operator_execution_callback_client = None
 
@@ -109,6 +114,7 @@ class StateTemplateMapper(Mapper):
             method="POST",
             headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
         result = client.request(
             json_body={
