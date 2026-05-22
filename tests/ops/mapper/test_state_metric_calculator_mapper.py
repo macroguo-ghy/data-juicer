@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import ANY, patch
 
+import pyarrow as pa
+
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops import base_op
@@ -303,7 +305,7 @@ process:
                             {
                                 "metricCode": "bench_roi_score",
                                 "metricName": "行业基准 ROI 得分",
-                                "output": None,
+                                "output": "null",
                                 "error": "missing required parameter: bench_roi",
                             },
                         ],
@@ -734,11 +736,40 @@ process:
             ],
             ["operator_201", "operator_202"],
         )
-        self.assertIsNone(result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"])
+        self.assertEqual(
+            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"],
+            "null",
+        )
         self.assertIn(
             "Failed to fetch state metric operators",
             result["query_metric_data_outputs"]["items"][0]["metrics"][0]["error"],
         )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_metric_failure_output_keeps_arrow_schema_as_string(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope(self._operator_details()))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[self._operators()[0]],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "material_id": "1854168911595796",
+            "state": {
+                "101": 0.41,
+            },
+        })
+
+        metric_output = (
+            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"]
+        )
+        self.assertEqual(metric_output, "null")
+        table = pa.Table.from_pylist([{
+            "query_metric_data_outputs": result["query_metric_data_outputs"],
+        }])
+        self.assertIn("output: string", str(table.schema))
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_missing_state_key_when_all_metrics_depend_on_state_fails_record(self, mock_client_cls):

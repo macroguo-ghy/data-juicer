@@ -585,7 +585,7 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "metricCode": StateMetricCalculatorMapper._result_key(detail, operator_id),
             "metricName": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
-            "output": None,
+            "output": StateMetricCalculatorMapper._stringify_metric_output(None),
             "error": error,
         }
 
