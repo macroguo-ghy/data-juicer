@@ -17,6 +17,7 @@ from data_juicer.core.data.load_strategy import (
     DefaultHiveDataLoadStrategy,
     RayHiveDataLoadStrategy,
     DefaultTQSDataLoadStrategy,
+    _is_countable_parquet_metadata_file,
     _build_hive_cast_block_udf,
     _build_parquet_read_plan_from_filesystem,
     _count_parquet_rows_from_filesystem,
@@ -1511,7 +1512,8 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         empty_row_group_path = osp.join(tmp_dir, "part-00001.parquet")
         try:
             pq.write_table(pa.table({"id": [1, 2]}), valid_path)
-            open(empty_row_group_path, "wb").close()
+            with open(empty_row_group_path, "wb") as empty_file:
+                empty_file.write(b"not-empty")
             valid_metadata = pq.read_metadata(valid_path)
             real_read_metadata = pq.read_metadata
 
@@ -1535,6 +1537,170 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_hdfs_parquet_read_plan_skips_zero_byte_files_without_reading_metadata(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_zero_byte_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        valid_path = osp.join(tmp_dir, "part-00000.parquet")
+        zero_byte_path = osp.join(tmp_dir, "part-00001.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), valid_path)
+            open(zero_byte_path, "wb").close()
+
+            with patch("pyarrow.parquet.read_metadata", wraps=pq.read_metadata) as read_metadata:
+                plan = _build_parquet_read_plan_from_filesystem(pa_fs.LocalFileSystem(), tmp_dir)
+
+            self.assertEqual(plan.paths, [valid_path])
+            self.assertEqual(plan.row_count, 2)
+            self.assertEqual(plan.skipped_empty_file_count, 1)
+            self.assertNotIn(zero_byte_path, [call.args[0] for call in read_metadata.call_args_list])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_keeps_bad_file_when_skip_disabled(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_bad_default_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        valid_path = osp.join(tmp_dir, "part-00000.parquet")
+        bad_path = osp.join(tmp_dir, "part-00001.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), valid_path)
+            with open(bad_path, "wb") as bad_file:
+                bad_file.write(b"not a parquet footer")
+
+            plan = _build_parquet_read_plan_from_filesystem(pa_fs.LocalFileSystem(), tmp_dir)
+
+            self.assertEqual(plan.paths, tmp_dir)
+            self.assertIsNone(plan.row_count)
+            self.assertEqual(plan.skipped_empty_file_count, 0)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_skips_bad_metadata_when_enabled(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_bad_skip_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        valid_path = osp.join(tmp_dir, "part-00000.parquet")
+        bad_path = osp.join(tmp_dir, "part-00001.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), valid_path)
+            with open(bad_path, "wb") as bad_file:
+                bad_file.write(b"not a parquet footer")
+
+            plan = _build_parquet_read_plan_from_filesystem(
+                pa_fs.LocalFileSystem(),
+                tmp_dir,
+                skip_bad_files=True,
+            )
+
+            self.assertEqual(plan.paths, [valid_path])
+            self.assertEqual(plan.row_count, 2)
+            self.assertEqual(plan.skipped_empty_file_count, 1)
+            self.assertEqual(plan.schema, pa.schema([("id", pa.int64())]))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_skip_bad_files_returns_empty_plan_when_all_bad(self):
+        import pyarrow.fs as pa_fs
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_all_bad_skip_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        bad_path = osp.join(tmp_dir, "part-00000.parquet")
+        try:
+            with open(bad_path, "wb") as bad_file:
+                bad_file.write(b"not a parquet footer")
+
+            plan = _build_parquet_read_plan_from_filesystem(
+                pa_fs.LocalFileSystem(),
+                tmp_dir,
+                skip_bad_files=True,
+            )
+
+            self.assertEqual(plan.paths, [])
+            self.assertEqual(plan.row_count, 0)
+            self.assertEqual(plan.skipped_empty_file_count, 1)
+            self.assertIsNone(plan.schema)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_ignores_temporary_directory_files(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_temporary_{uuid.uuid4().hex}")
+        temporary_dir = osp.join(tmp_dir, "_temporary", "0", "_temporary", "attempt_1")
+        os.makedirs(temporary_dir, exist_ok=True)
+        valid_path = osp.join(tmp_dir, "date=20260507", "part-00000.parquet")
+        temporary_path = osp.join(temporary_dir, "part-00001.parquet")
+        try:
+            os.makedirs(osp.dirname(valid_path), exist_ok=True)
+            pq.write_table(pa.table({"id": [1, 2]}), valid_path)
+            open(temporary_path, "wb").close()
+
+            self.assertFalse(_is_countable_parquet_metadata_file(temporary_path))
+            with patch("pyarrow.parquet.read_metadata", wraps=pq.read_metadata) as read_metadata:
+                plan = _build_parquet_read_plan_from_filesystem(
+                    pa_fs.LocalFileSystem(),
+                    tmp_dir,
+                    filter_for_ray_sampling_only=True,
+                )
+
+            self.assertEqual(plan.paths, tmp_dir)
+            self.assertEqual(plan.skipped_empty_file_count, 0)
+            self.assertNotIn(temporary_path, [call.args[0] for call in read_metadata.call_args_list])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_sampling_filter_skips_zero_byte_files_without_metadata(self):
+        import pyarrow.fs as pa_fs
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_sample_zero_byte_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        parquet_paths = [
+            osp.join(tmp_dir, f"part-{idx:05d}.parquet")
+            for idx in range(20)
+        ]
+        for parquet_path in parquet_paths[1:]:
+            with open(parquet_path, "wb") as parquet_file:
+                parquet_file.write(b"not-empty")
+        open(parquet_paths[0], "wb").close()
+
+        class FakeSchema:
+            def to_arrow_schema(self):
+                return pa.schema([("id", pa.int64())])
+
+        class FakeMetadata:
+            schema = FakeSchema()
+            num_rows = 1
+            num_row_groups = 1
+
+        read_metadata_calls = []
+
+        def read_metadata(path, filesystem=None):
+            read_metadata_calls.append(path)
+            return FakeMetadata()
+
+        try:
+            with patch("pyarrow.parquet.read_metadata", side_effect=read_metadata):
+                plan = _build_parquet_read_plan_from_filesystem(
+                    pa_fs.LocalFileSystem(),
+                    tmp_dir,
+                    filter_for_ray_sampling_only=True,
+                )
+
+            self.assertEqual(plan.paths, parquet_paths[1:])
+            self.assertEqual(plan.skipped_empty_file_count, 1)
+            self.assertEqual(plan.schema, pa.schema([("id", pa.int64())]))
+            self.assertNotIn(parquet_paths[0], read_metadata_calls)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def test_hdfs_parquet_sampling_filter_checks_only_ray_sample_candidates(self):
         import pyarrow.fs as pa_fs
 
@@ -1545,7 +1711,8 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
             for idx in range(20)
         ]
         for parquet_path in parquet_paths:
-            open(parquet_path, "wb").close()
+            with open(parquet_path, "wb") as parquet_file:
+                parquet_file.write(b"not-empty")
 
         class FakeSchema:
             def to_arrow_schema(self):
@@ -1741,6 +1908,18 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
                 with self.assertRaises(ConfigValidationError):
                     RayHDFSDataLoadStrategy(ds_config, self.cfg)
 
+    def test_load_parquet_rejects_invalid_on_bad_files(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "on_bad_files": "ignore",
+        }
+
+        with self.assertRaises(ConfigValidationError):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg)
+
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")
     @patch("data_juicer.core.data.load_strategy._count_parquet_rows_from_filesystem")
@@ -1781,6 +1960,56 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         row_count_getter = ray_dataset_kwargs["row_count_getter"]
         self.assertEqual(row_count_getter(), 123)
         mock_count_parquet_rows.assert_called_once_with(fake_filesystem, "/user/demo/parts")
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_on_bad_files_skip_uses_full_bad_file_plan(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00000.parquet"],
+            schema=pa.schema([("id", pa.int64())]),
+            row_count=2,
+            skipped_empty_file_count=1,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "on_bad_files": "skip",
+            "skip_zero_row_group_files": False,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/parts",
+            skip_bad_files=True,
+        )
+        mock_read_parquet.assert_called_once_with(
+            ["/user/demo/parts/part-00000.parquet"],
+            filesystem=fake_filesystem,
+        )
+        row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
+        self.assertEqual(row_count_getter(), 2)
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")

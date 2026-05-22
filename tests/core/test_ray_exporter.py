@@ -1,11 +1,15 @@
 import copy
 import builtins
+import base64
+import json
 import os
 import os.path as osp
 import shutil
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pyarrow.fs import FileInfo, FileType, LocalFileSystem
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
@@ -134,6 +138,38 @@ class TestRayExporterHDFS(unittest.TestCase):
             self.assertEqual(datasink.mode.value, "append")
         mock_warning.assert_called_once()
 
+    def test_hdfs_append_generates_unique_default_filenames_across_submissions(self):
+        class FakeDataset:
+            def __init__(self):
+                self.filenames = []
+
+            def columns(self):
+                return ["text"]
+
+            def write_parquet(self, path, *, filename_provider=None, filesystem=None):
+                self.filenames.append(filename_provider.get_filename_for_task("0", 0))
+
+        fake_filesystem = MagicMock()
+        fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.Directory)
+        datasets = [FakeDataset(), FakeDataset()]
+
+        with patch(
+            "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+            return_value=(fake_filesystem, "/path/output_dir"),
+        ):
+            for dataset in datasets:
+                RayExporter(
+                    "hdfs://cluster/path/output_dir",
+                    export_type="parquet",
+                    filesystem="pyarrow",
+                    mode="append",
+                ).export(dataset)
+
+        self.assertEqual(len(datasets[0].filenames), 1)
+        self.assertEqual(len(datasets[1].filenames), 1)
+        self.assertNotEqual(datasets[0].filenames[0], datasets[1].filenames[0])
+        self.assertTrue(datasets[0].filenames[0].endswith(".parquet"))
+
     def test_hdfs_overwrite_deletes_existing_directory_before_write(self):
         fake_filesystem = MagicMock()
         fake_filesystem.get_file_info.return_value = FileInfo("/path/output_dir", FileType.Directory)
@@ -169,7 +205,7 @@ class TestRayExporterHDFS(unittest.TestCase):
         _, kwargs = mock_datasink.call_args
         self.assertNotIn("mode", kwargs)
 
-    def test_write_others_maps_max_rows_per_file_for_older_ray_parquet_signature(self):
+    def test_write_others_drops_max_rows_per_file_for_older_ray_parquet_signature(self):
         class FakeDataset:
             def __init__(self):
                 self.received_kwargs = None
@@ -190,7 +226,7 @@ class TestRayExporterHDFS(unittest.TestCase):
             export_extra_args={"max_rows_per_file": 1000, "concurrency": 8},
         )
 
-        self.assertEqual(dataset.received_kwargs["min_rows_per_file"], 1000)
+        self.assertIsNone(dataset.received_kwargs["min_rows_per_file"])
         self.assertEqual(dataset.received_kwargs["concurrency"], 8)
         self.assertNotIn("max_rows_per_file", dataset.received_kwargs["arrow_parquet_args"])
 
@@ -218,6 +254,186 @@ class TestRayExporterHDFS(unittest.TestCase):
                 export_type="parquet",
                 mode="error_if_exists",
             )
+
+
+class TestRayExporterHDFSRoundTrip(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import ray
+
+        cls._ray_started_by_test = not ray.is_initialized()
+        if cls._ray_started_by_test:
+            ray.init(address="local", num_cpus=2, include_dashboard=False, log_to_driver=False)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._ray_started_by_test:
+            import ray
+
+            ray.shutdown()
+
+    def setUp(self):
+        self.tmp_dir = osp.join(
+            osp.dirname(osp.abspath(__file__)),
+            "tmp",
+            self.__class__.__name__,
+            self._testMethodName,
+        )
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        self.filesystem = LocalFileSystem()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _dataset(self, start=0, count=5):
+        import ray
+
+        ids = list(range(start, start + count))
+        table = pa.table(
+            {
+                "id": pa.array(ids, type=pa.int64()),
+                "text": pa.array(
+                    [
+                        f"row-{row_id} line\nquote \" slash \\"
+                        for row_id in ids
+                    ],
+                    type=pa.string(),
+                ),
+                "optional_text": pa.array(
+                    [None if index % 2 == 0 else f"value-{row_id}" for index, row_id in enumerate(ids)],
+                    type=pa.string(),
+                ),
+                "all_null_text": pa.array([None] * count, type=pa.string()),
+                "payload": pa.array([bytes([row_id % 256, (row_id + 1) % 256]) for row_id in ids], type=pa.binary()),
+                "tags": pa.array(
+                    [
+                        [f"tag-{row_id}", "common"] if row_id % 3 == 0 else ([] if row_id % 3 == 1 else None)
+                        for row_id in ids
+                    ],
+                    type=pa.list_(pa.string()),
+                ),
+            }
+        )
+        return ray.data.from_arrow(table).repartition(2)
+
+    def _writer_args(self, export_type):
+        if export_type == "parquet":
+            return {"min_rows_per_file": 2, "concurrency": 2}
+        return {"num_rows_per_file": 2, "concurrency": 2}
+
+    def _export(self, export_type, output_dir, dataset, mode="error_if_exists", **kwargs):
+        export_args = self._writer_args(export_type)
+        export_args.update(kwargs)
+        with patch(
+            "data_juicer.core.ray_exporter.get_pyarrow_filesystem",
+            return_value=(self.filesystem, output_dir),
+        ):
+            RayExporter(
+                f"hdfs://cluster/test/{osp.basename(output_dir)}",
+                export_type=export_type,
+                filesystem="pyarrow",
+                mode=mode,
+                **export_args,
+            ).export(dataset)
+
+    def _data_files(self, output_dir, export_type):
+        suffix = ".parquet" if export_type == "parquet" else ".json"
+        return sorted(
+            osp.join(output_dir, filename)
+            for filename in os.listdir(output_dir)
+            if filename.endswith(suffix)
+        )
+
+    def _read_rows(self, output_dir, export_type):
+        files = self._data_files(output_dir, export_type)
+        if export_type == "parquet":
+            table = pa.concat_tables([pq.read_table(path) for path in files])
+            rows = table.to_pylist()
+        else:
+            rows = []
+            for path in files:
+                with open(path, encoding="utf-8") as reader:
+                    rows.extend(json.loads(line) for line in reader if line.strip())
+        return sorted(rows, key=lambda row: row["id"])
+
+    def _assert_data_shape_round_trip(self, rows, expected_ids, export_type):
+        self.assertEqual([row["id"] for row in rows], expected_ids)
+        for row in rows:
+            row_id = row["id"]
+            self.assertEqual(row["text"], f"row-{row_id} line\nquote \" slash \\")
+            self.assertIsNone(row["all_null_text"])
+            if row_id % 2 == 0:
+                self.assertIsNone(row["optional_text"])
+            else:
+                self.assertEqual(row["optional_text"], f"value-{row_id}")
+            if export_type == "parquet":
+                self.assertEqual(row["payload"], bytes([row_id % 256, (row_id + 1) % 256]))
+            else:
+                self.assertEqual(
+                    row["payload"],
+                    base64.b64encode(bytes([row_id % 256, (row_id + 1) % 256])).decode("ascii"),
+                )
+            if row_id % 3 == 0:
+                self.assertEqual(row["tags"], [f"tag-{row_id}", "common"])
+            elif row_id % 3 == 1:
+                self.assertEqual(row["tags"], [])
+            else:
+                self.assertIsNone(row["tags"])
+
+    @TEST_TAG("ray")
+    def test_hdfs_parquet_and_jsonl_write_multiple_parts_and_round_trip_data_shapes(self):
+        for export_type in ("parquet", "jsonl"):
+            with self.subTest(export_type=export_type):
+                output_dir = osp.join(self.tmp_dir, export_type)
+
+                self._export(export_type, output_dir, self._dataset())
+
+                files = self._data_files(output_dir, export_type)
+                self.assertGreaterEqual(len(files), 2)
+                rows = self._read_rows(output_dir, export_type)
+                self._assert_data_shape_round_trip(rows, [0, 1, 2, 3, 4], export_type)
+
+    @TEST_TAG("ray")
+    def test_hdfs_append_second_submission_adds_parts_and_preserves_rows(self):
+        for export_type in ("parquet", "jsonl"):
+            with self.subTest(export_type=export_type):
+                output_dir = osp.join(self.tmp_dir, export_type)
+                self._export(export_type, output_dir, self._dataset(start=0, count=2))
+                first_files = self._data_files(output_dir, export_type)
+
+                self._export(export_type, output_dir, self._dataset(start=100, count=3), mode="append")
+
+                files_after_append = self._data_files(output_dir, export_type)
+                self.assertGreater(len(files_after_append), len(first_files))
+                rows = self._read_rows(output_dir, export_type)
+                self._assert_data_shape_round_trip(rows, [0, 1, 100, 101, 102], export_type)
+
+    @TEST_TAG("ray")
+    def test_hdfs_error_if_exists_rejects_existing_output_directory(self):
+        for export_type in ("parquet", "jsonl"):
+            with self.subTest(export_type=export_type):
+                output_dir = osp.join(self.tmp_dir, export_type)
+                self._export(export_type, output_dir, self._dataset(start=0, count=2))
+
+                with self.assertRaisesRegex(FileExistsError, "already exists"):
+                    self._export(export_type, output_dir, self._dataset(start=100, count=1))
+
+    @TEST_TAG("ray")
+    def test_hdfs_overwrite_existing_directory_removes_stale_parts(self):
+        for export_type in ("parquet", "jsonl"):
+            with self.subTest(export_type=export_type):
+                output_dir = osp.join(self.tmp_dir, export_type)
+                self._export(export_type, output_dir, self._dataset(start=0, count=4))
+                stale_file = osp.join(output_dir, "stale-part")
+                with open(stale_file, "w", encoding="utf-8") as writer:
+                    writer.write("stale")
+
+                self._export(export_type, output_dir, self._dataset(start=100, count=2), mode="overwrite")
+
+                self.assertFalse(osp.exists(stale_file))
+                rows = self._read_rows(output_dir, export_type)
+                self._assert_data_shape_round_trip(rows, [100, 101], export_type)
 
 
 class TestRayExporter(DataJuicerTestCaseBase):

@@ -1296,6 +1296,24 @@ def update_op_process(cfg, parser, used_ops=None):
     if cfg.process is None:
         cfg.process = []
 
+    def _namespace_or_dict_to_dict(value):
+        if isinstance(value, dict):
+            raw = value
+        else:
+            raw = namespace_to_dict(value)
+
+        def normalize_yaml_on_key(item):
+            if isinstance(item, dict):
+                return {
+                    ("on" if key is True else key): normalize_yaml_on_key(val)
+                    for key, val in item.items()
+                }
+            if isinstance(item, list):
+                return [normalize_yaml_on_key(val) for val in item]
+            return item
+
+        return normalize_yaml_on_key(raw)
+
     # Create direct mapping of operator names to their configs
     op_configs = {}
     for op in cfg.process:
@@ -1344,12 +1362,12 @@ def update_op_process(cfg, parser, used_ops=None):
                             op_name: (
                                 None
                                 if internal_op_para is None
-                                else namespace_to_dict(internal_op_para[op_name_count[op_name]])
+                                else _namespace_or_dict_to_dict(internal_op_para[op_name_count[op_name]])
                             )
                         }
         else:
             # Add new operator
-            cfg.process.append({op_name: None if internal_op_para is None else namespace_to_dict(internal_op_para)})
+            cfg.process.append({op_name: None if internal_op_para is None else _namespace_or_dict_to_dict(internal_op_para)})
 
     # Optimize type checking
     recognized_args = {

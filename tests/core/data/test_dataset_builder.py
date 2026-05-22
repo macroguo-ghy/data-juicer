@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
@@ -560,6 +561,125 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
         builder = DatasetBuilder(cfg, executor_type='ray')
 
         with self.assertRaisesRegex(ValueError, "generated_dataset_config"):
+            builder.validate_ray_data_checkpoint_support()
+
+    def _ray_join_cfg(self, join=None, configs=None, **extra):
+        cfg = Namespace()
+        cfg.dataset_path = None
+        cfg.ray_data_checkpoint = Namespace(enabled=False)
+        cfg.dataset = {
+            'join': join or {'left': 'a', 'right': 'b', 'join_type': 'inner', 'on': 'id'},
+            'configs': configs or [
+                {'name': 'a', 'type': 'local', 'path': 'left.jsonl'},
+                {'name': 'b', 'type': 'local', 'path': 'right.jsonl'},
+            ],
+        }
+        cfg.dataset.update(extra)
+        return cfg
+
+    def test_builder_ray_dataset_join_parses_inner_and_left_outer(self):
+        inner = DatasetBuilder(self._ray_join_cfg(), executor_type='ray')
+        left_outer = DatasetBuilder(
+            self._ray_join_cfg(
+                join={
+                    'left': 'a',
+                    'right': 'b',
+                    'join_type': 'left_outer',
+                    'left_on': 'left_id',
+                    'right_on': 'right_id',
+                    'num_partitions': 16,
+                    'right_suffix': '_dim',
+                }
+            ),
+            executor_type='ray',
+        )
+
+        self.assertEqual(inner.dataset_join_strategy_names, ('a', 'b'))
+        self.assertEqual(inner.dataset_join_config.join_type, 'inner')
+        self.assertEqual(inner.dataset_join_config.left_on, ('id',))
+        self.assertEqual(left_outer.dataset_join_config.join_type, 'left_outer')
+        self.assertEqual(left_outer.dataset_join_config.left_on, ('left_id',))
+        self.assertEqual(left_outer.dataset_join_config.right_on, ('right_id',))
+        self.assertEqual(left_outer.dataset_join_config.num_partitions, 16)
+        self.assertEqual(left_outer.dataset_join_config.right_suffix, '_dim')
+
+    def test_builder_ray_dataset_join_loads_named_sources_and_joins(self):
+        class FakeRayDataset:
+            def __init__(self, name):
+                self.name = name
+                self.join_args = None
+
+            def join(self, other, **kwargs):
+                self.join_args = (other, kwargs)
+                return FakeRayDataset(f"{self.name}+{other.name}")
+
+        class FakeWrapper:
+            def __init__(self, data, cfg=None):
+                self.data = data
+                self.cfg = cfg
+
+        class FakeStrategy:
+            def __init__(self, name):
+                self.ds_config = {'name': name}
+                self.weight = 1.0
+
+            def load_data(self, **kwargs):
+                return SimpleNamespace(data=FakeRayDataset(self.ds_config['name']))
+
+        cfg = self._ray_join_cfg(join={'left': 'b', 'right': 'a', 'join_type': 'left_outer', 'on': 'id'})
+        builder = DatasetBuilder(cfg, executor_type='ray')
+        builder.load_strategies = [FakeStrategy('a'), FakeStrategy('b')]
+
+        with patch('data_juicer.core.data.ray_dataset.RayDataset', FakeWrapper):
+            dataset = builder.load_dataset(num_proc=3)
+
+        self.assertEqual(dataset.data.name, 'b+a')
+
+    def test_builder_ray_dataset_join_rejects_missing_or_unreferenced_names(self):
+        with self.assertRaisesRegex(ConfigValidationError, "non-empty `name`"):
+            DatasetBuilder(
+                self._ray_join_cfg(configs=[
+                    {'type': 'local', 'path': 'left.jsonl'},
+                    {'name': 'b', 'type': 'local', 'path': 'right.jsonl'},
+                ]),
+                executor_type='ray',
+            )
+        with self.assertRaisesRegex(ConfigValidationError, "referenced `left` and `right`"):
+            DatasetBuilder(
+                self._ray_join_cfg(configs=[
+                    {'name': 'a', 'type': 'local', 'path': 'left.jsonl'},
+                    {'name': 'c', 'type': 'local', 'path': 'right.jsonl'},
+                ]),
+                executor_type='ray',
+            )
+
+    def test_builder_ray_dataset_join_rejects_more_than_two_configs_max_sample_and_weight(self):
+        with self.assertRaisesRegex(ConfigValidationError, "exactly two"):
+            DatasetBuilder(
+                self._ray_join_cfg(configs=[
+                    {'name': 'a', 'type': 'local', 'path': 'left.jsonl'},
+                    {'name': 'b', 'type': 'local', 'path': 'right.jsonl'},
+                    {'name': 'c', 'type': 'local', 'path': 'other.jsonl'},
+                ]),
+                executor_type='ray',
+            )
+        with self.assertRaisesRegex(ConfigValidationError, "max_sample_num"):
+            DatasetBuilder(self._ray_join_cfg(max_sample_num=10), executor_type='ray')
+        with self.assertRaisesRegex(ConfigValidationError, "`weight`"):
+            DatasetBuilder(
+                self._ray_join_cfg(configs=[
+                    {'name': 'a', 'type': 'local', 'path': 'left.jsonl', 'weight': 1.0},
+                    {'name': 'b', 'type': 'local', 'path': 'right.jsonl'},
+                ]),
+                executor_type='ray',
+            )
+
+    def test_ray_data_checkpoint_support_rejects_dataset_join(self):
+        cfg = self._ray_join_cfg()
+        cfg.ray_data_checkpoint = Namespace(enabled=True)
+        builder = DatasetBuilder(cfg, executor_type='ray')
+
+        with self.assertRaisesRegex(ValueError, "ray_data_checkpoint is not supported"):
             builder.validate_ray_data_checkpoint_support()
 
     def test_builder_invalid_dataset_config_type(self):

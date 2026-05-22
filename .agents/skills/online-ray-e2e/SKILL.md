@@ -27,12 +27,13 @@ For exact commands, request fields, HDFS probes, and validation snippets, read `
 2. Run local validation before submitting when the change is local:
    - Prefer small Ray + HDFS validation when the change touches HDFS loading, parquet schema, or IO behavior.
    - Otherwise run `ray_dry_run_plan=True` with `PYTHONPATH="$PWD"` to force current source imports.
-3. Submit through `online_ray_job.py launch` unless the user explicitly needs raw RPC JSON.
-4. Poll Federal status, but treat Ray driver terminal state as authoritative when Federal status lags.
-5. Open Ray UI / Ray History and inspect Jobs first. Read driver stdout/stderr before worker logs.
-6. Attribute failure to the first useful exception, not to secondary Ray debugger, pickling, or materialize noise.
-7. Fix the smallest owning layer: YAML, Data-Juicer code, image, resource spec, or external service config.
-8. Revalidate, push code when needed, resubmit, and continue monitoring until success or a new blocker is proven.
+3. For online/distributed E2E input data, do not use repository-local files such as `demos/.../*.jsonl`; Ray workers may not see those files in their runtime working directories. Prefer HDFS-backed sample data and probe it with `ExecuteHdfsCommand` when needed.
+4. Submit through `online_ray_job.py launch` unless the user explicitly needs raw RPC JSON.
+5. Poll Federal status, but treat Ray driver terminal state as authoritative when Federal status lags.
+6. Open Ray UI / Ray History and inspect Jobs first. Read driver stdout/stderr before worker logs.
+7. Attribute failure to the first useful exception, not to secondary Ray debugger, pickling, or materialize noise.
+8. Fix the smallest owning layer: YAML, Data-Juicer code, image, resource spec, or external service config.
+9. Revalidate, push code when needed, resubmit, and continue monitoring until success or a new blocker is proven.
 
 ## Safety Rules
 

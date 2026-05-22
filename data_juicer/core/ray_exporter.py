@@ -2,6 +2,7 @@ import base64
 import inspect
 import json
 import os
+import uuid
 from functools import partial
 
 from loguru import logger
@@ -57,6 +58,11 @@ try:
 except ImportError:  # pragma: no cover - Ray is required for RayExporter at runtime.
     BlockBasedFileDatasink = object
 
+try:
+    from ray.data.datasource.filename_provider import FilenameProvider
+except ImportError:  # pragma: no cover - Ray is required for RayExporter at runtime.
+    FilenameProvider = object
+
 
 class _JsonlDatasink(BlockBasedFileDatasink):
     def __init__(self, path, *, ensure_ascii=False, **file_datasink_kwargs):
@@ -68,6 +74,44 @@ class _JsonlDatasink(BlockBasedFileDatasink):
         for row in table.to_pylist():
             line = json.dumps(row, ensure_ascii=self.ensure_ascii, default=_json_default)
             file.write((line + "\n").encode("utf-8"))
+
+
+class _AppendFilenameProvider(FilenameProvider):
+    def __init__(self, prefix: str, file_format: str):
+        self.prefix = prefix
+        self.file_format = file_format
+
+    def _filename(self, write_uuid, task_index, block_index=None, row_index=None):
+        parts = [self.prefix]
+        if write_uuid:
+            parts.append(str(write_uuid))
+        parts.append(f"{task_index:06}")
+        if block_index is not None:
+            parts.append(f"{block_index:06}")
+        if row_index is not None:
+            parts.append(f"{row_index:06}")
+        return "_".join(parts) + f".{self.file_format}"
+
+    def get_filename_for_task(self, write_uuid: str, task_index: int) -> str:
+        return self._filename(write_uuid, task_index)
+
+    def get_filename_for_block(self, block, *args) -> str:
+        if len(args) == 2:
+            task_index, block_index = args
+            return self._filename(None, task_index, block_index)
+        if len(args) == 3:
+            write_uuid, task_index, block_index = args
+            return self._filename(write_uuid, task_index, block_index)
+        raise TypeError("Unexpected FilenameProvider block callback signature.")
+
+    def get_filename_for_row(self, row, *args) -> str:
+        if len(args) == 3:
+            task_index, block_index, row_index = args
+            return self._filename(None, task_index, block_index, row_index)
+        if len(args) == 4:
+            write_uuid, task_index, block_index, row_index = args
+            return self._filename(write_uuid, task_index, block_index, row_index)
+        raise TypeError("Unexpected FilenameProvider row callback signature.")
 
 
 class RayExporter:
@@ -159,6 +203,13 @@ class RayExporter:
             if self.export_format in {"json", "jsonl"}:
                 self.export_extra_args["_use_arrow_jsonl_datasink"] = True
             if mode == "append":
+                self.export_extra_args.setdefault(
+                    "filename_provider",
+                    _AppendFilenameProvider(
+                        f"dj_append_{uuid.uuid4().hex}",
+                        self._filename_provider_format(self.export_format),
+                    ),
+                )
                 logger.warning(
                     "Ray HDFS distributed export is running with `mode=append`. "
                     "Append is at-least-once: retry or rerun may produce duplicate part files."
@@ -299,6 +350,12 @@ class RayExporter:
             raise ValueError("`export.mode` for Ray HDFS export must be one of error_if_exists, overwrite, append.")
         return mode
 
+    @staticmethod
+    def _filename_provider_format(export_format):
+        if export_format in {"json", "jsonl"}:
+            return "json"
+        return export_format
+
     @classmethod
     def _apply_hdfs_output_mode(cls, filesystem, path: str, original_uri: str, mode: str) -> None:
         from pyarrow.fs import FileType
@@ -406,26 +463,17 @@ class RayExporter:
         """
         export_format = kwargs.get("export_format", "parquet")
         write_method = getattr(dataset, f"write_{export_format}")
-        export_extra_args = kwargs.get("export_extra_args", {})
-        export_extra_args = RayExporter._normalize_ray_write_args(write_method, export_extra_args)
+        export_extra_args = dict(kwargs.get("export_extra_args", {}))
+        if (
+            "max_rows_per_file" in export_extra_args
+            and "max_rows_per_file" not in inspect.signature(write_method).parameters
+        ):
+            export_extra_args.pop("max_rows_per_file")
         filtered_kwargs = filter_arguments(write_method, export_extra_args)
         # Add S3 filesystem if available
         if "filesystem" in export_extra_args:
             filtered_kwargs["filesystem"] = export_extra_args["filesystem"]
         return write_method(export_path, **filtered_kwargs)
-
-    @staticmethod
-    def _normalize_ray_write_args(write_method, export_extra_args):
-        normalized_args = dict(export_extra_args)
-        params = inspect.signature(write_method).parameters
-        if (
-            "max_rows_per_file" in normalized_args
-            and "max_rows_per_file" not in params
-            and "min_rows_per_file" in params
-        ):
-            normalized_args.setdefault("min_rows_per_file", normalized_args["max_rows_per_file"])
-            normalized_args.pop("max_rows_per_file")
-        return normalized_args
 
     # suffix to export method
     @staticmethod

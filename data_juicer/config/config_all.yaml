@@ -9,6 +9,7 @@ dataset_path: '/path/to/your/dataset'                       # path to your datas
 
 dataset:                                                    # dataset is another way to specify the input dataset.
   max_sample_num: 10000                                     # max sample number to load from the dataset configs.
+  join: null                                                # Ray-only two-source join config. Example: {left: a, right: b, join_type: inner, on: id, num_partitions: 256, left_suffix: null, right_suffix: "_right"}. Cannot be combined with max_sample_num, weight, or ray_data_checkpoint.
   configs:                                                  # configs is a list of dataset configs, which can be mixtured per weight and max_sample_num
     - type: 'local'                                         # type of dataset, support 'local', 'hf', 'modelscope', etc
       weight: 0.5                                           # weight of the dataset, 1.0 as default.
