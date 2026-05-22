@@ -378,7 +378,7 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.http_mapper.HttpClient")
-    def test_sends_test_card_notification_on_operator_start_and_finish(self, mock_client_cls):
+    def test_sends_test_card_notification_only_on_operator_start(self, mock_client_cls):
         op = HttpMapper(
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
@@ -409,20 +409,10 @@ process:
                     },
                     ctx=self._ctx(),
                 ),
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "http_mapper",
-                        "stage": "结束",
-                        "content": '{"status": "SUCCESS"}',
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
             ],
         )
 
-    def test_sends_failed_operator_error_message_in_finish_notification(self):
+    def test_does_not_send_finish_notification_for_failed_operator(self):
         op = HttpMapper(
             endpoint="http://example.test/error",
             input_fields=["prompt"],
@@ -434,10 +424,7 @@ process:
 
         op.after_operator_finished(error=RuntimeError("consume failed"))
 
-        self.assertEqual(
-            self.mock_send_test_card_notification.call_args_list[-1].kwargs["template_variable"]["errMsg"],
-            "consume failed",
-        )
+        self.mock_send_test_card_notification.assert_not_called()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.http_mapper.HttpClient")
     def test_failed_http_request_writes_error_reports_failure_and_raises(self, mock_client_cls):

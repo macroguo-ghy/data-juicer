@@ -169,7 +169,7 @@ class PythonScriptMapperTest(unittest.TestCase):
             error_message="consume failed"
         )
 
-    def test_sends_test_card_notification_on_operator_start_and_finish(self):
+    def test_sends_test_card_notification_only_on_operator_start(self):
         op = PythonScriptMapper(
             python_code="def process(sample, context):\n    return sample",
             ctx=self._ctx(),
@@ -191,20 +191,10 @@ class PythonScriptMapperTest(unittest.TestCase):
                     },
                     ctx=self._ctx(),
                 ),
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "python_script_mapper",
-                        "stage": "结束",
-                        "content": '{"status": "SUCCESS"}',
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
             ],
         )
 
-    def test_sends_failed_operator_error_message_in_finish_notification(self):
+    def test_does_not_send_finish_notification_for_failed_operator(self):
         op = PythonScriptMapper(
             python_code="def process(sample, context):\n    return sample",
             ctx=self._ctx(),
@@ -212,16 +202,7 @@ class PythonScriptMapperTest(unittest.TestCase):
 
         op.after_operator_finished(error=RuntimeError("consume failed"))
 
-        self.mock_send_test_card_notification.assert_called_once_with(
-            template_id="AAqt1lQ72dVxK",
-            template_variable={
-                "operator": "python_script_mapper",
-                "stage": "结束",
-                "content": '{"status": "FAILED"}',
-                "errMsg": "consume failed",
-            },
-            ctx=self._ctx(),
-        )
+        self.mock_send_test_card_notification.assert_not_called()
 
     def test_notification_failure_does_not_block_lifecycle_callback(self):
         self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")

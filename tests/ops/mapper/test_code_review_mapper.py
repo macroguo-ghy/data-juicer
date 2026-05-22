@@ -277,7 +277,7 @@ process:
             error_message="consume failed"
         )
 
-    def test_sends_test_card_notification_on_operator_start_and_finish(self):
+    def test_sends_test_card_notification_only_on_operator_start(self):
         op = CodeReviewMapper(
             input_field="state",
             python_code="def review_row(value, row, context):\n    return True, ''",
@@ -299,16 +299,6 @@ process:
                             '{"input_field": "state", "status_field": "review_status", '
                             '"reason_field": "review_reason", "entrypoint": "review_row"}'
                         ),
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "code_review_mapper",
-                        "stage": "结束",
-                        "content": '{"status": "SUCCESS"}',
                         "errMsg": "",
                     },
                     ctx=self._ctx(),

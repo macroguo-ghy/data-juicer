@@ -5,7 +5,6 @@ import copy
 import hashlib
 import json
 import math
-import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -31,6 +30,8 @@ FAILED_RECORD_KEY_PREFIX = "prepare_record_key_failed:"
 @OPERATORS.register_module(OP_NAME)
 class PrepareRecordKeyMapper(Mapper):
     """Prepare a stable internal record key for downstream ADC status callbacks."""
+
+    _requirements = ["bytedlogid"]
 
     def __init__(
         self,
@@ -166,9 +167,20 @@ class PrepareRecordKeyMapper(Mapper):
         sample.pop(ADC_LOG_ID_FIELD, None)
         return {
             RECORD_KEY_FIELD: record_key,
-            ADC_LOG_ID_FIELD: uuid.uuid4().hex,
+            ADC_LOG_ID_FIELD: PrepareRecordKeyMapper._generate_log_id(),
             **sample,
         }
+
+    @staticmethod
+    def _generate_log_id() -> str:
+        try:
+            import logid
+        except ImportError as exc:
+            raise ImportError(
+                "bytedlogid is required to generate ADC log id. "
+                "Install it with `pip install bytedlogid -i https://bytedpypi.byted.org/simple/`."
+            ) from exc
+        return str(logid.generate_v2())
 
     @staticmethod
     def _stable_hash(value) -> str:

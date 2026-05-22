@@ -1,5 +1,7 @@
 import hashlib
 import json
+import sys
+import types
 import unittest
 from datetime import date, datetime
 from decimal import Decimal
@@ -52,8 +54,15 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         self.mock_callback_cls = self.callback_patcher.start()
         self.mock_callback = self.mock_callback_cls.return_value
         self.mock_callback.start.return_value = 10001
+        self.log_id_patcher = patch.object(
+            PrepareRecordKeyMapper,
+            "_generate_log_id",
+            return_value="test-log-id",
+        )
+        self.log_id_patcher.start()
 
     def tearDown(self):
+        self.log_id_patcher.stop()
         self.callback_patcher.stop()
 
     @staticmethod
@@ -142,8 +151,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         self.assertEqual(list(result.keys())[0], RECORD_KEY_FIELD)
         self.assertEqual(list(result.keys())[1], ADC_LOG_ID_FIELD)
         self.assertEqual(list(result.keys())[2:], ["query", "answer"])
-        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
-        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
+        self.assertEqual(result[ADC_LOG_ID_FIELD], "test-log-id")
 
     def test_places_existing_record_key_as_first_output_field(self):
         op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
@@ -157,8 +165,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
 
         self.assertEqual(list(result.keys()), [RECORD_KEY_FIELD, ADC_LOG_ID_FIELD, "query", "answer"])
         self.assertEqual(result[RECORD_KEY_FIELD], "existing-key")
-        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
-        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
+        self.assertEqual(result[ADC_LOG_ID_FIELD], "test-log-id")
 
     def test_generates_log_id_from_record_key_and_excludes_it_from_hash_source(self):
         op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
@@ -171,9 +178,18 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
 
         expected_key = stable_hash({"query": "hello"})
         self.assertEqual(result[RECORD_KEY_FIELD], expected_key)
-        self.assertIsInstance(result[ADC_LOG_ID_FIELD], str)
-        self.assertNotEqual(result[ADC_LOG_ID_FIELD], "")
+        self.assertEqual(result[ADC_LOG_ID_FIELD], "test-log-id")
         self.assertNotEqual(result[ADC_LOG_ID_FIELD], "stale-log-id")
+
+    def test_generate_log_id_uses_bytedlogid_generate_v2(self):
+        self.log_id_patcher.stop()
+        fake_logid = types.SimpleNamespace(generate_v2=lambda: "company-log-id")
+
+        with patch.dict(sys.modules, {"logid": fake_logid}):
+            result = PrepareRecordKeyMapper._generate_log_id()
+
+        self.assertEqual(result, "company-log-id")
+        self.log_id_patcher.start()
 
     def test_reuses_source_field_as_record_key(self):
         op = PrepareRecordKeyMapper(
