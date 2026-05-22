@@ -582,7 +582,7 @@ process:
             ctx=self._ctx(),
         )
 
-    def test_after_operator_finished_finalizes_and_sends_finish_notification(self):
+    def test_after_operator_finished_finalizes_without_finish_notification(self):
         op = LLMInferenceMapper(
             prompt="static prompt",
             ctx=self._ctx(),
@@ -591,16 +591,7 @@ process:
         op.after_operator_finished(error=RuntimeError("consume failed"))
 
         self.mock_callback.failed.assert_called_once_with(error_message="consume failed")
-        self.mock_send_test_card_notification.assert_called_once_with(
-            template_id="AAqt1lQ72dVxK",
-            template_variable={
-                "operator": "llm_inference_mapper",
-                "stage": "结束",
-                "content": '{"status": "FAILED"}',
-                "errMsg": "consume failed",
-            },
-            ctx=self._ctx(),
-        )
+        self.mock_send_test_card_notification.assert_not_called()
 
     def test_notification_failure_does_not_block_lifecycle_callback(self):
         self.mock_send_test_card_notification.side_effect = RuntimeError("notify down")

@@ -138,13 +138,7 @@ class LLMInferenceMapper(Mapper):
                 callback_client.failed(error_message=str(error))
         except Exception as exc:
             logger.warning("Failed to finish operator execution callback: {}", exc)
-        self._try_send_test_card_notification(
-            stage="结束",
-            content={
-                "status": "SUCCESS" if error is None else "FAILED",
-            },
-            err_msg="" if error is None else str(error),
-        )
+        # Finish notifications are temporarily disabled for ADC business operators.
 
     def _build_prompt(self, sample: dict[str, Any]) -> str:
         if self.prompt_field:
