@@ -1,0 +1,1876 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>重点能力</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --panel-soft: #f1f5f9;
+      --ink: #172033;
+      --muted: #5b6475;
+      --line: #dbe2ea;
+      --accent: #0f766e;
+      --accent-2: #2563eb;
+      --accent-3: #b45309;
+      --danger: #b42318;
+      --code-bg: #111827;
+      --code-ink: #e5e7eb;
+      --code-muted: #9ca3af;
+      --shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.62;
+    }
+
+    a {
+      color: var(--accent-2);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 28px 20px;
+      border-right: 1px solid var(--line);
+      background: #ffffff;
+      overflow-y: auto;
+    }
+
+    .toc-title {
+      margin: 0 0 18px;
+      font-size: 18px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .toc small {
+      display: block;
+      margin: -12px 0 22px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .toc a {
+      display: block;
+      padding: 7px 9px;
+      border-radius: 6px;
+      color: #334155;
+      font-size: 13px;
+    }
+
+    .toc a:hover {
+      background: var(--panel-soft);
+      text-decoration: none;
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    .hero {
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.10), rgba(37, 99, 235, 0.08)),
+        #ffffff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero-inner,
+    .content {
+      width: min(1120px, calc(100vw - 56px));
+      margin: 0 auto;
+    }
+
+    .hero-inner {
+      padding: 46px 0 30px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 720;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 42px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .metric {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .content {
+      padding: 30px 0 56px;
+    }
+
+    section {
+      margin: 28px 0;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 2px 8px;
+      border: 1px solid #b6d9d3;
+      border-radius: 999px;
+      background: #ecfdf5;
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 680;
+      white-space: nowrap;
+    }
+
+    .tag.blue {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .tag.orange {
+      border-color: #fed7aa;
+      background: #fff7ed;
+      color: #b45309;
+    }
+
+    .tag.red {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: var(--danger);
+    }
+
+    .note,
+    .warn {
+      margin: 14px 0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid;
+      background: #f8fafc;
+    }
+
+    .note {
+      border-color: #bfdbfe;
+    }
+
+    .warn {
+      border-color: #fed7aa;
+      background: #fffbeb;
+    }
+
+    table {
+      width: 100%;
+      margin: 12px 0 4px;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f8fafc;
+      font-weight: 720;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    :not(pre) > code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      color: #111827;
+    }
+
+    .code-block {
+      margin: 14px 0 18px;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+      background: var(--code-bg);
+    }
+
+    .code-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 8px 12px;
+      background: #0b1220;
+      color: #cbd5e1;
+      font-size: 12px;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    .copy-code {
+      border: 1px solid #334155;
+      border-radius: 6px;
+      background: #111827;
+      color: #dbeafe;
+      cursor: pointer;
+      font: inherit;
+      line-height: 1.2;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+
+    .copy-code:hover {
+      background: #1e293b;
+    }
+
+    .copy-code.copied {
+      border-color: #047857;
+      color: #a7f3d0;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      color: var(--code-ink);
+      white-space: pre;
+      tab-size: 2;
+    }
+
+    .tok-comment {
+      color: #8ea4c2;
+      font-style: italic;
+    }
+
+    .tok-key {
+      color: #7dd3fc;
+      font-weight: 600;
+    }
+
+    .tok-string {
+      color: #a7f3d0;
+    }
+
+    .tok-bool {
+      color: #fbbf24;
+      font-weight: 600;
+    }
+
+    .tok-number {
+      color: #c4b5fd;
+    }
+
+    .tok-flag {
+      color: #fdba74;
+      font-weight: 600;
+    }
+
+    .tok-var {
+      color: #fde68a;
+    }
+
+    .tok-command {
+      color: #93c5fd;
+      font-weight: 600;
+    }
+
+    .tok-punct {
+      color: #cbd5e1;
+    }
+
+    .tok-add {
+      display: inline-block;
+      width: 100%;
+      background: rgba(22, 101, 52, 0.28);
+      color: #bbf7d0;
+    }
+
+    .tok-del {
+      display: inline-block;
+      width: 100%;
+      background: rgba(153, 27, 27, 0.28);
+      color: #fecaca;
+    }
+
+    .tok-hunk {
+      display: inline-block;
+      width: 100%;
+      background: rgba(30, 64, 175, 0.26);
+      color: #bfdbfe;
+    }
+
+    .tok-meta {
+      display: inline-block;
+      width: 100%;
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: minmax(130px, 1fr) 30px minmax(130px, 1fr) 30px minmax(130px, 1fr) 30px minmax(130px, 1fr);
+      align-items: stretch;
+      gap: 0;
+      margin: 18px 0 14px;
+    }
+
+    .flow-node,
+    .flow-support {
+      position: relative;
+      min-height: 116px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .flow-node {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .flow-node small {
+      display: inline-flex;
+      width: fit-content;
+      margin-bottom: 8px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: #e0f2fe;
+      color: #075985;
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .flow-node strong,
+    .flow-support strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+      line-height: 1.3;
+    }
+
+    .flow-node span,
+    .flow-support span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .flow-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      font-size: 22px;
+      font-weight: 720;
+    }
+
+    .flow-support-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 0 0 16px;
+    }
+
+    .flow-support {
+      min-height: 88px;
+      background: #ffffff;
+    }
+
+    .flow-support::before {
+      content: "";
+      position: absolute;
+      top: -12px;
+      left: 22px;
+      width: 1px;
+      height: 12px;
+      background: var(--line);
+    }
+
+    .checklist {
+      padding-left: 20px;
+    }
+
+    .checklist li {
+      margin: 7px 0;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        display: block;
+      }
+
+      .toc {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-grid,
+      .grid-2,
+      .grid-3,
+      .flow,
+      .flow-support-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        gap: 8px;
+      }
+
+      .flow-arrow {
+        min-height: 20px;
+        transform: rotate(90deg);
+      }
+
+      .flow-support::before {
+        display: none;
+      }
+
+      .hero-inner,
+      .content {
+        width: min(100vw - 32px, 760px);
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+
+      section {
+        padding: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="toc" aria-label="目录">
+      <p class="toc-title">重点能力</p>
+      <small>Data-Juicer 内部用户能力说明</small>
+      <a href="#why">1. 能力概览</a>
+      <a href="#platform">2. 平台介绍</a>
+      <a href="#yaml">3. YAML 配置结构</a>
+      <a href="#operators">4. 算子示例</a>
+      <a href="#loader">5. Loader 选择建议</a>
+      <a href="#export">6. Export 选择建议</a>
+      <a href="#checkpoint">7. Checkpoint</a>
+      <a href="#debug">8. 验证与排障</a>
+      <a href="#params">9. 核心参数</a>
+      <a href="#recipes">10. 推荐组合</a>
+      <a href="#checklist">11. 上线前检查</a>
+      <a href="#roadmap">12. 未来规划</a>
+      <a href="#new">13. 附录：近期能力速览</a>
+    </nav>
+
+    <main>
+      <header class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Data-Juicer 内部用户能力说明</p>
+          <h1>重点能力</h1>
+          <p class="lead">
+            本文档面向业务用户和 pipeline 使用者，概述 Data-Juicer 的主要能力、YAML 配置结构、
+            HDFS / Magnus / Hive 的接入与导出方式，以及近期新增的限量导出、Ray HDFS 分布式写出、
+            checkpoint 和单样本 debug 能力。
+          </p>
+
+          <div class="hero-grid">
+            <div class="metric">
+              <strong>输入</strong>
+              <span>Ray remote 模式下接入 HDFS、Magnus、TQS、Hive 等内部数据源。</span>
+            </div>
+            <div class="metric">
+              <strong>处理</strong>
+              <span>通过 YAML 组合 mapper、filter、dedup 等算子。</span>
+            </div>
+            <div class="metric">
+              <strong>输出</strong>
+              <span>优先使用 HDFS 或 Magnus，支持限量导出。</span>
+            </div>
+            <div class="metric">
+              <strong>恢复</strong>
+              <span>通过 Ray Data checkpoint 和单样本 operator trace 辅助定位问题。</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section id="why">
+          <h2>1. 能力概览</h2>
+          <p>
+            对业务用户而言，Data-Juicer 的核心使用方式是通过 YAML 描述数据处理流程：
+            从输入源加载数据，按顺序执行算子处理，并将结果写入稳定的目标存储。
+          </p>
+          <div class="flow" aria-label="Data-Juicer Ray remote 能力流程图">
+            <div class="flow-node">
+              <small>Input</small>
+              <strong>Loader</strong>
+              <span>从 HDFS、Magnus、TQS 或 Hive 读取远程数据。</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node">
+              <small>Contract</small>
+              <strong>Schema</strong>
+              <span>明确字段名、类型、分区和列裁剪边界。</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node">
+              <small>Compute</small>
+              <strong>Process</strong>
+              <span>按 YAML 顺序执行 mapper、filter、dedup 等算子。</span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node">
+              <small>Output</small>
+              <strong>Export</strong>
+              <span>写入 HDFS 或 Magnus，必要时使用限量导出。</span>
+            </div>
+          </div>
+          <div class="flow-support-grid">
+            <div class="flow-support">
+              <strong>验证</strong>
+              <span>通过 Ray dry-run、export.max_rows 和单样本 operator trace 降低上线前定位成本。</span>
+            </div>
+            <div class="flow-support">
+              <strong>恢复</strong>
+              <span>通过 Ray Data checkpoint 保留已完成写出进度；需要 exactly-once 文件清理语义时开启 <code>delete_no_checkpoint_files</code>。</span>
+            </div>
+          </div>
+          <div class="note">
+            建议优先掌握三类配置：<code>dataset.configs</code>、<code>process</code> 和结构化 <code>export</code>。
+            算子参数可按任务需要查阅，不要求在首次使用时完整掌握。
+          </div>
+        </section>
+
+        <section id="platform">
+          <h2>2. 平台介绍</h2>
+          <p>
+            AI DataCenter 平台面向数据资产、算子资产、任务和工作流提供统一入口。本文先介绍与 Data-Juicer
+            使用最直接相关的三个模块：<strong>数据集管理</strong>、<strong>算子管理</strong> 和 <strong>任务管理</strong>。
+            平台中的其他模块后续可继续补充。
+          </p>
+
+          <div class="grid-3">
+            <div class="card">
+              <span class="tag blue">数据集管理</span>
+              <h3>管理可复用的数据资产</h3>
+              <p>
+                数据集管理用于查看数据集名称、英文名、数据源 ID、数据类型、负责人、更新时间、标签和接入状态。
+                用户可以从列表进入详情页，确认样例数据和结构信息，再决定后续 YAML 中的 loader、字段名和列裁剪范围。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag">算子管理</span>
+              <h3>管理可复用的数据处理能力</h3>
+              <p>
+                算子管理用于查看 mapper、filter、deduplicator 等处理能力。用户可以按分支、类型、名称、描述或负责人筛选算子，
+                并在详情页确认算子英文名、代码位置和参数定义。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag orange">任务管理</span>
+              <h3>编排并运行处理流程</h3>
+              <p>
+                任务管理用于把数据集节点、算子节点和标注节点组织成可上线、可执行的工作流。
+                用户可以在画布中调整节点顺序，在右侧配置数据源、schema、分区和参数，并通过预览、保存、上线和执行完成任务发布。
+              </p>
+            </div>
+          </div>
+
+          <h3>数据集管理</h3>
+          <table>
+            <thead>
+              <tr><th>页面区域</th><th>主要能力</th><th>对 Data-Juicer 使用的价值</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>数据集列表</td>
+                <td>按数据集名称、描述、负责人、数据域、数据类型和标签筛选，并查看更新时间、负责人和详情入口。</td>
+                <td>用于定位可接入的数据资产，确认是否已经有稳定的数据源可作为任务输入。</td>
+              </tr>
+              <tr>
+                <td>数据集详情</td>
+                <td>展示英文名称、数据源 ID、数据类型、负责人、更新时间、标签、RAG Ready 和训练接入优先等基础信息。</td>
+                <td>英文名称和数据源 ID 可作为跨平台沟通的稳定标识，数据类型用于判断后续 loader 和 export 方案。</td>
+              </tr>
+              <tr>
+                <td>数据样例</td>
+                <td>支持 JSON 视图和表格视图，展示样本中的真实字段和值。</td>
+                <td>用于上线前检查字段内容是否符合预期，尤其是长文本、列表字段、嵌套字段和空值情况。</td>
+              </tr>
+              <tr>
+                <td>结构信息</td>
+                <td>展示字段序号、字段名、中文名、数据类型和描述。</td>
+                <td>用于编写 YAML 时确认 <code>columns</code>、<code>text_key</code>、分区字段和算子输入输出字段。</td>
+              </tr>
+              <tr>
+                <td>数据接入</td>
+                <td>从数据集详情页进入接入流程。</td>
+                <td>用于把已登记的数据资产接入后续处理链路，减少手工复制路径和字段信息的错误。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="note">
+            使用 Data-Juicer 前，建议先在数据集详情页查看“数据样例”和“结构信息”。这一步可以提前发现字段名不一致、
+            字段类型不符合预期、样本内容为空或字段过长等问题。
+          </div>
+
+          <h3>算子管理</h3>
+          <table>
+            <thead>
+              <tr><th>页面区域</th><th>主要能力</th><th>对 Data-Juicer 使用的价值</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>算子列表</td>
+                <td>按代码分支、算子类型、名称或描述、负责人筛选算子资产。</td>
+                <td>用于快速找到可复用的清洗、过滤、增强、打分或导入类算子，避免重复开发。</td>
+              </tr>
+              <tr>
+                <td>算子卡片</td>
+                <td>展示中文名、英文名、算子类型、负责人、更新时间和简要描述。</td>
+                <td>英文名通常对应 YAML <code>process</code> 中使用的算子名，是编写配置时最关键的信息。</td>
+              </tr>
+              <tr>
+                <td>算子详情</td>
+                <td>展示中文名、英文名、算子类型、算子 ID、代码分支、代码仓库链接和描述。</td>
+                <td>用于确认算子来源和实现位置；当行为不符合预期时，可以通过代码链接进一步核对实现。</td>
+              </tr>
+              <tr>
+                <td>参数介绍</td>
+                <td>展示参数名称、字段描述、类型、是否必填和默认值。</td>
+                <td>用于把平台参数表转换为 YAML 参数，并确认哪些参数必须显式填写、哪些参数可使用默认值。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="note">
+            编写 <code>process</code> 时建议从算子详情页复制英文名，并按参数表填写 YAML。对于模型型、多模态或依赖外部服务的算子，
+            还需要结合代码仓库链接确认资源、依赖和运行环境要求。
+          </div>
+
+          <h3>任务管理</h3>
+          <table>
+            <thead>
+              <tr><th>页面区域</th><th>主要能力</th><th>对 Data-Juicer 使用的价值</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>工作流信息</td>
+                <td>展示工作流 ID、上线状态、版本号和当前空间，支持返回、保存、上线和执行。</td>
+                <td>用于确认当前编辑的是哪个任务版本，并区分草稿配置、已上线配置和实际执行入口。</td>
+              </tr>
+              <tr>
+                <td>节点面板</td>
+                <td>按算子分支展示基础节点、业务算子和图片算子等节点资产，并支持按节点名称或英文名搜索。</td>
+                <td>用于把平台中的数据集、算子和标注能力拖入工作流，形成可视化的数据处理链路。</td>
+              </tr>
+              <tr>
+                <td>工作流画布</td>
+                <td>以有向链路展示数据集节点、处理算子、结果输出和人工审核等节点顺序，支持缩放、布局优化和执行预览。</td>
+                <td>用于检查 Data-Juicer pipeline 的执行顺序，避免 YAML 中常见的算子顺序错误和输出节点遗漏。</td>
+              </tr>
+              <tr>
+                <td>节点配置</td>
+                <td>右侧配置当前节点的节点名称、数据源、schema 信息、分区信息和参数。</td>
+                <td>用于把可视化节点落到具体输入输出配置，例如选择 Lance 数据集、设置建表参数或补充分区字段。</td>
+              </tr>
+              <tr>
+                <td>基础信息与资源配置</td>
+                <td>配置任务基础信息和执行资源，并与保存、上线、执行流程配合使用。</td>
+                <td>用于将已经验证的处理流程提交到平台运行环境，减少本地 YAML 与线上执行配置不一致的问题。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="note">
+            任务管理更接近 Data-Juicer 的平台化编排入口。使用时建议先完成节点配置和执行预览，再上线执行；
+            对关键输出节点，应重点确认数据源类型、schema、分区和参数是否与目标导出要求一致。
+          </div>
+        </section>
+
+        <section id="yaml">
+          <h2>3. YAML 配置结构</h2>
+          <p>
+            本文中的 YAML 均以 Ray remote 任务为前提。一份任务配置通常包含四段：
+            任务运行环境、远程输入数据、处理算子和结果导出。
+          </p>
+
+          <div class="code-block">
+            <div class="code-head"><span>最小结构</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>project_name: &lt;your_project_name&gt;
+executor_type: ray              # fixed in this guide
+ray_address: auto
+work_dir: ./outputs/&lt;job_name&gt;
+
+dataset:
+  configs:
+    - type: remote               # fixed in this guide
+      source: hdfs               # common: hdfs | magnus | tqs | hive
+      path: hdfs://&lt;cluster&gt;/&lt;path&gt;/input
+
+process:
+  - text_length_filter:
+      min_len: 10
+  - whitespace_normalization_mapper: {}
+
+export:
+  target: hdfs                   # common: hdfs | magnus
+  type: jsonl                    # common: jsonl | parquet
+  path: hdfs://&lt;cluster&gt;/&lt;path&gt;/output/{job_id}
+  mode: error_if_exists          # enum: error_if_exists | overwrite | append</code></pre>
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>配置块</th><th>重点关注项</th><th>边界说明</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>dataset.configs</code></td>
+                <td>远程数据源、路径、字段列、limit、读取并发。</td>
+                <td>Ray HDFS 直读当前主路径是 Parquet；Hive 依赖内部 byted-ray。</td>
+              </tr>
+              <tr>
+                <td><code>process</code></td>
+                <td>算子按顺序执行；每个算子是一个 YAML map。</td>
+                <td>算子参数必须和字段类型匹配，复杂二进制字段要特别注意 schema。</td>
+              </tr>
+              <tr>
+                <td><code>export</code></td>
+                <td>目标、格式、写入模式、行数限制、schema、分区。</td>
+                <td>新任务建议用结构化 <code>export</code>，不要继续依赖旧式 <code>export_path</code>。</td>
+              </tr>
+              <tr>
+                <td><code>checkpoint</code></td>
+                <td>Ray 文件 source-to-sink 写出恢复策略。</td>
+                <td>本文仅介绍 <code>ray_data_checkpoint</code>，不展开默认 executor 的 checkpoint。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="operators">
+          <h2>4. 算子示例</h2>
+          <p>
+            <code>process</code> 是一个有序列表，Data-Juicer 会按 YAML 中的顺序执行算子。
+            常见算子可以粗略分为 mapper、filter 和 deduplicator：mapper 改写样本字段，filter 过滤样本，
+            deduplicator 做跨样本去重。业务用户通常只需要理解算子输入字段、输出影响和资源要求。
+          </p>
+
+          <table>
+            <thead>
+              <tr><th>类型</th><th>示例算子</th><th>典型用途</th><th>注意点</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Mapper</td>
+                <td><code>whitespace_normalization_mapper</code></td>
+                <td>标准化文本中的空白字符，并去掉首尾空白。</td>
+                <td>默认处理 <code>text_key</code> 指定的文本字段。</td>
+              </tr>
+              <tr>
+                <td>Filter</td>
+                <td><code>text_length_filter</code></td>
+                <td>按文本长度保留样本，例如过滤过短或过长文本。</td>
+                <td><code>min_len</code> 默认 <code>10</code>，<code>max_len</code> 默认不设实际上限。</td>
+              </tr>
+              <tr>
+                <td>Filter</td>
+                <td><code>language_id_score_filter</code></td>
+                <td>按语言识别结果和置信度保留样本。</td>
+                <td>依赖 FastText 模型，适合在资源和模型准备明确后使用。</td>
+              </tr>
+              <tr>
+                <td>Deduplicator</td>
+                <td><code>document_deduplicator</code></td>
+                <td>基于文本 hash 做文档级精确去重。</td>
+                <td>会跨样本判断重复，通常放在基础清洗和过滤之后。</td>
+              </tr>
+              <tr>
+                <td>多模态 Filter</td>
+                <td><code>image_text_similarity_filter</code></td>
+                <td>基于 CLIP 计算图文相似度并过滤样本。</td>
+                <td>属于模型型算子，代码声明使用 <code>cuda</code>，需要确认 GPU 资源和依赖。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="grid-2">
+            <div>
+              <h3>文本清洗链路</h3>
+              <div class="code-block">
+                <div class="code-head"><span>文本 mapper / filter / dedup</span><span>YAML</span></div>
+                <pre data-lang="yaml"><code>process:
+  - whitespace_normalization_mapper:
+      text_key: text              # default: text
+  - text_length_filter:
+      text_key: text              # default: text
+      min_len: 20                 # default: 10
+      max_len: 4096               # default: sys.maxsize
+  - language_id_score_filter:
+      text_key: text              # default: text
+      lang: zh                    # default: ""; empty means only score filtering
+      min_score: 0.8              # default: 0.8
+  - document_deduplicator:
+      text_key: text              # default: text
+      lowercase: false            # default: false
+      ignore_non_character: false # default: false</code></pre>
+              </div>
+            </div>
+            <div>
+              <h3>多模态过滤示例</h3>
+              <div class="code-block">
+                <div class="code-head"><span>图文相似度过滤</span><span>YAML</span></div>
+                <pre data-lang="yaml"><code>process:
+  - image_text_similarity_filter:
+      text_key: text              # default: text
+      image_key: images           # default: images; keep aligned with input schema
+      hf_clip: openai/clip-vit-base-patch32
+      min_score: 0.2              # default: 0.1
+      max_score: 1.0              # default: 1.0
+      any_or_all: any             # default: any; enum: any | all
+      reduce_mode: avg            # default: avg; enum: avg | max | min</code></pre>
+              </div>
+              <p class="muted">
+                模型型或多模态算子通常对依赖、模型下载、GPU 和字段 schema 更敏感。上线前建议先用
+                <code>ray_dry_run_plan</code>、<code>export.max_rows</code> 和单样本 debug 验证。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="loader">
+          <h2>5. Loader 选择建议</h2>
+          <p>
+            推荐优先级：<strong>HDFS Parquet / Magnus</strong> 优先。TQS loader 仅建议测试或小规模验证使用；
+            大规模任务建议先物化到 HDFS Parquet，再使用 HDFS loader。Hive 可用但不建议作为稳定交付的首选入口。
+          </p>
+
+          <h3>HDFS Loader，推荐大规模稳定读取</h3>
+          <p>
+            Ray 模式下推荐从 HDFS 读取 Parquet。适合上游已经把数据落成文件，或者从 TQS / Hive 物化出中间结果后再处理。
+          </p>
+          <div class="code-block">
+            <div class="code-head"><span>Ray HDFS Parquet 读取</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://&lt;cluster&gt;/&lt;path&gt;/input_parquet_dir
+      format: parquet             # default: parquet; Ray HDFS loader currently supports parquet
+      filesystem: pyarrow         # default: pyarrow; enum: pyarrow | webhdfs; webhdfs is for tests only
+      columns: ["text", "label", "p_date"]  # default: null; column pruning, unset means all columns
+      limit: 1000                 # default: null; limits rows entering process/export
+      override_num_blocks: 128    # default: null; target Ray block count, Ray decides when unset
+      concurrency: 64             # default: null; Ray parquet read concurrency, Ray decides when unset</code></pre>
+          </div>
+          <p class="muted">
+            <code>filesystem: webhdfs</code> 主要用于测试环境；线上 Ray 集群通常使用 <code>pyarrow</code>。
+          </p>
+          <table>
+            <thead>
+              <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>filesystem</code></td>
+                <td><code>pyarrow</code></td>
+                <td>HDFS filesystem 实现。线上 Ray 环境使用 <code>pyarrow</code>；<code>webhdfs</code> 仅用于测试环境验证。</td>
+              </tr>
+              <tr>
+                <td><code>columns</code></td>
+                <td><code>null</code></td>
+                <td>列裁剪配置。配置后只读取指定列；未配置时读取全部列。</td>
+              </tr>
+              <tr>
+                <td><code>override_num_blocks</code></td>
+                <td><code>null</code></td>
+                <td>期望的 Ray block 数。适合需要控制后续并行度或 block 粒度时设置；未配置时由 Ray 决定。</td>
+              </tr>
+              <tr>
+                <td><code>concurrency</code></td>
+                <td><code>null</code></td>
+                <td>Ray Parquet 读取并发。用于限制或提高读取任务并发；未配置时由 Ray 决定。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Magnus Loader，推荐读规范化表</h3>
+          <p>
+            如果数据已经在 Magnus 表里，并且 schema 清晰，直接读 Magnus 可以减少中间文件管理。
+            <code>filter</code> 指 Magnus / Iceberg 侧 partition filter，用于分区裁剪；其他读取参数通过
+            <code>magnus_conf</code> 透传给 <code>pyiceberg.ray.read_magnus</code>。
+          </p>
+          <div class="code-block">
+            <div class="code-head"><span>Magnus 读取</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: magnus
+      table_name: &lt;db&gt;.&lt;table&gt;
+      filter: "p_date = '20260520'"  # default: null; partition filter
+      magnus_conf:
+        parallelism: 1               # default: 1; read task parallelism
+        concurrency: null            # default: null; Ray datasource read concurrency
+        batch_size: 256              # default: 256; rows per reader batch
+        snapshot_id: null            # default: null; read a specific snapshot when set
+        selected_fields: null        # default: null; column pruning, unset means all columns
+        enable_bucket_aware: false   # default: false; bucket-aware read for supported partitioned tables
+        ray_remote_args: null        # default: null; Ray remote args for read tasks
+        read_options: {}             # default: {}; options passed to MagnusClient / reader
+        location: null               # default: null; table location, normally use table_name instead</code></pre>
+          </div>
+          <table>
+            <thead>
+              <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>filter</code></td>
+                <td><code>null</code></td>
+                <td>Magnus / Iceberg partition filter。推荐用于按分区裁剪读取范围。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.parallelism</code></td>
+                <td><code>1</code></td>
+                <td>传给 <code>read_magnus</code> 的 read task parallelism。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.concurrency</code></td>
+                <td><code>null</code></td>
+                <td>Ray datasource 读取并发。未设置时由 Ray / pyiceberg 默认逻辑决定。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.batch_size</code></td>
+                <td><code>256</code></td>
+                <td>Magnus reader 每批读取行数。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.selected_fields</code></td>
+                <td><code>null</code></td>
+                <td>列裁剪配置。配置后只读取指定字段；未配置时读取全部字段。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.snapshot_id</code></td>
+                <td><code>null</code></td>
+                <td>指定读取的 snapshot。未配置时读取当前默认 snapshot。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.read_options</code></td>
+                <td><code>{}</code></td>
+                <td>透传给 MagnusClient / reader / planner 的选项。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.enable_bucket_aware</code></td>
+                <td><code>false</code></td>
+                <td>是否启用 bucket-aware 读取。仅适用于底层支持的分区表。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.ray_remote_args</code></td>
+                <td><code>null</code></td>
+                <td>传给 Ray read task 的 remote 参数。</td>
+              </tr>
+              <tr>
+                <td><code>magnus_conf.location</code></td>
+                <td><code>null</code></td>
+                <td>按表 location 读取时使用。常规内部表建议优先使用 <code>table_name</code>。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>TQS Loader，仅建议测试使用</h3>
+          <div class="warn">
+            TQS loader 不推荐大规模直接使用，建议仅用于小样本测试、配置联调或上线前快速验证。
+            Ray TQS loader 不提供受支持的 Ray Data checkpoint source boundary，因此 <code>ray_data_checkpoint</code>
+            以及依赖 source-to-sink checkpoint 的恢复能力无法开启。生产或大规模处理建议先将 TQS 查询结果物化为
+            HDFS Parquet，再切换到 HDFS loader。
+          </div>
+          <div class="code-block">
+            <div class="code-head"><span>TQS 小样本读取</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: tqs
+      read_mode: client_result    # for tests / small samples only
+      query: "select id, text from &lt;db&gt;.&lt;table&gt; limit 100"
+      tqs_app_id: &lt;tqs_app_id&gt;   # do not write real secrets into shared YAML
+      tqs_app_key: &lt;tqs_app_key&gt;
+      user_name: &lt;user_name&gt;
+      tqs_cluster: cn             # default: cn
+      tqs_timeout: 120            # default: 120</code></pre>
+          </div>
+          <p class="muted">
+            如果任务需要 checkpoint、分布式稳定读取、列裁剪或更可控的并发，优先使用 TQS 物化后的 HDFS Parquet 路径。
+          </p>
+
+          <h3>Hive Loader，可用但不是首选</h3>
+          <div class="warn">
+            Hive loader 只支持 Ray 模式，并依赖内部 byted-ray。它的稳定性和可排障性通常弱于 HDFS Parquet / Magnus 路径，
+            尤其容易受 schema、分区、底层 reader 行为和集群环境影响。稳定交付时，建议先将 Hive/TQS 结果物化到 HDFS，再使用 HDFS loader。
+          </div>
+          <div class="code-block">
+            <div class="code-head"><span>Hive 读取</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>executor_type: ray
+ray_address: auto
+
+dataset:
+  configs:
+    - type: remote
+      source: hive
+      table_name: &lt;db&gt;.&lt;table&gt;
+      columns:                    # default: null; column pruning and optional type cast
+        - text
+        - label
+        - name: user_id
+          cast: BIGINT             # enum: STRING | BIGINT
+      filter: "p_date = '20260520'"  # default: null
+      concurrency: 64              # default: null; Ray Hive read concurrency
+      override_num_blocks: 128     # default: null; target Ray block count</code></pre>
+          </div>
+        </section>
+
+        <section id="export">
+          <h2>6. Export 选择建议</h2>
+          <p>
+            新任务建议优先使用结构化 <code>export</code>。文件型结果优先写入 HDFS；表型结果优先写入 Magnus。
+          </p>
+
+          <h3>HDFS Export，推荐文件型结果</h3>
+          <p>
+            Ray 模式下，<code>parquet</code> 和 <code>jsonl</code> 可以由 Ray workers 分布式写到 HDFS 目录。
+            这是大规模输出的推荐路径，也是和 Ray Data checkpoint 配合时的主路径。
+          </p>
+          <div class="grid-2">
+            <div>
+              <div class="code-block">
+                <div class="code-head"><span>写 HDFS Parquet</span><span>YAML</span></div>
+                <pre data-lang="yaml"><code>export:
+  target: hdfs
+  type: parquet
+  path: hdfs://&lt;cluster&gt;/&lt;path&gt;/result/{job_id}
+  filesystem: pyarrow             # default: pyarrow; enum: pyarrow | webhdfs; webhdfs is for tests only
+  mode: error_if_exists           # default: error_if_exists; enum: error_if_exists | overwrite | append
+  extra_args:
+    max_rows_per_file: 10000      # default: null; parquet writer row/file control
+    concurrency: 64               # default: null; Ray writer concurrency</code></pre>
+              </div>
+            </div>
+            <div>
+              <div class="code-block">
+                <div class="code-head"><span>写 HDFS JSONL</span><span>YAML</span></div>
+                <pre data-lang="yaml"><code>export:
+  target: hdfs
+  type: jsonl
+  path: hdfs://&lt;cluster&gt;/&lt;path&gt;/result/{job_id}
+  filesystem: pyarrow             # default: pyarrow; enum: pyarrow | webhdfs; webhdfs is for tests only
+  mode: append                    # default: error_if_exists; enum: error_if_exists | overwrite | append
+  extra_args:
+    min_rows_per_file: 10000      # default: null; JSONL datasink starts a new file after this row threshold
+    concurrency: 64               # default: null; Ray writer concurrency</code></pre>
+              </div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>mode</th><th>适合场景</th><th>注意点</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>error_if_exists</code></td>
+                <td>默认安全模式，避免误覆盖已有结果。</td>
+                <td>目标目录存在时会失败，重新执行前需要清理或更换路径。</td>
+              </tr>
+              <tr>
+                <td><code>overwrite</code></td>
+                <td>明确希望覆盖同一路径的测试任务。</td>
+                <td>会删除已有目标，不适合保留上次失败进度。</td>
+              </tr>
+              <tr>
+                <td><code>append</code></td>
+                <td>希望保留已写 part 文件，配合 checkpoint 做 at-least-once 恢复。</td>
+                <td>需要 exactly-once 文件清理语义时，应同时开启 <code>ray_data_checkpoint.delete_no_checkpoint_files</code>。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Magnus Export，推荐表型结果</h3>
+          <p>
+            Magnus 适合产出可被下游复用的规范化表。建议写清楚 <code>schema</code> 和分区配置，尤其是二进制、数组、嵌套字段。
+          </p>
+          <div class="code-block">
+            <div class="code-head"><span>写 Magnus 表</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>export:
+  target: magnus
+  table_name: &lt;db&gt;.&lt;table&gt;
+  operation: OVERWRITE             # default: APPEND; enum: APPEND | OVERWRITE
+  create_table_if_not_exists: true # default: false; create table before write when absent
+  infer_schema_on_create: false    # default: false; true only when schema is intentionally omitted
+  partition_columns: ["p_date"]    # default: null; partition columns for table creation / write
+  partition_values:
+    p_date: "20260520"
+  schema:                          # default: null; recommended for production Magnus writes
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "texts", type: "list&lt;string&gt;"}
+      - {name: "images", type: "list&lt;binary&gt;"}
+      - {name: "p_date", type: "string"}
+  magnus_failure_policy: abort     # default: abort; enum: abort | commit_completed_unsafe
+  magnus_conf:                     # default: {}
+    write_options:
+      write.format.default: lance</code></pre>
+          </div>
+          <p class="muted">
+            <code>commit_completed_unsafe</code> 仅适用于明确接受部分完成提交语义，并且理解 Ray Data checkpoint 恢复边界的任务。
+            常规任务建议使用 <code>abort</code>。
+          </p>
+
+          <h3>export.max_rows，用于限量验证</h3>
+          <p>
+            <code>export.max_rows</code> 控制传给 sink 的行数。它不是抽样算子，而是导出前的限制。
+            Ray <code>limit</code> 模式下，计算量可能减少，但属于 best effort；filter、all-to-all、已 materialize 的 dataset 或需要全量输入的算子仍可能处理更多数据。
+          </p>
+          <div class="code-block">
+            <div class="code-head"><span>限制导出 10 行</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>export:
+  target: magnus
+  table_name: &lt;db&gt;.&lt;table&gt;_sample
+  operation: OVERWRITE             # default: APPEND; enum: APPEND | OVERWRITE
+  max_rows: 10                     # default: null; unset means full export
+  max_rows_mode: limit             # default: limit; enum: limit | quota_reservation
+  max_rows_quota_batch_size: null  # default: null; only for quota_reservation</code></pre>
+          </div>
+        </section>
+
+        <section id="checkpoint">
+          <h2>7. Checkpoint</h2>
+          <p>
+            本文仅介绍 Ray remote 文件 source-to-sink 路径中的 <code>ray_data_checkpoint</code>。
+            它用于记录 Ray Data 写出元数据，辅助任务在失败后保留已完成的写出进度。
+          </p>
+          <table>
+            <thead>
+              <tr><th>能力</th><th>作用</th><th>推荐使用场景</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>ray_data_checkpoint</code></td>
+                <td>记录 Ray Data 文件 source 到文件 sink 的写出元数据。</td>
+                <td>Ray HDFS 分布式 export，任务失败后希望保留已完成 part。</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="code-block">
+            <div class="code-head"><span>Ray Data checkpoint</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>ray_data_checkpoint:
+  enabled: true                    # default: false
+  dir: hdfs://&lt;cluster&gt;/&lt;path&gt;/checkpoints/{job_id}  # default: null; required when enabled
+  delete_no_checkpoint_files: true   # default: false; enable when exactly-once file cleanup is required
+  write_interval: null             # default: null
+
+export:
+  target: hdfs
+  type: parquet
+  path: hdfs://&lt;cluster&gt;/&lt;path&gt;/result/{job_id}
+  mode: append                     # default: error_if_exists; enum: error_if_exists | overwrite | append</code></pre>
+          </div>
+          <div class="warn">
+            <code>delete_no_checkpoint_files</code> 默认为 <code>false</code>，适合保守保留已写 part 的恢复场景。
+            如果任务需要 exactly-once 文件清理语义，应设置为 <code>true</code>，让 Ray Data 在成功写入后删除未记录在 checkpoint metadata 中的 sink 文件。
+            仍建议为任务使用隔离输出路径，并结合重试策略和下游校验确认结果符合预期。
+          </div>
+        </section>
+
+        <section id="debug">
+          <h2>8. 验证与排障</h2>
+          <p>
+            本文不展开完整运维流程，仅保留 Ray remote 任务上线前的三类验证手段：
+            Ray plan dry-run、限量导出和单样本 operator trace。
+          </p>
+
+          <h3>Ray plan dry-run</h3>
+          <div class="code-block">
+            <div class="code-head"><span>仅构建执行计划</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>executor_type: ray
+ray_address: auto
+ray_dry_run_plan: true             # default: false</code></pre>
+          </div>
+
+          <h3>单样本 operator debug</h3>
+          <p>
+            调试时准备一行 JSON 样本和原 pipeline 的 <code>process</code> 配置。
+            debug 工具会输出每个算子执行后的结果、耗时和异常信息。
+            bytes 字段默认仅输出摘要；确需完整 bytes 时再开启 <code>full_base64</code>。
+          </p>
+          <div class="code-block">
+            <div class="code-head"><span>debug 配置</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>debug:
+  enabled: true                    # default: false; debug tool requires true
+  sample_json: '{"text": " hello world ", "sample_id": "demo-1"}'
+  output:
+    path: hdfs://&lt;cluster&gt;/&lt;path&gt;/debug_result/{job_id}/{debug_run_id}/trace.jsonl
+    type: jsonl                    # default: jsonl
+  bytes_output:
+    mode: summary                  # default: summary; enum: summary | full_base64
+    preview_bytes: 64              # default: 64
+  include_traceback: true          # default: true
+
+process:
+  - whitespace_normalization_mapper: {}
+  - text_length_filter:
+      min_len: 1</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-head"><span>线上 base64 YAML 入口</span><span>Shell</span></div>
+            <pre data-lang="shell"><code>PYTHONPATH="$PWD" python tools/debug_operator_pipeline_base64.py \
+  --config-base64 "$DJ_DEBUG_CONFIG_BASE64"</code></pre>
+          </div>
+
+          <h3>trace 输出示例</h3>
+          <div class="code-block">
+            <div class="code-head"><span>trace.jsonl 单行示意</span><span>JSON</span></div>
+            <pre data-lang="json"><code>{
+  "job_id": "debug_demo",
+  "debug_run_id": "20260520_120000_xxxxxx",
+  "op_name": "whitespace_normalization_mapper",
+  "status": "success",
+  "duration_ms": 3.2,
+  "sample": {"text": "hello world", "sample_id": "demo-1"}
+}</code></pre>
+          </div>
+        </section>
+
+        <section id="params">
+          <h2>9. 核心参数</h2>
+          <p>Ray remote 任务优先关注以下参数。完整参数以 loader/export 参考文档和代码为准。</p>
+          <table>
+            <thead>
+              <tr><th>参数</th><th>枚举或默认值</th><th>使用场景</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>executor_type</code></td>
+                <td><code>ray</code></td>
+                <td>本文仅覆盖 Ray 模式。</td>
+              </tr>
+              <tr>
+                <td><code>dataset.configs[].type</code></td>
+                <td><code>remote</code></td>
+                <td>本文仅覆盖远程数据源。</td>
+              </tr>
+              <tr>
+                <td><code>dataset.configs[].source</code></td>
+                <td><code>hdfs</code>、<code>magnus</code>、<code>tqs</code>、<code>hive</code>；无默认值</td>
+                <td>决定使用哪类 loader，建议显式配置；TQS 仅建议测试或小规模验证使用。</td>
+              </tr>
+              <tr>
+                <td><code>export.target</code></td>
+                <td><code>hdfs</code>、<code>magnus</code>；建议显式配置</td>
+                <td>决定结果交付形态。文件选 HDFS，表选 Magnus。</td>
+              </tr>
+              <tr>
+                <td><code>export.type</code></td>
+                <td><code>jsonl</code>、<code>parquet</code>；HDFS 默认按路径推断，无法推断时为 <code>jsonl</code></td>
+                <td>HDFS 文件输出推荐二选一，生产任务建议显式配置。</td>
+              </tr>
+              <tr>
+                <td><code>export.mode</code></td>
+                <td>默认 <code>error_if_exists</code>；枚举 <code>error_if_exists</code>、<code>overwrite</code>、<code>append</code></td>
+                <td>控制目标路径已存在时的处理方式。</td>
+              </tr>
+              <tr>
+                <td><code>export.max_rows_mode</code></td>
+                <td>默认 <code>limit</code>；枚举 <code>limit</code>、<code>quota_reservation</code></td>
+                <td>常规限量导出使用 <code>limit</code>；需要 sink 前配额语义时再考虑 <code>quota_reservation</code>。</td>
+              </tr>
+              <tr>
+                <td><code>ray_data_checkpoint.enabled</code></td>
+                <td>默认 <code>false</code>；枚举 <code>true</code>、<code>false</code></td>
+                <td>Ray HDFS 分布式写出且希望失败恢复时开启。</td>
+              </tr>
+              <tr>
+                <td><code>ray_data_checkpoint.delete_no_checkpoint_files</code></td>
+                <td>默认 <code>false</code>；枚举 <code>true</code>、<code>false</code></td>
+                <td>需要 exactly-once 文件清理语义时开启，删除未记录在 checkpoint metadata 中的 sink 文件。</td>
+              </tr>
+              <tr>
+                <td><code>ray_dry_run_plan</code></td>
+                <td>默认 <code>false</code>；枚举 <code>true</code>、<code>false</code></td>
+                <td>上线前验证 Ray plan，不真实执行重型任务。</td>
+              </tr>
+              <tr>
+                <td><code>debug.bytes_output.mode</code></td>
+                <td>默认 <code>summary</code>；枚举 <code>summary</code>、<code>full_base64</code></td>
+                <td>默认摘要；确需完整 bytes 时再落全量 base64。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="recipes">
+          <h2>10. 推荐组合</h2>
+          <div class="grid-3">
+            <div class="card">
+              <span class="tag blue">推荐文件链路</span>
+              <h3>HDFS Parquet 入，HDFS Parquet 出</h3>
+              <p>适合大规模离线处理和中间结果交付。配合 <code>ray_data_checkpoint</code>、<code>mode: append</code> 和按需开启的 <code>delete_no_checkpoint_files</code> 控制恢复语义。</p>
+            </div>
+            <div class="card">
+              <span class="tag">规范表交付</span>
+              <h3>HDFS 或 Magnus 入，Magnus 出</h3>
+              <p>适合下游要读表的场景。建议显式写 <code>schema</code>、<code>partition_columns</code> 和 <code>partition_values</code>。</p>
+            </div>
+            <div class="card">
+              <span class="tag orange">上线前验证</span>
+              <h3>dry-run + max_rows + debug</h3>
+              <p>先启用 <code>ray_dry_run_plan</code>，再配置 <code>export.max_rows: 10</code>，最后对异常样本执行 operator debug。</p>
+            </div>
+          </div>
+
+          <h3>一份推荐的内部任务模板</h3>
+          <div class="code-block">
+            <div class="code-head"><span>HDFS 入，Magnus 出，限量验证</span><span>YAML</span></div>
+            <pre data-lang="yaml"><code>project_name: &lt;business&gt;_data_juicer_demo
+executor_type: ray
+ray_address: auto
+work_dir: ./outputs/&lt;business&gt;_data_juicer_demo
+ray_dry_run_plan: false            # default: false; set true before online validation
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://&lt;cluster&gt;/&lt;path&gt;/input_parquet
+      format: parquet              # default: parquet
+      filesystem: pyarrow          # default: pyarrow; enum: pyarrow | webhdfs; webhdfs is for tests only
+      columns: ["id", "text", "p_date"]  # default: null; column pruning
+      override_num_blocks: 128     # default: null; target Ray block count
+      concurrency: 64              # default: null; Ray parquet read concurrency
+
+process:
+  - text_length_filter:
+      text_key: text
+      min_len: 10
+
+export:
+  target: magnus
+  table_name: &lt;db&gt;.&lt;table&gt;
+  operation: OVERWRITE             # default: APPEND; enum: APPEND | OVERWRITE
+  max_rows: 1000                   # default: null; remove after validation if full output is needed
+  max_rows_mode: limit             # default: limit; enum: limit | quota_reservation
+  create_table_if_not_exists: true # default: false
+  partition_columns: ["p_date"]    # default: null
+  partition_values:
+    p_date: "20260520"
+  schema:                          # default: null; recommended for production Magnus writes
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "text", type: "string"}
+      - {name: "p_date", type: "string"}
+  magnus_conf: {}                  # default: {}</code></pre>
+          </div>
+        </section>
+
+        <section id="checklist">
+          <h2>11. 上线前检查</h2>
+          <ul class="checklist">
+            <li>输入路径、目标路径、Magnus 表名均应替换为实际资源，不应将密钥写入 YAML 或文档。</li>
+            <li>本文范围内的任务固定使用 <code>executor_type: ray</code>，上线前建议先执行 <code>ray_dry_run_plan: true</code>。</li>
+            <li>首次写目标表或目标目录时，建议先设置 <code>export.max_rows</code> 进行限量验证。</li>
+            <li>写 HDFS 时确认 <code>path</code> 是目录路径，Ray 分布式 HDFS export 不接受单个文件路径。</li>
+            <li>写 Magnus 时优先显式配置 <code>schema</code>，并确认分区列和值与目标表一致。</li>
+            <li>需要失败恢复时，提前设计 <code>ray_data_checkpoint.dir</code> 和 <code>export.mode</code>；需要 exactly-once 文件清理语义时开启 <code>delete_no_checkpoint_files</code>。</li>
+            <li>TQS loader 不推荐大规模直接使用，也无法开启 <code>ray_data_checkpoint</code>；生产任务建议先物化到 HDFS Parquet。</li>
+            <li>Hive 仅作为次选路径。稳定性优先时，建议先物化到 HDFS，再使用 HDFS loader。</li>
+            <li>单条样本异常时，使用 operator debug 输出 HDFS JSONL trace；bytes 默认使用摘要，必要时再开启全量 base64。</li>
+          </ul>
+        </section>
+
+        <section id="roadmap">
+          <h2>12. 未来规划</h2>
+          <p>
+            后续建设重点会围绕平台化使用体验展开，使用户更容易提交、观察、调试和复用 Data-Juicer Ray remote 任务。
+            具体上线节奏以平台入口和发布说明为准。
+          </p>
+          <div class="grid-2">
+            <div class="card">
+              <span class="tag">易用性</span>
+              <h3>平台的易用性</h3>
+              <p>
+                降低 YAML 编写和任务提交门槛，提供更清晰的配置模板、参数校验、默认值说明和常见错误提示。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag blue">工作流</span>
+              <h3>更强的工作流管理能力</h3>
+              <p>
+                支持更完整的任务生命周期管理，包括配置版本、提交记录、重试策略、产物追踪和多阶段处理流程。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag orange">可观测</span>
+              <h3>任务更强的可观测性</h3>
+              <p>
+                汇总 Ray 任务状态、算子耗时、输入输出行数、失败原因、资源使用和关键数据质量指标，减少人工排障成本。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag blue">Debug</span>
+              <h3>debug 能力在平台集成</h3>
+              <p>
+                将单样本 operator trace、base64 配置入口、HDFS JSONL trace 输出和失败样本定位能力整合到平台操作流中。
+              </p>
+            </div>
+            <div class="card">
+              <span class="tag">常驻集群</span>
+              <h3>几个可以试用的常驻集群</h3>
+              <p>
+                规划提供可试用的常驻 Ray 集群入口，覆盖小样本验证、CPU 批处理和 GPU / 多模态算子验证等场景。
+                具体集群名称、资源规格和使用权限以平台实际入口为准。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="new">
+          <h2>13. 附录：近期能力速览</h2>
+          <div class="grid-3">
+            <div class="card">
+              <span class="tag">限量验证</span>
+              <h3>export.max_rows</h3>
+              <p>控制进入导出 sink 的行数。Ray 模式下默认走 <code>Dataset.limit</code>，在兼容 lazy pipeline 时可以减少上游计算量。</p>
+            </div>
+            <div class="card">
+              <span class="tag blue">HDFS</span>
+              <h3>Ray 分布式写 HDFS</h3>
+              <p>Ray workers 可直接将 <code>parquet</code> 或 <code>jsonl</code> 写入 HDFS 目录，避免 driver 暂存后再复制。</p>
+            </div>
+            <div class="card">
+              <span class="tag orange">恢复</span>
+              <h3>ray_data_checkpoint</h3>
+              <p>给 Ray source-to-sink 写入路径增加 checkpoint 元数据；需要 exactly-once 文件清理语义时开启 <code>delete_no_checkpoint_files</code>。</p>
+            </div>
+            <div class="card">
+              <span class="tag">Magnus</span>
+              <h3>Magnus 写入增强</h3>
+              <p>支持建表、schema 推断、分区写入、覆盖校验和失败策略。适合规范化结果表交付。</p>
+            </div>
+            <div class="card">
+              <span class="tag blue">Debug</span>
+              <h3>Operator trace</h3>
+              <p>输入一行 JSON，追踪每个算子执行后的样本、耗时、状态和异常，结果可写 HDFS JSONL。</p>
+            </div>
+            <div class="card">
+              <span class="tag orange">上线前</span>
+              <h3>ray_dry_run_plan</h3>
+              <p>仅构建并打印 Ray Data logical / physical plan，不读取大规模数据、不调用重型服务、不写入目标表。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      function escapeHtml(text) {
+        return text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function findCommentIndex(line) {
+        let quote = null;
+        for (let i = 0; i < line.length; i += 1) {
+          const ch = line[i];
+          const prev = i > 0 ? line[i - 1] : "";
+          if ((ch === "\"" || ch === "'") && prev !== "\\") {
+            quote = quote === ch ? null : quote || ch;
+          }
+          if (ch === "#" && !quote) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      function highlightYamlScalar(text) {
+        let value = escapeHtml(text);
+        value = value.replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, '<span class="tok-string">$1</span>');
+        value = value.replace(/\b(true|false|null)\b/g, '<span class="tok-bool">$1</span>');
+        value = value.replace(/\b(\d+)\b/g, '<span class="tok-number">$1</span>');
+        return value;
+      }
+
+      function highlightYamlLine(line) {
+        const commentIndex = findCommentIndex(line);
+        const codePart = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+        const commentPart = commentIndex >= 0 ? line.slice(commentIndex) : "";
+        const keyMatch = codePart.match(/^(\s*(?:-\s*)?)([A-Za-z0-9_.*\[\]{}-]+)(\s*:)(.*)$/);
+        let rendered;
+        if (keyMatch) {
+          rendered = escapeHtml(keyMatch[1])
+            + '<span class="tok-key">' + escapeHtml(keyMatch[2]) + '</span>'
+            + escapeHtml(keyMatch[3])
+            + highlightYamlScalar(keyMatch[4]);
+        } else {
+          rendered = highlightYamlScalar(codePart);
+        }
+        if (commentPart) {
+          rendered += '<span class="tok-comment">' + escapeHtml(commentPart) + '</span>';
+        }
+        return rendered;
+      }
+
+      function highlightJsonLine(line) {
+        let out = "";
+        for (let i = 0; i < line.length;) {
+          const ch = line[i];
+          if (ch === "\"") {
+            let j = i + 1;
+            while (j < line.length) {
+              if (line[j] === "\\" && j + 1 < line.length) {
+                j += 2;
+                continue;
+              }
+              if (line[j] === "\"") {
+                j += 1;
+                break;
+              }
+              j += 1;
+            }
+            const token = line.slice(i, j);
+            let k = j;
+            while (k < line.length && /\s/.test(line[k])) {
+              k += 1;
+            }
+            const klass = line[k] === ":" ? "tok-key" : "tok-string";
+            out += '<span class="' + klass + '">' + escapeHtml(token) + '</span>';
+            i = j;
+            continue;
+          }
+          if (/[0-9-]/.test(ch)) {
+            const match = line.slice(i).match(/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+            if (match) {
+              out += '<span class="tok-number">' + escapeHtml(match[0]) + '</span>';
+              i += match[0].length;
+              continue;
+            }
+          }
+          const literal = line.slice(i).match(/^(true|false|null)\b/);
+          if (literal) {
+            out += '<span class="tok-bool">' + literal[0] + '</span>';
+            i += literal[0].length;
+            continue;
+          }
+          if (/[\[\]{}:,]/.test(ch)) {
+            out += '<span class="tok-punct">' + escapeHtml(ch) + '</span>';
+          } else {
+            out += escapeHtml(ch);
+          }
+          i += 1;
+        }
+        return out;
+      }
+
+      function highlightShellLine(line) {
+        const commentIndex = findCommentIndex(line);
+        const codePart = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+        const commentPart = commentIndex >= 0 ? line.slice(commentIndex) : "";
+        const pieces = codePart.split(/(\s+)/);
+        let seenCommand = false;
+        let rendered = pieces.map((piece) => {
+          if (!piece || /^\s+$/.test(piece)) {
+            return escapeHtml(piece);
+          }
+          if (piece === "\\") {
+            return '<span class="tok-punct">\\</span>';
+          }
+          if (piece.startsWith("-")) {
+            return '<span class="tok-flag">' + escapeHtml(piece) + '</span>';
+          }
+          if (piece.includes("$") || /^[A-Z_][A-Z0-9_]*=/.test(piece)) {
+            return '<span class="tok-var">' + escapeHtml(piece) + '</span>';
+          }
+          if (!seenCommand && !piece.includes("=")) {
+            seenCommand = true;
+            return '<span class="tok-command">' + escapeHtml(piece) + '</span>';
+          }
+          return escapeHtml(piece);
+        }).join("");
+        if (commentPart) {
+          rendered += '<span class="tok-comment">' + escapeHtml(commentPart) + '</span>';
+        }
+        return rendered;
+      }
+
+      function highlightDiffLine(line) {
+        const escaped = escapeHtml(line);
+        if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
+          return '<span class="tok-meta">' + escaped + '</span>';
+        }
+        if (line.startsWith("@@")) {
+          return '<span class="tok-hunk">' + escaped + '</span>';
+        }
+        if (line.startsWith("+")) {
+          return '<span class="tok-add">' + escaped + '</span>';
+        }
+        if (line.startsWith("-")) {
+          return '<span class="tok-del">' + escaped + '</span>';
+        }
+        return escaped;
+      }
+
+      function highlightPlainCodeLine(line) {
+        let value = escapeHtml(line);
+        value = value.replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, '<span class="tok-string">$1</span>');
+        value = value.replace(/\b(true|false|null)\b/g, '<span class="tok-bool">$1</span>');
+        value = value.replace(/\b(\d+)\b/g, '<span class="tok-number">$1</span>');
+        return value;
+      }
+
+      function languageForBlock(pre) {
+        const explicit = (pre.getAttribute("data-lang") || "").toLowerCase();
+        if (explicit) {
+          return explicit;
+        }
+        const id = pre.id || "";
+        const label = pre.closest(".code-block")?.querySelector(".code-head span")?.innerText || "";
+        const lowerLabel = label.toLowerCase();
+        if (id.includes("json") || lowerLabel.includes("json") || lowerLabel.endsWith(".json") || lowerLabel.endsWith(".jsonl")) {
+          return "json";
+        }
+        if (id.startsWith("cmd-") || lowerLabel.endsWith(".sh") || lowerLabel.includes("command") || lowerLabel.includes("命令") || lowerLabel.includes("入口")) {
+          return "shell";
+        }
+        if (id.includes("yaml") || lowerLabel.endsWith(".yaml") || lowerLabel.endsWith(".yml") || lowerLabel.includes("yaml")) {
+          return "yaml";
+        }
+        if (id.includes("diff") || lowerLabel.includes("diff") || lowerLabel.includes("patch")) {
+          return "diff";
+        }
+        return "code";
+      }
+
+      function highlighterFor(language) {
+        if (language === "yaml" || language === "yml") {
+          return highlightYamlLine;
+        }
+        if (language === "json" || language === "jsonl") {
+          return highlightJsonLine;
+        }
+        if (language === "shell" || language === "bash" || language === "sh") {
+          return highlightShellLine;
+        }
+        if (language === "diff" || language === "patch") {
+          return highlightDiffLine;
+        }
+        return highlightPlainCodeLine;
+      }
+
+      window.applyArtifactCodeHighlighting = function applyArtifactCodeHighlighting(root) {
+        const scope = root || document;
+        for (const pre of scope.querySelectorAll("pre")) {
+          const block = pre.querySelector("code");
+          if (!block || block.dataset.highlighted === "true") {
+            continue;
+          }
+          const original = block.innerText;
+          const language = languageForBlock(pre);
+          block.innerHTML = original.split("\n").map(highlighterFor(language)).join("\n");
+          block.dataset.highlighted = "true";
+        }
+      };
+
+      function installCopyButtons(root) {
+        const scope = root || document;
+        for (const codeBlock of scope.querySelectorAll(".code-block")) {
+          const head = codeBlock.querySelector(".code-head");
+          const code = codeBlock.querySelector("pre code");
+          if (!head || !code || head.querySelector(".copy-code")) {
+            continue;
+          }
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "copy-code";
+          button.textContent = "复制";
+          button.addEventListener("click", async () => {
+            const text = code.innerText;
+            try {
+              await navigator.clipboard.writeText(text);
+              button.textContent = "已复制";
+              button.classList.add("copied");
+              window.setTimeout(() => {
+                button.textContent = "复制";
+                button.classList.remove("copied");
+              }, 1400);
+            } catch (error) {
+              button.textContent = "复制失败";
+              window.setTimeout(() => {
+                button.textContent = "复制";
+              }, 1400);
+            }
+          });
+          head.appendChild(button);
+        }
+      }
+
+      function boot() {
+        window.applyArtifactCodeHighlighting(document);
+        installCopyButtons(document);
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", boot);
+      } else {
+        boot();
+      }
+    })();
+  </script>
+</body>
+</html>
+        } else {
+          pre.innerHTML = escapeHtml(raw);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

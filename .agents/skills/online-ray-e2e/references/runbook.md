@@ -24,6 +24,12 @@ The helper defaults to:
 - YARN cluster: `rabbit-hl`
 - output dir: `/tmp/data_juicer_e2e/<job_id>`
 
+Input data rule:
+
+- Online Ray E2E is distributed execution. Do not use repository-local sample files such as `demos/.../*.jsonl` as the real input source, because workers may not have those files in the runtime working directory even when the driver can see the repository.
+- Prefer HDFS-backed sample data for online E2E. If the path is from production or shared test data, probe existence and size first with `ExecuteHdfsCommand`.
+- Repo-local data is still acceptable for local dry-run or local single-process smoke checks, but it is not a reliable online Ray E2E data source.
+
 Useful variants:
 
 ```bash

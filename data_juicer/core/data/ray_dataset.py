@@ -663,6 +663,9 @@ class RayDataset(DJDataset):
                 if plan_only and callable(run_plan_only):
                     self.data = run_plan_only(self.data)
                 else:
+                    set_runtime_context = getattr(op, "set_runtime_context", None)
+                    if callable(set_runtime_context):
+                        set_runtime_context(cfg=self.cfg)
                     self.data = op.run(self.data)
             else:
                 logger.error("Ray executor only support Filter, Mapper, Deduplicator and Pipeline OPs for now")

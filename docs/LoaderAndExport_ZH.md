@@ -228,6 +228,7 @@ dataset:
       filesystem: pyarrow
       columns: ["text", "label"]
       limit: 1000
+      on_bad_files: error
       skip_zero_row_group_files: true
       override_num_blocks: 128
 ```
@@ -241,6 +242,7 @@ dataset:
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
 | `limit` | 否 | 无 | Ray HDFS 直读 Parquet 后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
+| `on_bad_files` | 否 | `error` | 坏 parquet 文件处理策略。`error` 保持 fail-fast；`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。如果所有文件都被跳过，则返回空 Ray Dataset。该配置不透传给 Ray，也不覆盖 worker 读取 data page 时才暴露的深层损坏。 |
 | `skip_zero_row_group_files` | 否 | `true` | 是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |
 | `columns`、`parallelism`、`num_cpus`、`num_gpus`、`memory`、`ray_remote_args`、`tensor_column_schema`、`partition_filter`、`partitioning`、`shuffle`、`include_paths`、`file_extensions`、`concurrency`、`override_num_blocks` | 否 | 无 | 会转发给 Ray Parquet reader 的白名单参数。 |
@@ -557,7 +559,7 @@ export:
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
 | `mode` | 否 | `error_if_exists` | 写入模式。`error_if_exists`：目标已存在时失败；`overwrite`：写入前删除已有目标；`append`：直接追加 part 文件，重试或重跑可能产生重复文件。checkpoint 的可启用性不依赖具体 `mode`，但失败后重提任务的恢复语义依赖 `mode`。 |
-| `extra_args` | 否 | `{}` | 传给 Ray writer / datasink 的参数，例如 `concurrency`、`ray_remote_args`、`min_rows_per_file`、`num_rows_per_file`、`max_rows_per_file`。旧版 byted-ray 的 parquet writer 不支持 `max_rows_per_file` 时会兼容映射到 `min_rows_per_file`。JSONL 推荐使用 `num_rows_per_file` 或 `min_rows_per_file`。 |
+| `extra_args` | 否 | `{}` | 传给 Ray writer / datasink 的参数，例如 `concurrency`、`ray_remote_args`、`min_rows_per_file`、`num_rows_per_file`、`max_rows_per_file`。Parquet 的 `max_rows_per_file` 只有在当前 Ray writer 支持该参数时才会生效；旧版 Ray 不支持时会被参数过滤逻辑丢弃。JSONL 推荐使用 `num_rows_per_file` 或 `min_rows_per_file`。 |
 
 限制：
 

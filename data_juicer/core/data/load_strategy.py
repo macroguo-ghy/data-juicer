@@ -91,11 +91,27 @@ def _validate_positive_int(value: int) -> None:
         raise ValueError("Expected a positive integer")
 
 
+def _validate_on_bad_files(value: str) -> None:
+    if value not in {"error", "skip"}:
+        raise ValueError("Expected `error` or `skip`")
+
+
 def _is_countable_parquet_metadata_file(path: str) -> bool:
     name = os.path.basename(path)
     if not name or name.startswith(("_", ".")):
         return False
+    path_parts = path.replace("\\", "/").split("/")
+    if any(part.startswith(("_", ".")) for part in path_parts[:-1]):
+        return False
     return True
+
+
+def _is_zero_byte_parquet_file(filesystem, path: str) -> bool:
+    try:
+        file_info = filesystem.get_file_info(path)
+        return file_info.size == 0
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -176,6 +192,9 @@ def _filter_ray_sampled_zero_row_group_files(
         zero_row_group_paths = set()
         for sample_idx in _ray_parquet_sample_indices(len(readable_paths)):
             parquet_path = readable_paths[sample_idx]
+            if _is_zero_byte_parquet_file(filesystem, parquet_path):
+                zero_row_group_paths.add(parquet_path)
+                continue
             metadata = metadata_cache.get(parquet_path)
             if metadata is None:
                 metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
@@ -218,6 +237,7 @@ def _build_parquet_read_plan_from_filesystem(
     path: str | list[str],
     *,
     filter_for_ray_sampling_only: bool = False,
+    skip_bad_files: bool = False,
 ) -> _ParquetReadPlan:
     try:
         import pyarrow.parquet as pq
@@ -225,7 +245,7 @@ def _build_parquet_read_plan_from_filesystem(
         parquet_paths = _parquet_files_from_filesystem(filesystem, path)
         if parquet_paths is None:
             return _ParquetReadPlan(paths=path)
-        if filter_for_ray_sampling_only:
+        if filter_for_ray_sampling_only and not skip_bad_files:
             return _filter_ray_sampled_zero_row_group_files(filesystem, path, parquet_paths)
 
         readable_paths = []
@@ -233,25 +253,51 @@ def _build_parquet_read_plan_from_filesystem(
         schema = None
         skipped_empty_file_count = 0
         first_skipped_path = None
+        first_skipped_error = None
+
+        def record_skipped_file(parquet_path: str, error: str) -> None:
+            nonlocal skipped_empty_file_count, first_skipped_path, first_skipped_error
+            skipped_empty_file_count += 1
+            if first_skipped_path is None:
+                first_skipped_path = parquet_path
+                first_skipped_error = error
+
         for parquet_path in parquet_paths:
-            metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
+            if _is_zero_byte_parquet_file(filesystem, parquet_path):
+                record_skipped_file(parquet_path, "zero-byte file")
+                continue
+            try:
+                metadata = pq.read_metadata(parquet_path, filesystem=filesystem)
+            except Exception as exc:
+                if not skip_bad_files:
+                    raise
+                record_skipped_file(parquet_path, f"{type(exc).__name__}: {exc}")
+                continue
             if schema is None:
                 schema = metadata.schema.to_arrow_schema()
             row_count += metadata.num_rows
             if metadata.num_row_groups == 0:
-                skipped_empty_file_count += 1
-                if first_skipped_path is None:
-                    first_skipped_path = parquet_path
+                record_skipped_file(parquet_path, "0 row groups")
                 continue
             readable_paths.append(parquet_path)
 
         if skipped_empty_file_count:
-            logger.warning(
-                "Skipping {} parquet file(s) with 0 row groups under {}. First skipped file: {}",
-                skipped_empty_file_count,
-                path,
-                first_skipped_path,
-            )
+            if skip_bad_files:
+                logger.warning(
+                    "Skipping {} bad parquet file(s) under {} due to on_bad_files=skip. "
+                    "First skipped file: {}. First error: {}",
+                    skipped_empty_file_count,
+                    path,
+                    first_skipped_path,
+                    first_skipped_error,
+                )
+            else:
+                logger.warning(
+                    "Skipping {} parquet file(s) with 0 row groups under {}. First skipped file: {}",
+                    skipped_empty_file_count,
+                    path,
+                    first_skipped_path,
+                )
             return _ParquetReadPlan(
                 paths=readable_paths,
                 schema=schema,
@@ -260,6 +306,8 @@ def _build_parquet_read_plan_from_filesystem(
             )
         return _ParquetReadPlan(paths=path, schema=schema, row_count=row_count)
     except Exception as exc:
+        if skip_bad_files:
+            raise
         logger.debug("Failed to build parquet read plan from metadata for {}: {}", path, exc)
         return _ParquetReadPlan(paths=path)
 
@@ -1092,11 +1140,13 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
             "load_kwargs": dict,
             "limit": int,
             "skip_zero_row_group_files": bool,
+            "on_bad_files": str,
         },
         "custom_validators": {
             "path": _validate_hdfs_path_config,
             "filesystem": _validate_ray_hdfs_filesystem,
             "limit": _validate_positive_int,
+            "on_bad_files": _validate_on_bad_files,
         },
     }
 
@@ -1148,8 +1198,15 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                     )
                 else:
                     filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
+            on_bad_files = self.ds_config.get("on_bad_files", "error")
             skip_zero_row_group_files = self.ds_config.get("skip_zero_row_group_files", True)
-            if skip_zero_row_group_files:
+            if on_bad_files == "skip":
+                read_plan = _build_parquet_read_plan_from_filesystem(
+                    filesystem,
+                    fs_path,
+                    skip_bad_files=True,
+                )
+            elif skip_zero_row_group_files:
                 read_plan = _build_parquet_read_plan_from_filesystem(
                     filesystem,
                     fs_path,

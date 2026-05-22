@@ -75,9 +75,6 @@ process:
       api_key: "<YOUR_API_KEY>"
       temperature: 0.0
       timeout: 120
-      image_token_divisor: 1764
-      max_image_tokens: 5120
-      image_tokens_per_image: 5120
       batch_size: 1
       num_proc: 16
       num_cpus: 1

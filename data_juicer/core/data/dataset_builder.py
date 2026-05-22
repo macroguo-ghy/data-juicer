@@ -12,17 +12,15 @@ from data_juicer.core.data import DJDataset, NestedDataset
 from data_juicer.core.data.config_validator import ConfigValidationError
 from data_juicer.core.data.data_validator import DataValidatorRegistry
 from data_juicer.core.data.load_strategy import DataLoadStrategyRegistry
+from data_juicer.core.data.ray_join import (
+    apply_ray_dataset_join,
+    log_join_dry_run_notice,
+    normalize_data_type_and_source,
+    normalize_ray_join_config,
+    validate_no_checkpoint_with_ray_join,
+)
 from data_juicer.utils.file_utils import is_absolute_path
 from data_juicer.utils.sample import random_sample
-
-
-def normalize_data_type_and_source(ds_config):
-    data_type = ds_config.get("type", None)
-    data_source = ds_config.get("source", None)
-    if data_source is None and data_type not in {None, "local", "remote"}:
-        data_source = data_type
-        data_type = "remote"
-    return data_type, data_source
 
 
 def _align_nested_datasets(datasets_to_merge):
@@ -151,6 +149,53 @@ class DatasetBuilder(object):
         for ds_config in ds_configs["configs"]:
             if not isinstance(ds_config, dict):
                 raise ConfigValidationError("Dataset configs should be dictionaries")
+        normalized_sources = [normalize_data_type_and_source(ds_config) for ds_config in ds_configs["configs"]]
+        data_types = {data_type for data_type, _ in normalized_sources}
+        if self.executor_type == "default" and len(data_types) > 1:
+            raise ConfigValidationError("Mixture of diff types is not supported by the default dataset builder")
+        if (
+            self.executor_type == "default"
+            and len(ds_configs["configs"]) > 1
+            and data_types == {"remote"}
+        ):
+            raise ConfigValidationError("Multiple remote datasets are not supported by the default dataset builder")
+        self.dataset_join_config = None
+        self.dataset_join_strategy_names = None
+        if "join" in ds_configs and ds_configs["join"]:
+            if self.executor_type != "ray":
+                raise ConfigValidationError("`dataset.join` is only supported with executor_type='ray'.")
+            self.dataset_join_config = normalize_ray_join_config(ds_configs["join"])
+            left_name = ds_configs["join"].get("left")
+            right_name = ds_configs["join"].get("right")
+            if not isinstance(left_name, str) or not left_name:
+                raise ConfigValidationError("`dataset.join.left` must be a non-empty dataset config name.")
+            if not isinstance(right_name, str) or not right_name:
+                raise ConfigValidationError("`dataset.join.right` must be a non-empty dataset config name.")
+            if left_name == right_name:
+                raise ConfigValidationError("`dataset.join.left` and `dataset.join.right` must be different.")
+            if len(ds_configs["configs"]) != 2:
+                raise ConfigValidationError("`dataset.join` requires exactly two dataset configs.")
+            if "max_sample_num" in ds_configs:
+                raise ConfigValidationError("`dataset.join` cannot be combined with `dataset.max_sample_num`.")
+            missing_names = [
+                idx for idx, ds_config in enumerate(ds_configs["configs"])
+                if not isinstance(ds_config.get("name"), str) or not ds_config.get("name")
+            ]
+            if missing_names:
+                raise ConfigValidationError(
+                    "`dataset.join` requires every dataset config to have a non-empty `name`; "
+                    f"missing at index(es): {missing_names}."
+                )
+            if any("weight" in ds_config for ds_config in ds_configs["configs"]):
+                raise ConfigValidationError("`dataset.join` cannot be combined with dataset config `weight`.")
+            config_names = {ds_config["name"] for ds_config in ds_configs["configs"]}
+            expected_names = {left_name, right_name}
+            if config_names != expected_names:
+                raise ConfigValidationError(
+                    "`dataset.join` configs must contain exactly the referenced `left` and `right` names; "
+                    f"got {sorted(config_names)}, expected {sorted(expected_names)}."
+                )
+            self.dataset_join_strategy_names = (left_name, right_name)
         # initialize the data load strategies
         self.load_strategies = []
         for ds_config in ds_configs["configs"]:
@@ -180,6 +225,7 @@ class DatasetBuilder(object):
     def validate_ray_data_checkpoint_support(self) -> None:
         if self.executor_type != "ray":
             return
+        validate_no_checkpoint_with_ray_join(self.cfg)
 
         if self.require_dataset_arg:
             raise ValueError(
@@ -229,6 +275,21 @@ class DatasetBuilder(object):
         # if generated_dataset_config present, prioritize
         if self.use_generated_dataset_config:
             return DatasetBuilder.load_dataset_by_generated_config(self.generated_dataset_config)
+
+        if self.dataset_join_config is not None:
+            if getattr(self.cfg, "ray_dry_run_plan", False):
+                log_join_dry_run_notice("dataset")
+            strategy_by_name = {strategy.ds_config["name"]: strategy for strategy in self.load_strategies}
+            left_name, right_name = self.dataset_join_strategy_names
+            left = strategy_by_name[left_name].load_data(**kwargs)
+            right = strategy_by_name[right_name].load_data(**kwargs)
+            for dataset in (left, right):
+                for validator in self.validators:
+                    validator.validate(dataset)
+            from data_juicer.core.data.ray_dataset import RayDataset
+
+            joined = apply_ray_dataset_join(left.data, right.data, self.dataset_join_config)
+            return RayDataset(joined, cfg=self.cfg)
 
         _datasets = []
         # load datasets with sample numbers

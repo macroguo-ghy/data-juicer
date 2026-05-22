@@ -13,6 +13,8 @@ from data_juicer.utils.constant import (
 METRICS_PREFIX = "ad.ai.data_forge"
 RPC_QPS_METRIC = "rpc.qps"
 VLM_QPS_METRIC = "vlm.qps"
+VLM_RATE_LIMIT_EVENT_METRIC = "vlm.rate_limit.event"
+VLM_RATE_LIMIT_VALUE_METRIC = "vlm.rate_limit.value"
 UNKNOWN_TAG_VALUE = "unknown"
 
 _metrics_client = None
@@ -74,12 +76,72 @@ def emit_vlm_qps(
     )
 
 
+def emit_vlm_rate_limit_event(
+    *,
+    event: str,
+    op_name: str,
+    model: str | None = None,
+    target: str | None = None,
+    method: str | None = None,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    _emit_rate_counter(
+        VLM_RATE_LIMIT_EVENT_METRIC,
+        {
+            "event": event,
+            "op_name": op_name,
+            "model": model,
+            "target": target,
+            "method": method,
+            **(extra_tags or {}),
+        },
+    )
+
+
+def emit_vlm_rate_limit_value(
+    *,
+    metric: str,
+    value: float,
+    op_name: str,
+    model: str | None = None,
+    target: str | None = None,
+    method: str | None = None,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    _emit_store(
+        VLM_RATE_LIMIT_VALUE_METRIC,
+        value,
+        {
+            "metric": metric,
+            "op_name": op_name,
+            "model": model,
+            "target": target,
+            "method": method,
+            **(extra_tags or {}),
+        },
+    )
+
+
 def _emit_qps(metric_name: str, tags: dict[str, Any]) -> None:
+    _emit_rate_counter(metric_name, tags)
+
+
+def _emit_rate_counter(metric_name: str, tags: dict[str, Any]) -> None:
     client = _get_metrics_client()
     if client is None:
         return
     try:
         client.emit_rate_counter(metric_name, 1, tags=_normalize_tags({**tags, **metrics_context_tags()}))
+    except Exception as err:  # noqa: BLE001
+        _log_metrics_warning_once(f"Failed to emit metrics via bytedance.metrics: {err}")
+
+
+def _emit_store(metric_name: str, value: float, tags: dict[str, Any]) -> None:
+    client = _get_metrics_client()
+    if client is None:
+        return
+    try:
+        client.emit_store(metric_name, value, tags=_normalize_tags({**tags, **metrics_context_tags()}))
     except Exception as err:  # noqa: BLE001
         _log_metrics_warning_once(f"Failed to emit metrics via bytedance.metrics: {err}")
 
