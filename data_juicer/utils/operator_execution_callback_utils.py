@@ -71,7 +71,11 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> int:
-        """Start the operator execution row and cache its ID."""
+        """Start the operator execution row and cache its ID.
+
+        The backend makes this API idempotent for the same operator execution
+        context, so retrying start does not create duplicate execution rows.
+        """
         if started_at is None:
             started_at = current_time_millis()
         payload = {
