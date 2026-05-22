@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import io
 import json
 import os
 import sys
@@ -11,7 +10,6 @@ import urllib.error
 from unittest.mock import patch
 
 import pyarrow as pa
-from PIL import Image
 
 _register_extension_type = pa.register_extension_type
 
@@ -54,6 +52,7 @@ from data_juicer.ops.mapper.text.ocr_text_richness_mapper import (
 from data_juicer.ops.mapper.qa.vlm_api_response_mapper import (
     VlmApiResponseMapper,
     _RayJobVlmRateLimiter,
+    _VlmApiHttpError,
 )
 from data_juicer.ops.op_env import OPEnvManager
 
@@ -121,12 +120,6 @@ def _ocr_payload(text="hello", area_ratio=0.3):
             }
         ],
     }
-
-
-def _png_bytes(width, height):
-    buf = io.BytesIO()
-    Image.new("RGB", (width, height), color="white").save(buf, format="PNG")
-    return buf.getvalue()
 
 
 class ImageOcrMapperTest(unittest.TestCase):
@@ -1232,6 +1225,68 @@ class VlmApiResponseMapperTest(unittest.TestCase):
         self.assertNotIn("model", success_tags)
         self.assertEqual(error_tags["status"], "error")
 
+    def test_endpoint_pool_rotates_urls_and_keeps_endpoint_specific_headers(self):
+        calls = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append((url, headers.get("Authorization")))
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        op = CapturingMapper(
+            prompt_template="classify",
+            model="seed-test",
+            endpoint_pool=[
+                {"base_url": "https://seed-a.example/v1", "api_key": "token-a"},
+                {"base_url": "https://seed-b.example/v1", "api_key": "token-b", "weight": 2},
+            ],
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+
+        for _ in range(4):
+            self.assertEqual(op.process_single({"images": [b"image-bytes"]})["ocr_answer"], "ok")
+
+        self.assertEqual(
+            calls,
+            [
+                ("https://seed-a.example/v1/chat/completions", "Bearer token-a"),
+                ("https://seed-b.example/v1/chat/completions", "Bearer token-b"),
+                ("https://seed-b.example/v1/chat/completions", "Bearer token-b"),
+                ("https://seed-a.example/v1/chat/completions", "Bearer token-a"),
+            ],
+        )
+
+    def test_endpoint_pool_rejects_mixed_api_formats_without_explicit_api_format(self):
+        with self.assertRaisesRegex(ValueError, "must not mix chat and responses"):
+            VlmApiResponseMapper(
+                model="m",
+                endpoint_pool=[
+                    {"base_url": "https://seed-a.example/v1", "endpoint": "/chat/completions"},
+                    {"base_url": "https://seed-b.example/v1", "endpoint": "/responses"},
+                ],
+            )
+
+    def test_endpoint_limiter_key_defaults_to_full_url_with_port_and_can_be_overridden(self):
+        op = VlmApiResponseMapper(
+            model="m",
+            endpoint_pool=[
+                "http://[2605:340:cd51:603::1]:8001/v1",
+                {
+                    "base_url": "http://[2605:340:cd51:603::1]:8002/v1",
+                    "limiter_key": "serving-b",
+                },
+            ],
+        )
+
+        self.assertEqual(
+            [op._endpoint_limiter_key(endpoint_config) for endpoint_config in op._endpoint_configs],
+            [
+                "http://[2605:340:cd51:603::1]:8001/v1/chat/completions",
+                "serving-b",
+            ],
+        )
+
     def test_multiple_image_keys_are_recursively_expanded(self):
         calls = []
 
@@ -1698,6 +1753,41 @@ class VlmApiResponseMapperTest(unittest.TestCase):
 
         self.assertEqual(sleeps, [])
 
+    def test_ray_job_rate_limiter_balances_endpoint_pool_globally(self):
+        limiter = _RayJobVlmRateLimiter()
+
+        async def scenario():
+            return [
+                await limiter.acquire_endpoint(
+                    "pool-a",
+                    ["https://seed-a.example/v1/chat/completions", "https://seed-b.example/v1/chat/completions"],
+                    [1, 2],
+                    "model-a",
+                    [None, None],
+                    [None, None],
+                    estimated_tokens=0,
+                )
+                for _ in range(4)
+            ]
+
+        self.assertEqual(asyncio.run(scenario()), [0, 1, 1, 0])
+
+    def test_ray_job_rate_limiter_keeps_endpoints_independent_for_same_model(self):
+        limiter = _RayJobVlmRateLimiter()
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        async def scenario():
+            await limiter.acquire("model-a", rpm=1, tpm=None, estimated_tokens=0, limiter_key="endpoint-a")
+            await limiter.acquire("model-a", rpm=1, tpm=None, estimated_tokens=0, limiter_key="endpoint-b")
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.asyncio.sleep", side_effect=fake_sleep):
+            asyncio.run(scenario())
+
+        self.assertEqual(sleeps, [])
+
     def test_ray_job_rate_limiter_smooths_bursts_within_window(self):
         limiter = _RayJobVlmRateLimiter()
         clock = {"now": 0.0}
@@ -1786,6 +1876,82 @@ class VlmApiResponseMapperTest(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], [0.0, 60.0])
         self.assertEqual(sleeps, [60.0])
 
+    def test_endpoint_pool_local_rate_limits_are_endpoint_specific(self):
+        calls = []
+        clock = {"now": 0.0}
+        sleeps = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                calls.append((url, clock["now"]))
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        op = CapturingMapper(
+            prompt_template="classify",
+            model="m",
+            endpoint_pool=[
+                {"base_url": "https://seed-a.example/v1", "rpm": 1, "tpm": 10},
+                {"base_url": "https://seed-b.example/v1", "rpm": 1, "tpm": 10},
+            ],
+            estimated_tokens_per_request=6,
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.sleep", side_effect=fake_sleep):
+                for _ in range(4):
+                    self.assertEqual(op.process_single({"images": [b"a"]})["ocr_answer"], "ok")
+
+        self.assertEqual(
+            calls,
+            [
+                ("https://seed-a.example/v1/chat/completions", 0.0),
+                ("https://seed-b.example/v1/chat/completions", 0.0),
+                ("https://seed-a.example/v1/chat/completions", 60.0),
+                ("https://seed-b.example/v1/chat/completions", 60.0),
+            ],
+        )
+        self.assertEqual(sleeps, [60.0])
+
+    def test_endpoint_pool_local_adaptive_penalty_is_endpoint_specific_and_recovers(self):
+        clock = {"now": 0.0}
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                if "seed-a" in url:
+                    raise _VlmApiHttpError(429, "too many requests")
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        op = CapturingMapper(
+            prompt_template="classify",
+            model="m",
+            endpoint_pool=[
+                {"base_url": "https://seed-a.example/v1", "rpm": 60, "tpm": 100},
+                {"base_url": "https://seed-b.example/v1", "rpm": 60, "tpm": 100},
+            ],
+            estimated_tokens_per_request=10,
+            adaptive_rate_limit=True,
+            rate_limit_retry_attempts=0,
+            error_key="error",
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            row_a = op.process_single({"images": [b"a"]})
+            row_b = op.process_single({"images": [b"b"]})
+            state_a = op._endpoint_local_rate_limit_state(op._endpoint_configs[0])
+            state_b = op._endpoint_local_rate_limit_state(op._endpoint_configs[1])
+            self.assertEqual(state_a["adaptive_effective_limits"], {"rpm": 30.0, "tpm": 50.0})
+            self.assertEqual(state_b["adaptive_effective_limits"], {"rpm": 60.0, "tpm": 100.0})
+            clock["now"] = 300.0
+            self.assertEqual(op._current_endpoint_local_rate_limits(op._endpoint_configs[0], state_a), (36.0, 60.0))
+
+        self.assertEqual(row_a["ocr_answer"], "")
+        self.assertIn("HTTP 429", row_a["error"])
+        self.assertEqual(row_b["ocr_answer"], "ok")
+
     def test_local_rate_limiter_smooths_bursts_within_window(self):
         calls = []
         clock = {"now": 0.0}
@@ -1814,6 +1980,360 @@ class VlmApiResponseMapperTest(unittest.TestCase):
 
         self.assertEqual(calls, [0.0, 1.0])
         self.assertEqual(sleeps, [1.0])
+
+    def test_default_rate_limit_retry_retries_429_once_without_adaptive_penalty(self):
+        clock = {"now": 0.0}
+        calls = []
+        sleeps = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def __init__(self, responses, request_durations, **kwargs):
+                super().__init__(**kwargs)
+                self.responses = list(responses)
+                self.request_durations = list(request_durations)
+
+            def _post_json(self, url, payload, headers):
+                calls.append(clock["now"])
+                clock["now"] += self.request_durations.pop(0)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        op = CapturingMapper(
+            [
+                _VlmApiHttpError(429, "too many requests"),
+                {"choices": [{"message": {"content": "ok"}}]},
+            ],
+            [2.0, 3.0],
+            prompt_template="classify",
+            model="m",
+            base_url="https://seed.example/v1",
+            rpm=60,
+            tpm=100,
+            estimated_tokens_per_request=10,
+            error_key="error",
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.sleep", side_effect=fake_sleep):
+                row = op.process_single({"images": [b"a"]})
+
+        self.assertEqual(row["ocr_answer"], "ok")
+        self.assertEqual(row["error"], "")
+        self.assertEqual(calls, [0.0, 6.0])
+        self.assertEqual(sleeps, [2.0, 2.0])
+        self.assertEqual(op._current_local_rate_limits(), (60, 100))
+        self.assertIsNone(op._adaptive_last_limited_at)
+
+    def test_rate_limit_retry_attempts_zero_keeps_429_as_row_error(self):
+        class FailingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                raise _VlmApiHttpError(429, "too many requests")
+
+        op = FailingMapper(
+            prompt_template="classify",
+            model="m",
+            base_url="https://seed.example/v1",
+            rpm=60,
+            tpm=100,
+            estimated_tokens_per_request=10,
+            error_key="error",
+            rate_limit_retry_attempts=0,
+        )
+
+        row = op.process_single({"images": [b"a"]})
+
+        self.assertEqual(row["ocr_answer"], "")
+        self.assertIn("HTTP 429", row["error"])
+        self.assertEqual(op._current_local_rate_limits(), (60, 100))
+        self.assertIsNone(op._adaptive_last_limited_at)
+
+    def test_rate_limit_retry_backoff_scales_with_vlm_request_duration(self):
+        clock = {"now": 0.0}
+        calls = []
+        sleeps = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def __init__(self, responses, request_durations, **kwargs):
+                super().__init__(**kwargs)
+                self.responses = list(responses)
+                self.request_durations = list(request_durations)
+
+            def _post_json(self, url, payload, headers):
+                calls.append(clock["now"])
+                clock["now"] += self.request_durations.pop(0)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        op = CapturingMapper(
+            [
+                _VlmApiHttpError(429, "first limit"),
+                _VlmApiHttpError(429, "second limit"),
+                {"choices": [{"message": {"content": "ok"}}]},
+            ],
+            [2.0, 3.0, 4.0],
+            prompt_template="classify",
+            model="m",
+            base_url="https://seed.example/v1",
+            rate_limit_retry_attempts=2,
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.sleep", side_effect=fake_sleep):
+                row = op.process_single({"images": [b"a"]})
+
+        self.assertEqual(row["ocr_answer"], "ok")
+        self.assertEqual(calls, [0.0, 4.0, 13.0])
+        self.assertEqual(sleeps, [2.0, 6.0])
+
+    def test_adaptive_rate_limit_halves_limits_after_http_429_and_slows_later_requests(self):
+        clock = {"now": 0.0}
+        calls = []
+        sleeps = []
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def __init__(self, responses, **kwargs):
+                super().__init__(**kwargs)
+                self.responses = list(responses)
+
+            def _post_json(self, url, payload, headers):
+                calls.append(clock["now"])
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        op = CapturingMapper(
+            [
+                _VlmApiHttpError(429, "too many requests"),
+                {"choices": [{"message": {"content": "ok-1"}}]},
+                {"choices": [{"message": {"content": "ok-2"}}]},
+            ],
+            prompt_template="classify",
+            model="m",
+            base_url="https://seed.example/v1",
+            rpm=60,
+            tpm=100,
+            estimated_tokens_per_request=10,
+            adaptive_rate_limit=True,
+            error_key="error",
+            rate_limit_retry_attempts=0,
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.sleep", side_effect=fake_sleep):
+                self.assertEqual(op.process_single({"images": [b"a"]})["ocr_answer"], "")
+                self.assertEqual(op._current_local_rate_limits(), (30.0, 50.0))
+                self.assertEqual(op.process_single({"images": [b"b"]})["ocr_answer"], "ok-1")
+                self.assertEqual(op.process_single({"images": [b"c"]})["ocr_answer"], "ok-2")
+
+        self.assertEqual(calls, [0.0, 6.0, 18.0])
+        self.assertEqual(sleeps, [6.0, 12.0])
+
+    def test_adaptive_rate_limit_ignores_http_500_and_non_http_errors(self):
+        class FailingMapper(VlmApiResponseMapper):
+            def __init__(self, error, **kwargs):
+                super().__init__(**kwargs)
+                self.error = error
+
+            def _post_json(self, url, payload, headers):
+                raise self.error
+
+        for error in [_VlmApiHttpError(500, "server error"), RuntimeError("network error")]:
+            with self.subTest(error=error):
+                op = FailingMapper(
+                    error,
+                    prompt_template="classify",
+                    model="m",
+                    base_url="https://seed.example/v1",
+                    rpm=60,
+                    tpm=100,
+                    estimated_tokens_per_request=10,
+                    adaptive_rate_limit=True,
+                    error_key="error",
+                )
+                row = op.process_single({"images": [b"a"]})
+
+                self.assertEqual(row["ocr_answer"], "")
+                self.assertEqual(op._current_local_rate_limits(), (60.0, 100.0))
+                self.assertIsNone(op._adaptive_last_limited_at)
+
+    def test_ray_job_adaptive_rate_limiter_shares_state_per_model_only(self):
+        limiter = _RayJobVlmRateLimiter()
+        clock = {"now": 0.0}
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            limiter.penalize("model-a", rpm=100, tpm=1000)
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=1000), {"rpm": 50.0, "tpm": 500.0})
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=1000), {"rpm": 50.0, "tpm": 500.0})
+            self.assertEqual(limiter.effective_limits("model-b", rpm=100, tpm=1000), {"rpm": 100.0, "tpm": 1000.0})
+
+    def test_ray_job_rate_limiter_snapshot_reports_configured_effective_and_window_state(self):
+        limiter = _RayJobVlmRateLimiter()
+        clock = {"now": 0.0}
+        events = []
+        values = []
+
+        async def scenario():
+            await limiter.acquire(
+                "model-a",
+                rpm=100,
+                tpm=1000,
+                estimated_tokens=25,
+                adaptive_rate_limit=True,
+                limiter_key="seed.example",
+            )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.logger.info") as log_info:
+                with patch(
+                    "data_juicer.ops.mapper.qa.vlm_api_response_mapper.emit_vlm_rate_limit_event",
+                    side_effect=lambda **kwargs: events.append(kwargs),
+                ):
+                    with patch(
+                        "data_juicer.ops.mapper.qa.vlm_api_response_mapper.emit_vlm_rate_limit_value",
+                        side_effect=lambda **kwargs: values.append(kwargs),
+                    ):
+                        asyncio.run(scenario())
+                        penalty = limiter.penalize(
+                            "model-a",
+                            rpm=100,
+                            tpm=1000,
+                            target="seed.example",
+                            method="/v1/chat/completions",
+                            limiter_key="seed.example",
+                        )
+                        snapshot = limiter.snapshot()
+
+        self.assertEqual(penalty["configured"], {"rpm": 100.0, "tpm": 1000.0})
+        self.assertEqual(penalty["old_effective"], {"rpm": 100.0, "tpm": 1000.0})
+        self.assertEqual(snapshot["model-a@@seed.example"]["effective"], {"rpm": 50.0, "tpm": 500.0})
+        self.assertEqual(snapshot["model-a@@seed.example"]["window"]["requests"], 1)
+        self.assertEqual(snapshot["model-a@@seed.example"]["window"]["tokens"], 25)
+        self.assertTrue(any(call.args[0].startswith("VlmApiResponseMapper adaptive rate limit") for call in log_info.call_args_list))
+        self.assertEqual(events[0]["event"], "penalty")
+        self.assertEqual(events[0]["extra_tags"]["limiter_key"], "seed.example")
+        self.assertIn("effective_rpm", {item["metric"] for item in values})
+        self.assertIn("configured_tpm", {item["metric"] for item in values})
+
+    def test_adaptive_rate_limit_recovers_after_quiet_period_without_exceeding_configured_limit(self):
+        limiter = _RayJobVlmRateLimiter()
+        clock = {"now": 0.0}
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.time.monotonic", side_effect=lambda: clock["now"]):
+            limiter.penalize("model-a", rpm=100, tpm=None)
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=None)["rpm"], 50.0)
+            clock["now"] = 299.0
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=None)["rpm"], 50.0)
+            clock["now"] = 300.0
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=None)["rpm"], 60.0)
+            clock["now"] = 600.0
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=None)["rpm"], 72.0)
+            clock["now"] = 3600.0
+            self.assertEqual(limiter.effective_limits("model-a", rpm=100, tpm=None)["rpm"], 100.0)
+
+    def test_local_adaptive_rate_limit_logs_and_emits_effective_limit_metrics(self):
+        class FailingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                raise _VlmApiHttpError(429, "too many requests")
+
+        events = []
+        values = []
+        op = FailingMapper(
+            prompt_template="classify",
+            model="m",
+            base_url="https://seed.example/v1",
+            rpm=60,
+            tpm=100,
+            estimated_tokens_per_request=10,
+            adaptive_rate_limit=True,
+            rate_limit_retry_attempts=0,
+            error_key="error",
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.logger.info") as log_info:
+            with patch(
+                "data_juicer.ops.mapper.qa.vlm_api_response_mapper.emit_vlm_rate_limit_event",
+                side_effect=lambda **kwargs: events.append(kwargs),
+            ):
+                with patch(
+                    "data_juicer.ops.mapper.qa.vlm_api_response_mapper.emit_vlm_rate_limit_value",
+                    side_effect=lambda **kwargs: values.append(kwargs),
+                ):
+                    row = op.process_single({"images": [b"a"]})
+
+        self.assertEqual(row["ocr_answer"], "")
+        self.assertIn("HTTP 429", row["error"])
+        self.assertEqual(op._current_local_rate_limits(), (30.0, 50.0))
+        self.assertTrue(any("limiter_key={}" in call.args[0] for call in log_info.call_args_list))
+        self.assertEqual([event["event"] for event in events], ["429", "penalty", "exhausted"])
+        metrics = {item["metric"]: item["value"] for item in values}
+        self.assertEqual(metrics["effective_rpm"], 30.0)
+        self.assertEqual(metrics["effective_tpm"], 50.0)
+
+    def test_vlm_adaptive_rate_limit_config_loads_real_op(self):
+        ops = load_ops(
+            [
+                {
+                    "vlm_api_response_mapper": {
+                        "prompt_template": "classify",
+                        "model": "m",
+                        "base_url": "https://seed.example/v1",
+                        "rpm": 60,
+                        "adaptive_rate_limit": True,
+                        "rate_limit_retry_attempts": 2,
+                    }
+                }
+            ],
+            OPEnvManager(min_common_dep_num_to_combine=0),
+        )
+
+        self.assertEqual(len(ops), 1)
+        self.assertIsInstance(ops[0], VlmApiResponseMapper)
+        self.assertTrue(ops[0].adaptive_rate_limit)
+        self.assertEqual(ops[0].rate_limit_retry_attempts, 2)
+
+    def test_vlm_endpoint_pool_config_loads_real_op(self):
+        ops = load_ops(
+            [
+                {
+                    "vlm_api_response_mapper": {
+                        "prompt_template": "classify",
+                        "model": "m",
+                        "endpoint_pool": [
+                            {"base_url": "https://seed-a.example/v1"},
+                            {"base_url": "https://seed-b.example/v1", "weight": 2},
+                        ],
+                    }
+                }
+            ],
+            OPEnvManager(min_common_dep_num_to_combine=0),
+        )
+
+        self.assertEqual(len(ops), 1)
+        self.assertIsInstance(ops[0], VlmApiResponseMapper)
+        self.assertEqual(
+            [ops[0]._api_url(endpoint_config) for endpoint_config in ops[0]._endpoint_configs],
+            [
+                "https://seed-a.example/v1/chat/completions",
+                "https://seed-b.example/v1/chat/completions",
+            ],
+        )
 
     def test_ray_run_initializes_global_rate_limiter_and_acquires_before_request(self):
         order = []
@@ -1890,7 +2410,6 @@ class VlmApiResponseMapperTest(unittest.TestCase):
             base_url="https://seed.example/v1",
             rpm=2,
             max_tokens=7,
-            image_tokens_per_image=3,
             batch_size=3,
         )
         dataset = FakeRayDataset()
@@ -1902,65 +2421,145 @@ class VlmApiResponseMapperTest(unittest.TestCase):
                 fake_ray.remote_actor_class.options_kwargs,
                 {"name": "dj_vlm_rate_limiter_job_1", "num_cpus": 0},
             )
-            self.assertEqual(fake_ray.actor.register.calls, [("model-a", 2, None)])
+            self.assertEqual(
+                fake_ray.actor.register.calls,
+                [("model-a", 2, None, "https://seed.example/v1/chat/completions")],
+            )
             self.assertEqual(op.process_single({"images": [b"a", b"b"]})["ocr_answer"], "ok")
 
-        self.assertEqual(fake_ray.actor.acquire.calls, [("model-a", 2, None, 14)])
+        self.assertEqual(
+            fake_ray.actor.acquire.calls,
+            [("model-a", 2, None, 0, False, "https://seed.example/v1/chat/completions")],
+        )
         self.assertEqual(order[-2:], ["acquire", "post"])
 
-    def test_tpm_estimate_skips_base64_image_payload_and_counts_fixed_image_fallback(self):
+    def test_ray_endpoint_pool_uses_global_actor_to_choose_endpoint(self):
+        order = []
+
+        class FakeActorMethod:
+            def __init__(self, name):
+                self.name = name
+                self.calls = []
+
+            def remote(self, *args):
+                self.calls.append(args)
+                order.append(self.name)
+                return f"{self.name}-ref"
+
+        class FakeActor:
+            def __init__(self):
+                self.register = FakeActorMethod("register")
+                self.acquire = FakeActorMethod("acquire")
+                self.acquire_endpoint = FakeActorMethod("acquire_endpoint")
+
+        class FakeRemoteActorClass:
+            def __init__(self, actor):
+                self.actor = actor
+
+            def options(self, **kwargs):
+                return self
+
+            def remote(self):
+                return self.actor
+
+        class FakeRuntimeContext:
+            def get_job_id(self):
+                return "job-1"
+
+        class FakeRay:
+            def __init__(self):
+                self.actor = FakeActor()
+
+            def is_initialized(self):
+                return True
+
+            def get_runtime_context(self):
+                return FakeRuntimeContext()
+
+            def get_actor(self, name):
+                raise ValueError(name)
+
+            def remote(self, cls):
+                return FakeRemoteActorClass(self.actor)
+
+            def get(self, ref):
+                return 1 if ref == "acquire_endpoint-ref" else None
+
+        class FakeRayDataset:
+            def map_batches(self, fn, **kwargs):
+                return "mapped"
+
+        class CapturingMapper(VlmApiResponseMapper):
+            def _post_json(self, url, payload, headers):
+                order.append(url)
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        fake_ray = FakeRay()
+        op = CapturingMapper(
+            prompt_template="abcd",
+            model="model-a",
+            endpoint_pool=[
+                "https://seed-a.example/v1",
+                {"base_url": "https://seed-b.example/v1", "weight": 2, "tpm": 100},
+            ],
+            batch_size=3,
+        )
+
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper._try_import_ray", return_value=fake_ray):
+            self.assertEqual(op.run(FakeRayDataset()), "mapped")
+            self.assertEqual(op.process_single({"images": [b"a"]})["ocr_answer"], "ok")
+
+        self.assertEqual(
+            fake_ray.actor.acquire_endpoint.calls,
+            [
+                (
+                    "https://seed-a.example/v1/chat/completions|https://seed-b.example/v1/chat/completions",
+                    [
+                        "https://seed-a.example/v1/chat/completions",
+                        "https://seed-b.example/v1/chat/completions",
+                    ],
+                    [1, 2],
+                    "model-a",
+                    [None, None],
+                    [None, 100],
+                    5121,
+                    False,
+                )
+            ],
+        )
+        self.assertEqual(order[-1], "https://seed-b.example/v1/chat/completions")
+
+    def test_tpm_estimate_skips_base64_payload_and_counts_internal_image_fallback(self):
         op = VlmApiResponseMapper(
             prompt_template="abcd",
             model="m",
             base_url="https://seed.example/v1",
             max_tokens=7,
-            image_tokens_per_image=3,
         )
         payload = op._request_payload({"images": [b"a", b"b"]})
 
-        self.assertEqual(op._estimate_request_tokens(payload, {"images": [b"a", b"b"]}), 14)
-
-    def test_tpm_estimate_counts_image_tokens_from_dimensions_when_configured(self):
-        op = VlmApiResponseMapper(
-            prompt_template="abcd",
-            model="m",
-            base_url="https://seed.example/v1",
-            max_tokens=7,
-            image_token_divisor=784,
-            max_image_tokens=1312,
-        )
-
-        first = _png_bytes(1280, 720)
-        second = _png_bytes(1920, 1080)
-        payload = op._request_payload({"images": [first, second]})
-
-        self.assertEqual(op._estimate_image_tokens({"images": [first]}), 1176)
-        self.assertEqual(op._estimate_image_tokens({"images": [second]}), 1312)
-        self.assertEqual(op._estimate_request_tokens(payload, {"images": [first, second]}), 2496)
-
-    def test_tpm_estimate_uses_seed_1_8_image_token_divisor(self):
-        op = VlmApiResponseMapper(
-            prompt_template="abcd",
-            model="m",
-            base_url="https://seed.example/v1",
-            image_token_divisor=1764,
-            max_image_tokens=1312,
-        )
-
-        self.assertEqual(op._estimate_image_tokens({"images": [{"width": 1280, "height": 720}]}), 523)
-        self.assertEqual(op._estimate_image_tokens({"images": [{"width": 1920, "height": 1080}]}), 1176)
+        self.assertEqual(op._estimate_request_tokens(payload, {"images": [b"a", b"b"]}), 10248)
 
     def test_rate_limit_validation(self):
         for kwargs in [
             {"rpm": 0},
             {"tpm": 0},
             {"estimated_tokens_per_request": 0},
-            {"image_tokens_per_image": -1},
-            {"image_token_divisor": 0},
-            {"max_image_tokens": 0},
+            {"rate_limit_retry_attempts": -1},
         ]:
             with self.subTest(kwargs=kwargs):
                 with self.assertRaisesRegex(ValueError, next(iter(kwargs))):
+                    VlmApiResponseMapper(**kwargs)
+        self.assertEqual(VlmApiResponseMapper().rate_limit_retry_attempts, 1)
+
+    def test_removed_image_token_rate_limit_knobs_are_rejected(self):
+        for kwargs in [
+            {"image_tokens_per_image": 5120},
+            {"image_token_divisor": 1764},
+            {"max_image_tokens": 5120},
+        ]:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(TypeError, "estimated_tokens_per_request"):
                     VlmApiResponseMapper(**kwargs)
 
     def test_response_path_raw_error_and_fail_on_error_paths(self):
@@ -2291,8 +2890,6 @@ class OcrExtractConfigTest(unittest.TestCase):
                     str(cfg.export["magnus_conf"]["write_options"]["magnus.ray.write.disable_sort"]).lower(),
                     "true",
                 )
-                self.assertEqual(ops[4].image_token_divisor, 1764)
-                self.assertEqual(ops[4].max_image_tokens, 5120)
                 if name == "third_site_ocr_seed_main.yaml":
                     self.assertEqual(cfg.dataset["configs"][0]["override_num_blocks"], 600)
                     self.assertEqual(cfg.process[0]["image_ocr_mapper"]["caller"], "ad.ai.data_forge_merlin")
@@ -2322,7 +2919,6 @@ class OcrExtractConfigTest(unittest.TestCase):
                     self.assertEqual(ops[0].num_proc, 128)
                     self.assertIsNone(ops[0].repartition_num_blocks)
                     self.assertEqual(ops[4].repartition_num_blocks, 160)
-                self.assertEqual(ops[4].image_tokens_per_image, 5120)
                 if name == "third_site_ocr_seed_main_demo1.yaml":
                     self.assertIsNone(ops[4].system_prompt)
                     self.assertTrue(ops[4].prompt_template)
@@ -2356,9 +2952,6 @@ class OcrExtractConfigTest(unittest.TestCase):
                 self.assertEqual(ops[2].type_key, "sample_ocr_type")
                 self.assertEqual(ops[2].type_en_key, "sample_ocr_type_en")
                 self.assertEqual(ops[2].messages_key, "sample_messages")
-                self.assertEqual(ops[1].image_token_divisor, 1764)
-                self.assertEqual(ops[1].max_image_tokens, 5120)
-                self.assertEqual(ops[1].image_tokens_per_image, 5120)
             else:
                 ds_config = cfg.dataset["configs"][0]
                 self.assertEqual(ds_config["source"], "magnus")
@@ -2404,9 +2997,6 @@ class OcrExtractConfigTest(unittest.TestCase):
                 self.assertIn("data quality assessor", ops[3].system_prompt)
                 self.assertIn("${ocr_answer}", cfg.process[1]["vlm_api_response_mapper"]["prompt_template"])
                 for index in (1, 2, 3):
-                    self.assertEqual(ops[index].image_token_divisor, 1764)
-                    self.assertEqual(ops[index].max_image_tokens, 5120)
-                    self.assertEqual(ops[index].image_tokens_per_image, 5120)
                     self.assertEqual(ops[index].num_proc, 128)
                     self.assertEqual(ops[index].rpm, 500)
                     self.assertEqual(ops[index].tpm, 1000000)

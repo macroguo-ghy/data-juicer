@@ -694,6 +694,51 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         fake_data_context.get_current.assert_not_called()
         fake_data_context._set_current.assert_not_called()
 
+    def test_run_with_ray_data_checkpoint_enabled_rejects_join_before_context(self):
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[
+                {
+                    'ray_dataset_join_pipeline': {
+                        'right': {'type': 'local', 'path': 'right.jsonl'},
+                        'on': 'id',
+                    }
+                }
+            ],
+            op_fusion=False,
+            export_path=os.path.join(self.tmp_dir, 'unused.jsonl'),
+            dataset=None,
+            dataset_path=None,
+            ray_data_checkpoint=SimpleNamespace(
+                enabled=True,
+                dir='hdfs://checkpoint/job-1',
+                delete_no_checkpoint_files=True,
+                write_interval=None,
+            ),
+        )
+
+        fake_data_context = SimpleNamespace(
+            get_current=MagicMock(),
+            _set_current=MagicMock(),
+        )
+        fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
+
+        executor.datasetbuilder = SimpleNamespace(
+            load_dataset=MagicMock(),
+            validate_ray_data_checkpoint_support=MagicMock(),
+        )
+        executor.exporter = SimpleNamespace(export=MagicMock())
+
+        with patch('data_juicer.core.executor.ray_executor.ray', fake_ray):
+            with self.assertRaisesRegex(ValueError, "ray_data_checkpoint is not supported"):
+                executor.run()
+
+        executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_not_called()
+        executor.datasetbuilder.load_dataset.assert_not_called()
+        executor.exporter.export.assert_not_called()
+        fake_data_context.get_current.assert_not_called()
+        fake_data_context._set_current.assert_not_called()
+
     def test_run_with_ray_data_checkpoint_enabled_rejects_unsupported_hdfs_export_before_context(self):
         executor = RayExecutor.__new__(RayExecutor)
         executor.cfg = SimpleNamespace(

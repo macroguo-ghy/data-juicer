@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import defaultdict, deque
-import io
+from dataclasses import dataclass
 import json
-import math
 import os
 import re
 import time
@@ -19,7 +18,11 @@ import pyarrow as pa
 
 from data_juicer.core.data import NestedDataset
 from data_juicer.ops.base_op import OPERATORS, Pipeline
-from data_juicer.utils.metrics_utils import emit_vlm_qps
+from data_juicer.utils.metrics_utils import (
+    emit_vlm_qps,
+    emit_vlm_rate_limit_event,
+    emit_vlm_rate_limit_value,
+)
 
 OP_NAME = "vlm_api_response_mapper"
 CHAT_COMPLETIONS_RESPONSE_PATH = "choices.0.message.content"
@@ -27,6 +30,37 @@ RESPONSES_RESPONSE_PATH = "output.0.content.0.text"
 PROMPT_TEMPLATE_FIELD_PATTERN = re.compile(r"\$\{([^}]+)\}")
 PROMPT_TEMPLATE_FIELD_ONLY_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 RATE_LIMIT_WINDOW_SECONDS = 60.0
+ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS = 300.0
+ADAPTIVE_RATE_LIMIT_PENALTY_FACTOR = 0.5
+ADAPTIVE_RATE_LIMIT_RECOVERY_FACTOR = 1.2
+ADAPTIVE_RATE_LIMIT_MIN_RATIO = 0.1
+DEFAULT_IMAGE_TOKENS_PER_IMAGE = 5120
+REMOVED_IMAGE_TOKEN_CONFIG_KEYS = frozenset(
+    {
+        "image_tokens_per_image",
+        "image_token_divisor",
+        "max_image_tokens",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _VlmEndpointConfig:
+    base_url: str
+    endpoint: str
+    api_key: str | None
+    rpm: int | None
+    tpm: int | None
+    weight: int
+    name: str
+    limiter_key: str | None
+
+
+class _VlmApiHttpError(RuntimeError):
+    def __init__(self, status_code: int, body: str):
+        super().__init__(f"VLM API request failed with HTTP {status_code}: {body}")
+        self.status_code = status_code
+        self.body = body
 
 
 class _RayJobVlmRateLimiter:
@@ -35,50 +69,340 @@ class _RayJobVlmRateLimiter:
         self._token_events = defaultdict(deque)
         self._next_available_at = defaultdict(float)
         self._limits = {}
+        self._adaptive_limits = {}
+        self._endpoint_pool_cursors = defaultdict(int)
 
-    def register(self, model: str, rpm: int | None, tpm: int | None) -> None:
-        self._update_limits(model, rpm, tpm)
+    def register(self, model: str, rpm: int | None, tpm: int | None, limiter_key: str | None = None) -> None:
+        self._update_limits(self._state_key(model, limiter_key), rpm, tpm)
 
-    async def acquire(self, model: str, rpm: int | None, tpm: int | None, estimated_tokens: int) -> None:
-        self._update_limits(model, rpm, tpm)
+    async def acquire(
+        self,
+        model: str,
+        rpm: int | None,
+        tpm: int | None,
+        estimated_tokens: int,
+        adaptive_rate_limit: bool = False,
+        limiter_key: str | None = None,
+    ) -> None:
+        state_key = self._state_key(model, limiter_key)
+        self._update_limits(state_key, rpm, tpm)
         while True:
-            limits = self._limits.get(model, {})
+            now = time.monotonic()
+            limits = self._effective_limits(state_key, adaptive_rate_limit, now)
             rpm_limit = limits.get("rpm")
             tpm_limit = limits.get("tpm")
             if rpm_limit is None and tpm_limit is None:
                 return
-            now = time.monotonic()
-            self._prune(model, now)
-            wait_seconds = 0.0
-            if now < self._next_available_at[model]:
-                wait_seconds = max(wait_seconds, self._next_available_at[model] - now)
-            if rpm_limit is not None and len(self._request_events[model]) >= rpm_limit:
-                wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - self._request_events[model][0]))
-            if tpm_limit is not None:
-                used_tokens = sum(tokens for _, tokens in self._token_events[model])
-                if self._token_events[model] and used_tokens + estimated_tokens > tpm_limit:
-                    wait_seconds = max(
-                        wait_seconds,
-                        RATE_LIMIT_WINDOW_SECONDS - (now - self._token_events[model][0][0]),
-                    )
+            wait_seconds = self._wait_seconds(state_key, rpm_limit, tpm_limit, estimated_tokens, now)
             if wait_seconds <= 0:
-                self._request_events[model].append(now)
-                if tpm_limit is not None:
-                    self._token_events[model].append((now, estimated_tokens))
-                self._next_available_at[model] = now + self._smooth_interval(
-                    rpm_limit,
-                    tpm_limit,
-                    estimated_tokens,
-                )
+                self._record_acquire(state_key, rpm_limit, tpm_limit, estimated_tokens, now)
                 return
             await asyncio.sleep(wait_seconds)
+
+    async def acquire_endpoint(
+        self,
+        pool_key: str,
+        endpoint_keys: list[str],
+        endpoint_weights: list[int],
+        model: str,
+        rpms: list[int | None],
+        tpms: list[int | None],
+        estimated_tokens: int,
+        adaptive_rate_limit: bool = False,
+    ) -> int:
+        if not endpoint_keys:
+            raise ValueError("endpoint_keys must be non-empty")
+        if (
+            len(endpoint_keys) != len(endpoint_weights)
+            or len(endpoint_keys) != len(rpms)
+            or len(endpoint_keys) != len(tpms)
+        ):
+            raise ValueError("endpoint rate-limit metadata length mismatch")
+        state_keys = [self._state_key(model, endpoint_key) for endpoint_key in endpoint_keys]
+        for index, state_key in enumerate(state_keys):
+            self._update_limits(state_key, rpms[index], tpms[index])
+        while True:
+            now = time.monotonic()
+            candidates = []
+            for index, state_key in enumerate(state_keys):
+                limits = self._effective_limits(state_key, adaptive_rate_limit, now)
+                wait_seconds = self._wait_seconds(
+                    state_key,
+                    limits.get("rpm"),
+                    limits.get("tpm"),
+                    estimated_tokens,
+                    now,
+                )
+                candidates.append((wait_seconds, index, limits))
+            min_wait = min(item[0] for item in candidates)
+            if min_wait <= 0:
+                ready_indexes = [index for wait_seconds, index, _ in candidates if wait_seconds <= 0]
+                chosen_index = self._choose_weighted_endpoint(pool_key, ready_indexes, endpoint_weights)
+                chosen_limits = candidates[chosen_index][2]
+                self._record_acquire(
+                    state_keys[chosen_index],
+                    chosen_limits.get("rpm"),
+                    chosen_limits.get("tpm"),
+                    estimated_tokens,
+                    now,
+                )
+                return chosen_index
+            await asyncio.sleep(min_wait)
+
+    def penalize(
+        self,
+        model: str,
+        rpm: int | None,
+        tpm: int | None,
+        target: str | None = None,
+        method: str | None = None,
+        limiter_key: str | None = None,
+    ) -> dict[str, Any]:
+        state_key = self._state_key(model, limiter_key)
+        self._update_limits(state_key, rpm, tpm)
+        now = time.monotonic()
+        limits = self._limits.get(state_key, {})
+        old_effective = dict(self._effective_limits(state_key, True, now))
+        state = self._adaptive_limits.setdefault(state_key, {"rpm": limits.get("rpm"), "tpm": limits.get("tpm")})
+        for name in ["rpm", "tpm"]:
+            configured = limits.get(name)
+            if configured is None:
+                continue
+            current = state.get(name) if state.get(name) is not None else configured
+            min_limit = max(1.0, configured * ADAPTIVE_RATE_LIMIT_MIN_RATIO)
+            state[name] = max(min_limit, current * ADAPTIVE_RATE_LIMIT_PENALTY_FACTOR)
+        state["last_limited_at"] = now
+        snapshot = self._model_snapshot(state_key, now)
+        self._log_adaptive_rate_limit_change(
+            "penalized",
+            model,
+            limits,
+            old_effective,
+            snapshot["effective"],
+            target=target,
+            method=method,
+            limiter_key=limiter_key,
+        )
+        self._emit_rate_limit_values(
+            "penalty",
+            model,
+            limits,
+            snapshot["effective"],
+            target=target,
+            method=method,
+            extra_tags={"limiter_key": limiter_key},
+        )
+        return {**snapshot, "old_effective": old_effective}
+
+    def effective_limits(
+        self,
+        model: str,
+        rpm: int | None,
+        tpm: int | None,
+        adaptive_rate_limit: bool = True,
+        limiter_key: str | None = None,
+    ) -> dict[str, float | None]:
+        state_key = self._state_key(model, limiter_key)
+        self._update_limits(state_key, rpm, tpm)
+        return dict(self._effective_limits(state_key, adaptive_rate_limit, time.monotonic()))
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        now = time.monotonic()
+        models = set(self._limits) | set(self._adaptive_limits)
+        return {model: self._model_snapshot(model, now) for model in sorted(models)}
 
     def _update_limits(self, model: str, rpm: int | None, tpm: int | None) -> None:
         limits = self._limits.setdefault(model, {"rpm": None, "tpm": None})
         if rpm is not None:
-            limits["rpm"] = rpm if limits["rpm"] is None else min(limits["rpm"], rpm)
+            limits["rpm"] = float(rpm) if limits["rpm"] is None else min(limits["rpm"], float(rpm))
         if tpm is not None:
-            limits["tpm"] = tpm if limits["tpm"] is None else min(limits["tpm"], tpm)
+            limits["tpm"] = float(tpm) if limits["tpm"] is None else min(limits["tpm"], float(tpm))
+        if model in self._adaptive_limits:
+            adaptive_limits = self._adaptive_limits[model]
+            for name in ["rpm", "tpm"]:
+                configured = limits.get(name)
+                if configured is None:
+                    adaptive_limits[name] = None
+                elif adaptive_limits.get(name) is None:
+                    adaptive_limits[name] = configured
+                else:
+                    adaptive_limits[name] = min(adaptive_limits[name], configured)
+
+    def _effective_limits(self, model: str, adaptive_rate_limit: bool, now: float) -> dict[str, float | None]:
+        limits = self._limits.get(model, {"rpm": None, "tpm": None})
+        if not adaptive_rate_limit:
+            return limits
+        state = self._adaptive_limits.setdefault(model, {"rpm": limits.get("rpm"), "tpm": limits.get("tpm")})
+        self._recover_adaptive_limits(model, now)
+        return {"rpm": state.get("rpm"), "tpm": state.get("tpm")}
+
+    def _recover_adaptive_limits(self, model: str, now: float) -> None:
+        state = self._adaptive_limits.get(model)
+        if not state or state.get("last_limited_at") is None:
+            return
+        elapsed = now - state["last_limited_at"]
+        if elapsed < ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS:
+            return
+        old_effective = {
+            "rpm": state.get("rpm"),
+            "tpm": state.get("tpm"),
+        }
+        steps = int(elapsed // ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS)
+        limits = self._limits.get(model, {})
+        factor = ADAPTIVE_RATE_LIMIT_RECOVERY_FACTOR**steps
+        for name in ["rpm", "tpm"]:
+            configured = limits.get(name)
+            current = state.get(name)
+            if configured is not None and current is not None:
+                state[name] = min(configured, current * factor)
+        state["last_limited_at"] += steps * ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS
+        new_effective = {
+            "rpm": state.get("rpm"),
+            "tpm": state.get("tpm"),
+        }
+        self._log_adaptive_rate_limit_change("recovered", model, limits, old_effective, new_effective)
+        self._emit_rate_limit_values("recovery", model, limits, new_effective)
+
+    def _model_snapshot(self, model: str, now: float) -> dict[str, Any]:
+        self._recover_adaptive_limits(model, now)
+        limits = self._limits.get(model, {"rpm": None, "tpm": None})
+        effective = self._effective_limits(model, True, now)
+        token_events = self._token_events[model]
+        request_events = self._request_events[model]
+        state = self._adaptive_limits.get(model, {})
+        last_limited_at = state.get("last_limited_at")
+        return {
+            "configured": {"rpm": limits.get("rpm"), "tpm": limits.get("tpm")},
+            "effective": {"rpm": effective.get("rpm"), "tpm": effective.get("tpm")},
+            "last_limited_at": last_limited_at,
+            "seconds_since_last_limited": None if last_limited_at is None else max(0.0, now - last_limited_at),
+            "window": {
+                "requests": len(request_events),
+                "tokens": sum(tokens for _, tokens in token_events),
+                "next_available_at": self._next_available_at[model],
+            },
+        }
+
+    def _wait_seconds(
+        self,
+        model: str,
+        rpm_limit: float | None,
+        tpm_limit: float | None,
+        estimated_tokens: int,
+        now: float,
+    ) -> float:
+        self._prune(model, now)
+        wait_seconds = 0.0
+        if now < self._next_available_at[model]:
+            wait_seconds = max(wait_seconds, self._next_available_at[model] - now)
+        if rpm_limit is not None and len(self._request_events[model]) + 1 > rpm_limit:
+            wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - self._request_events[model][0]))
+        if tpm_limit is not None:
+            used_tokens = sum(tokens for _, tokens in self._token_events[model])
+            if self._token_events[model] and used_tokens + estimated_tokens > tpm_limit:
+                wait_seconds = max(
+                    wait_seconds,
+                    RATE_LIMIT_WINDOW_SECONDS - (now - self._token_events[model][0][0]),
+                )
+        return wait_seconds
+
+    def _record_acquire(
+        self,
+        model: str,
+        rpm_limit: float | None,
+        tpm_limit: float | None,
+        estimated_tokens: int,
+        now: float,
+    ) -> None:
+        self._request_events[model].append(now)
+        if tpm_limit is not None:
+            self._token_events[model].append((now, estimated_tokens))
+        self._next_available_at[model] = now + self._smooth_interval(
+            rpm_limit,
+            tpm_limit,
+            estimated_tokens,
+        )
+
+    def _choose_weighted_endpoint(self, pool_key: str, ready_indexes: list[int], endpoint_weights: list[int]) -> int:
+        ready = set(ready_indexes)
+        total_weight = sum(max(1, endpoint_weights[index]) for index in ready_indexes)
+        cursor = self._endpoint_pool_cursors[pool_key] % total_weight
+        cumulative = 0
+        for index, weight in enumerate(endpoint_weights):
+            if index not in ready:
+                continue
+            cumulative += max(1, weight)
+            if cursor < cumulative:
+                self._endpoint_pool_cursors[pool_key] += 1
+                return index
+        self._endpoint_pool_cursors[pool_key] += 1
+        return ready_indexes[0]
+
+    @staticmethod
+    def _state_key(model: str, limiter_key: str | None = None) -> str:
+        return model if not limiter_key else f"{model}@@{limiter_key}"
+
+    @staticmethod
+    def _log_adaptive_rate_limit_change(
+        event: str,
+        model: str,
+        configured: dict[str, float | None],
+        old_effective: dict[str, float | None],
+        new_effective: dict[str, float | None],
+        *,
+        target: str | None = None,
+        method: str | None = None,
+        limiter_key: str | None = None,
+    ) -> None:
+        logger.info(
+            "VlmApiResponseMapper adaptive rate limit {}: model={}, target={}, method={}, limiter_key={}, "
+            "configured_rpm={}, configured_tpm={}, effective_rpm={} -> {}, effective_tpm={} -> {}",
+            event,
+            model,
+            target or "<unset>",
+            method or "<unset>",
+            limiter_key or "<unset>",
+            configured.get("rpm"),
+            configured.get("tpm"),
+            old_effective.get("rpm"),
+            new_effective.get("rpm"),
+            old_effective.get("tpm"),
+            new_effective.get("tpm"),
+        )
+
+    @staticmethod
+    def _emit_rate_limit_values(
+        event: str,
+        model: str,
+        configured: dict[str, float | None],
+        effective: dict[str, float | None],
+        *,
+        target: str | None = None,
+        method: str | None = None,
+        extra_tags: dict[str, Any] | None = None,
+    ) -> None:
+        tags = {"event": event, **(extra_tags or {})}
+        emit_vlm_rate_limit_event(
+            event=event,
+            op_name=OP_NAME,
+            model=model,
+            target=target,
+            method=method,
+            extra_tags=extra_tags,
+        )
+        for prefix, limits in [("configured", configured), ("effective", effective)]:
+            for name in ["rpm", "tpm"]:
+                value = limits.get(name)
+                if value is not None:
+                    emit_vlm_rate_limit_value(
+                        metric=f"{prefix}_{name}",
+                        value=float(value),
+                        op_name=OP_NAME,
+                        model=model,
+                        target=target,
+                        method=method,
+                        extra_tags=tags,
+                    )
 
     def _prune(self, model: str, now: float) -> None:
         while self._request_events[model] and now - self._request_events[model][0] >= RATE_LIMIT_WINDOW_SECONDS:
@@ -87,7 +411,7 @@ class _RayJobVlmRateLimiter:
             self._token_events[model].popleft()
 
     @staticmethod
-    def _smooth_interval(rpm_limit: int | None, tpm_limit: int | None, estimated_tokens: int) -> float:
+    def _smooth_interval(rpm_limit: float | None, tpm_limit: float | None, estimated_tokens: int) -> float:
         intervals = []
         if rpm_limit is not None:
             intervals.append(RATE_LIMIT_WINDOW_SECONDS / rpm_limit)
@@ -148,6 +472,17 @@ class VlmApiResponseMapper(Pipeline):
              format:
                type: "json_object"
            store: false
+
+       多 endpoint 示例：
+       - vlm_api_response_mapper:
+           model: "ep-xxx"
+           endpoint_pool:
+             - base_url: "http://[2605:340:cd51:603::1]:8001/v1"
+             - base_url: "http://[2605:340:cd51:603::2]:8001/v1"
+               weight: 2
+           endpoint: "/chat/completions"
+           # limiter_key 可选；默认使用完整请求 URL，因此会区分 host、port 和 path。
+           # Ray 全局限流最终按 model + limiter_key 隔离。
 
     2. 模板模式：Chat Completions API 使用 messages_template，Responses API
        使用 input_template。mapper 会递归渲染完整的原生 messages/input
@@ -215,6 +550,7 @@ class VlmApiResponseMapper(Pipeline):
         base_url: str | None = None,
         api_key: str | None = None,
         endpoint: str = "/chat/completions",
+        endpoint_pool: list[str | dict[str, Any]] | None = None,
         api_format: str | None = None,
         timeout: int = 120,
         temperature: float = 0.0,
@@ -241,13 +577,19 @@ class VlmApiResponseMapper(Pipeline):
         rpm: int | None = None,
         tpm: int | None = None,
         estimated_tokens_per_request: int | None = None,
-        image_tokens_per_image: int = 0,
-        image_token_divisor: float | None = None,
-        max_image_tokens: int | None = None,
+        adaptive_rate_limit: bool = False,
+        rate_limit_retry_attempts: int = 1,
         repartition_num_blocks: int | None = None,
         *args,
         **kwargs,
     ):
+        removed_config_keys = REMOVED_IMAGE_TOKEN_CONFIG_KEYS.intersection(kwargs)
+        if removed_config_keys:
+            raise TypeError(
+                "Unsupported VlmApiResponseMapper image token parameters: "
+                f"{', '.join(sorted(removed_config_keys))}. "
+                "Use estimated_tokens_per_request for VLM token limit estimation."
+            )
         super().__init__(*args, **kwargs)
         self.image_key = image_key
         self.image_keys = image_keys
@@ -260,6 +602,7 @@ class VlmApiResponseMapper(Pipeline):
         self.base_url = base_url
         self.api_key = api_key
         self.endpoint = endpoint
+        self.endpoint_pool = endpoint_pool
         if api_format not in {None, "chat", "responses"}:
             raise ValueError("api_format must be one of None, 'chat', or 'responses'")
         self.api_format = api_format
@@ -288,17 +631,25 @@ class VlmApiResponseMapper(Pipeline):
         self.rpm = rpm
         self.tpm = tpm
         self.estimated_tokens_per_request = estimated_tokens_per_request
-        self.image_tokens_per_image = image_tokens_per_image
-        self.image_token_divisor = image_token_divisor
-        self.max_image_tokens = max_image_tokens
+        self.adaptive_rate_limit = adaptive_rate_limit
+        self.rate_limit_retry_attempts = rate_limit_retry_attempts
         if repartition_num_blocks is not None and repartition_num_blocks <= 0:
             raise ValueError("repartition_num_blocks must be positive when set")
         self.repartition_num_blocks = repartition_num_blocks
+        self._endpoint_configs = self._normalize_endpoint_pool()
+        self._endpoint_cursor = 0
         self._validate_rate_limits()
+        self._validate_endpoint_pool()
         self._validate_templates()
         self._request_events = deque()
         self._token_events = deque()
         self._rate_limit_next_available_at = 0.0
+        self._adaptive_effective_limits = {
+            "rpm": float(rpm) if rpm is not None else None,
+            "tpm": float(tpm) if tpm is not None else None,
+        }
+        self._adaptive_last_limited_at = None
+        self._endpoint_rate_limit_states = {}
         self._rate_limiter_actor = None
         self._rate_limiter_actor_name = None
         self._logged_first_batch = False
@@ -395,66 +746,481 @@ class VlmApiResponseMapper(Pipeline):
 
     def _api_response(self, sample: dict[str, Any]) -> dict[str, Any]:
         payload = self._request_payload(sample)
-        self._apply_rate_limit(payload, sample)
-        url = self._api_url()
-        target = self._metrics_target(url)
-        method = self._metrics_method(url)
-        try:
-            response = self._post_json(url, payload, self._headers())
-        except Exception:
-            emit_vlm_qps(op_name=self._name, target=target, method=method, status="error")
-            raise
-        emit_vlm_qps(op_name=self._name, target=target, method=method, status="success")
-        return response
+        for retry_index in range(self.rate_limit_retry_attempts + 1):
+            endpoint_config = self._acquire_endpoint_for_request(payload, sample)
+            url = self._api_url(endpoint_config)
+            target = self._metrics_target(url)
+            method = self._metrics_method(url)
+            headers = self._headers(endpoint_config)
+            request_start = time.monotonic()
+            try:
+                response = self._post_json(url, payload, headers)
+            except _VlmApiHttpError as err:
+                request_elapsed = max(0.0, time.monotonic() - request_start)
+                if err.status_code == 429:
+                    emit_vlm_rate_limit_event(
+                        event="429",
+                        op_name=self._name,
+                        model=self.model,
+                        target=target,
+                        method=method,
+                        extra_tags={"retry_index": retry_index},
+                    )
+                    try:
+                        self._apply_adaptive_rate_limit_penalty(
+                            target=target,
+                            method=method,
+                            endpoint_config=endpoint_config,
+                        )
+                    except Exception as penalty_err:
+                        logger.warning("VlmApiResponseMapper adaptive rate-limit penalty failed: {}", penalty_err)
+                    emit_vlm_qps(op_name=self._name, target=target, method=method, status="error")
+                    if retry_index < self.rate_limit_retry_attempts:
+                        emit_vlm_rate_limit_event(
+                            event="retry",
+                            op_name=self._name,
+                            model=self.model,
+                            target=target,
+                            method=method,
+                            extra_tags={"retry_index": retry_index + 1},
+                        )
+                        self._sleep_before_rate_limit_retry(retry_index, request_elapsed, target=target, method=method)
+                        continue
+                    emit_vlm_rate_limit_event(
+                        event="exhausted",
+                        op_name=self._name,
+                        model=self.model,
+                        target=target,
+                        method=method,
+                        extra_tags={"retry_attempts": self.rate_limit_retry_attempts},
+                    )
+                else:
+                    emit_vlm_qps(op_name=self._name, target=target, method=method, status="error")
+                raise
+            except Exception:
+                emit_vlm_qps(op_name=self._name, target=target, method=method, status="error")
+                raise
+            emit_vlm_qps(op_name=self._name, target=target, method=method, status="success")
+            return response
+        raise RuntimeError("unreachable VLM API retry state")
 
     def _validate_rate_limits(self) -> None:
-        for name in ["rpm", "tpm", "estimated_tokens_per_request", "max_image_tokens"]:
+        for name in ["rpm", "tpm", "estimated_tokens_per_request"]:
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"{name} must be positive when set")
-        if self.image_tokens_per_image < 0:
-            raise ValueError("image_tokens_per_image must be non-negative")
-        if self.image_token_divisor is not None and self.image_token_divisor <= 0:
-            raise ValueError("image_token_divisor must be positive when set")
+        if self.rate_limit_retry_attempts < 0:
+            raise ValueError("rate_limit_retry_attempts must be non-negative")
+        for endpoint_config in self._endpoint_configs:
+            if endpoint_config.rpm is not None and endpoint_config.rpm <= 0:
+                raise ValueError("endpoint_pool rpm must be positive when set")
+            if endpoint_config.tpm is not None and endpoint_config.tpm <= 0:
+                raise ValueError("endpoint_pool tpm must be positive when set")
+            if endpoint_config.weight <= 0:
+                raise ValueError("endpoint_pool weight must be positive")
+            if endpoint_config.limiter_key is not None and not isinstance(endpoint_config.limiter_key, str):
+                raise ValueError("endpoint_pool limiter_key must be a string when set")
 
-    def _apply_rate_limit(self, payload: dict[str, Any], sample: dict[str, Any]) -> None:
-        if self.rpm is None and self.tpm is None:
+    def _validate_endpoint_pool(self) -> None:
+        if not self._endpoint_configs:
+            raise ValueError("endpoint_pool must be non-empty")
+        formats = {self._is_responses_api(endpoint_config) for endpoint_config in self._endpoint_configs}
+        if self.api_format is None and len(formats) > 1:
+            raise ValueError("endpoint_pool must not mix chat and responses endpoints unless api_format is set")
+
+    def _sleep_before_rate_limit_retry(
+        self,
+        retry_index: int,
+        request_elapsed: float,
+        *,
+        target: str | None = None,
+        method: str | None = None,
+    ) -> None:
+        wait_seconds = request_elapsed * (2**retry_index)
+        if wait_seconds > 0:
+            emit_vlm_rate_limit_value(
+                metric="retry_wait_seconds",
+                value=wait_seconds,
+                op_name=self._name,
+                model=self.model,
+                target=target,
+                method=method,
+                extra_tags={"retry_index": retry_index + 1},
+            )
+            time.sleep(wait_seconds)
+
+    def _acquire_endpoint_for_request(
+        self,
+        payload: dict[str, Any],
+        sample: dict[str, Any],
+    ) -> _VlmEndpointConfig:
+        if self._rate_limiter_actor is not None and len(self._endpoint_configs) > 1:
+            ray = _try_import_ray()
+            if ray is not None:
+                token_count = self._estimate_request_tokens(payload, sample) if self._has_any_tpm_limit() else 0
+                chosen_index = ray.get(
+                    self._rate_limiter_actor.acquire_endpoint.remote(
+                        self._endpoint_pool_key(),
+                        [self._endpoint_limiter_key(endpoint_config) for endpoint_config in self._endpoint_configs],
+                        [endpoint_config.weight for endpoint_config in self._endpoint_configs],
+                        self._model(),
+                        [endpoint_config.rpm for endpoint_config in self._endpoint_configs],
+                        [endpoint_config.tpm for endpoint_config in self._endpoint_configs],
+                        token_count,
+                        self.adaptive_rate_limit,
+                    )
+                )
+                return self._endpoint_configs[chosen_index]
+        endpoint_config = self._next_local_endpoint()
+        self._apply_rate_limit(payload, sample, endpoint_config)
+        return endpoint_config
+
+    def _apply_rate_limit(
+        self,
+        payload: dict[str, Any],
+        sample: dict[str, Any],
+        endpoint_config: _VlmEndpointConfig | None = None,
+    ) -> None:
+        endpoint_config = endpoint_config or self._endpoint_configs[0]
+        if endpoint_config.rpm is None and endpoint_config.tpm is None:
             return
         if self._rate_limiter_actor is not None:
             ray = _try_import_ray()
             if ray is not None:
-                token_count = self._estimate_request_tokens(payload, sample)
-                ray.get(self._rate_limiter_actor.acquire.remote(self._model(), self.rpm, self.tpm, token_count))
+                token_count = self._estimate_request_tokens(payload, sample) if endpoint_config.tpm is not None else 0
+                ray.get(
+                    self._rate_limiter_actor.acquire.remote(
+                        self._model(),
+                        endpoint_config.rpm,
+                        endpoint_config.tpm,
+                        token_count,
+                        self.adaptive_rate_limit,
+                        self._endpoint_limiter_key(endpoint_config),
+                    )
+                )
                 return
-        token_count = self._estimate_request_tokens(payload, sample) if self.tpm is not None else 0
+        if len(self._endpoint_configs) > 1:
+            self._apply_endpoint_local_rate_limit(payload, sample, endpoint_config)
+            return
+        rpm_limit, tpm_limit = self._current_local_rate_limits()
+        token_count = self._estimate_request_tokens(payload, sample) if tpm_limit is not None else 0
         while True:
             now = time.monotonic()
+            rpm_limit, tpm_limit = self._current_local_rate_limits(now)
             self._prune_rate_limit_events(now)
             wait_seconds = 0.0
             if self._rate_limit_next_available_at > now:
                 wait_seconds = max(wait_seconds, self._rate_limit_next_available_at - now)
-            if self.rpm is not None and len(self._request_events) >= self.rpm:
+            if rpm_limit is not None and len(self._request_events) + 1 > rpm_limit:
                 wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - self._request_events[0]))
-            if self.tpm is not None:
+            if tpm_limit is not None:
                 used_tokens = sum(tokens for _, tokens in self._token_events)
-                if self._token_events and used_tokens + token_count > self.tpm:
+                if self._token_events and used_tokens + token_count > tpm_limit:
                     wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - self._token_events[0][0]))
             if wait_seconds <= 0:
                 self._request_events.append(now)
-                if self.tpm is not None:
+                if tpm_limit is not None:
                     self._token_events.append((now, token_count))
                 self._rate_limit_next_available_at = now + _RayJobVlmRateLimiter._smooth_interval(
-                    self.rpm,
-                    self.tpm,
+                    rpm_limit,
+                    tpm_limit,
                     token_count,
                 )
                 return
             time.sleep(wait_seconds)
 
+    def _apply_endpoint_local_rate_limit(
+        self,
+        payload: dict[str, Any],
+        sample: dict[str, Any],
+        endpoint_config: _VlmEndpointConfig,
+    ) -> None:
+        state = self._endpoint_local_rate_limit_state(endpoint_config)
+        rpm_limit, tpm_limit = self._current_endpoint_local_rate_limits(endpoint_config, state)
+        token_count = self._estimate_request_tokens(payload, sample) if tpm_limit is not None else 0
+        while True:
+            now = time.monotonic()
+            rpm_limit, tpm_limit = self._current_endpoint_local_rate_limits(endpoint_config, state, now)
+            self._prune_endpoint_local_rate_limit_events(state, now)
+            wait_seconds = 0.0
+            if state["next_available_at"] > now:
+                wait_seconds = max(wait_seconds, state["next_available_at"] - now)
+            if rpm_limit is not None and len(state["request_events"]) + 1 > rpm_limit:
+                wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - state["request_events"][0]))
+            if tpm_limit is not None:
+                used_tokens = sum(tokens for _, tokens in state["token_events"])
+                if state["token_events"] and used_tokens + token_count > tpm_limit:
+                    wait_seconds = max(wait_seconds, RATE_LIMIT_WINDOW_SECONDS - (now - state["token_events"][0][0]))
+            if wait_seconds <= 0:
+                state["request_events"].append(now)
+                if tpm_limit is not None:
+                    state["token_events"].append((now, token_count))
+                state["next_available_at"] = now + _RayJobVlmRateLimiter._smooth_interval(
+                    rpm_limit,
+                    tpm_limit,
+                    token_count,
+                )
+                return
+            time.sleep(wait_seconds)
+
+    def _current_local_rate_limits(self, now: float | None = None) -> tuple[float | None, float | None]:
+        if not self.adaptive_rate_limit:
+            return self.rpm, self.tpm
+        if now is None:
+            now = time.monotonic()
+        self._recover_local_adaptive_rate_limits(now)
+        return self._adaptive_effective_limits["rpm"], self._adaptive_effective_limits["tpm"]
+
+    def _current_endpoint_local_rate_limits(
+        self,
+        endpoint_config: _VlmEndpointConfig,
+        state: dict[str, Any],
+        now: float | None = None,
+    ) -> tuple[float | None, float | None]:
+        if not self.adaptive_rate_limit:
+            return endpoint_config.rpm, endpoint_config.tpm
+        if now is None:
+            now = time.monotonic()
+        self._recover_endpoint_local_adaptive_rate_limits(endpoint_config, state, now)
+        return state["adaptive_effective_limits"]["rpm"], state["adaptive_effective_limits"]["tpm"]
+
+    def _apply_adaptive_rate_limit_penalty(
+        self,
+        *,
+        target: str | None = None,
+        method: str | None = None,
+        endpoint_config: _VlmEndpointConfig | None = None,
+    ) -> dict[str, Any] | None:
+        endpoint_config = endpoint_config or self._endpoint_configs[0]
+        if not self.adaptive_rate_limit or (endpoint_config.rpm is None and endpoint_config.tpm is None):
+            return None
+        model = self._model()
+        if self._rate_limiter_actor is not None:
+            ray = _try_import_ray()
+            if ray is not None:
+                return ray.get(
+                    self._rate_limiter_actor.penalize.remote(
+                        model,
+                        endpoint_config.rpm,
+                        endpoint_config.tpm,
+                        target,
+                        method,
+                        self._endpoint_limiter_key(endpoint_config),
+                    )
+                )
+        if len(self._endpoint_configs) > 1:
+            return self._apply_endpoint_local_adaptive_rate_limit_penalty(endpoint_config, target, method)
+        now = time.monotonic()
+        old_effective = dict(self._adaptive_effective_limits)
+        for name, configured_value in [("rpm", endpoint_config.rpm), ("tpm", endpoint_config.tpm)]:
+            if configured_value is None:
+                continue
+            current = self._adaptive_effective_limits[name]
+            current = float(configured_value) if current is None else current
+            min_limit = max(1.0, configured_value * ADAPTIVE_RATE_LIMIT_MIN_RATIO)
+            self._adaptive_effective_limits[name] = max(min_limit, current * ADAPTIVE_RATE_LIMIT_PENALTY_FACTOR)
+        self._adaptive_last_limited_at = now
+        snapshot = self._local_rate_limit_snapshot(now)
+        _RayJobVlmRateLimiter._log_adaptive_rate_limit_change(
+            "penalized",
+            model,
+            snapshot["configured"],
+            old_effective,
+            snapshot["effective"],
+            target=target,
+            method=method,
+            limiter_key="local",
+        )
+        _RayJobVlmRateLimiter._emit_rate_limit_values(
+            "penalty",
+            model,
+            snapshot["configured"],
+            snapshot["effective"],
+            target=target,
+            method=method,
+            extra_tags={"limiter_key": "local"},
+        )
+        return {**snapshot, "old_effective": old_effective}
+
+    def _recover_local_adaptive_rate_limits(self, now: float) -> None:
+        if self._adaptive_last_limited_at is None:
+            return
+        elapsed = now - self._adaptive_last_limited_at
+        if elapsed < ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS:
+            return
+        old_effective = dict(self._adaptive_effective_limits)
+        steps = int(elapsed // ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS)
+        factor = ADAPTIVE_RATE_LIMIT_RECOVERY_FACTOR**steps
+        for name, configured in [("rpm", self.rpm), ("tpm", self.tpm)]:
+            current = self._adaptive_effective_limits[name]
+            if configured is not None and current is not None:
+                self._adaptive_effective_limits[name] = min(float(configured), current * factor)
+        self._adaptive_last_limited_at += steps * ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS
+        model = self.model or "<unset>"
+        snapshot = self._local_rate_limit_snapshot(now)
+        _RayJobVlmRateLimiter._log_adaptive_rate_limit_change(
+            "recovered",
+            model,
+            snapshot["configured"],
+            old_effective,
+            snapshot["effective"],
+            limiter_key="local",
+        )
+        _RayJobVlmRateLimiter._emit_rate_limit_values(
+            "recovery",
+            model,
+            snapshot["configured"],
+            snapshot["effective"],
+            extra_tags={"limiter_key": "local"},
+        )
+
+    def _apply_endpoint_local_adaptive_rate_limit_penalty(
+        self,
+        endpoint_config: _VlmEndpointConfig,
+        target: str | None,
+        method: str | None,
+    ) -> dict[str, Any]:
+        state = self._endpoint_local_rate_limit_state(endpoint_config)
+        now = time.monotonic()
+        old_effective = dict(state["adaptive_effective_limits"])
+        for name, configured_value in [("rpm", endpoint_config.rpm), ("tpm", endpoint_config.tpm)]:
+            if configured_value is None:
+                continue
+            current = state["adaptive_effective_limits"][name]
+            current = float(configured_value) if current is None else current
+            min_limit = max(1.0, configured_value * ADAPTIVE_RATE_LIMIT_MIN_RATIO)
+            state["adaptive_effective_limits"][name] = max(min_limit, current * ADAPTIVE_RATE_LIMIT_PENALTY_FACTOR)
+        state["adaptive_last_limited_at"] = now
+        snapshot = self._endpoint_local_rate_limit_snapshot(endpoint_config, state, now)
+        limiter_key = self._endpoint_limiter_key(endpoint_config)
+        _RayJobVlmRateLimiter._log_adaptive_rate_limit_change(
+            "penalized",
+            self._model(),
+            snapshot["configured"],
+            old_effective,
+            snapshot["effective"],
+            target=target,
+            method=method,
+            limiter_key=limiter_key,
+        )
+        _RayJobVlmRateLimiter._emit_rate_limit_values(
+            "penalty",
+            self._model(),
+            snapshot["configured"],
+            snapshot["effective"],
+            target=target,
+            method=method,
+            extra_tags={"limiter_key": limiter_key},
+        )
+        return {**snapshot, "old_effective": old_effective}
+
+    def _recover_endpoint_local_adaptive_rate_limits(
+        self,
+        endpoint_config: _VlmEndpointConfig,
+        state: dict[str, Any],
+        now: float,
+    ) -> None:
+        if state["adaptive_last_limited_at"] is None:
+            return
+        elapsed = now - state["adaptive_last_limited_at"]
+        if elapsed < ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS:
+            return
+        old_effective = dict(state["adaptive_effective_limits"])
+        steps = int(elapsed // ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS)
+        factor = ADAPTIVE_RATE_LIMIT_RECOVERY_FACTOR**steps
+        for name, configured in [("rpm", endpoint_config.rpm), ("tpm", endpoint_config.tpm)]:
+            current = state["adaptive_effective_limits"][name]
+            if configured is not None and current is not None:
+                state["adaptive_effective_limits"][name] = min(float(configured), current * factor)
+        state["adaptive_last_limited_at"] += steps * ADAPTIVE_RATE_LIMIT_RECOVERY_SECONDS
+        snapshot = self._endpoint_local_rate_limit_snapshot(endpoint_config, state, now)
+        limiter_key = self._endpoint_limiter_key(endpoint_config)
+        _RayJobVlmRateLimiter._log_adaptive_rate_limit_change(
+            "recovered",
+            self._model(),
+            snapshot["configured"],
+            old_effective,
+            snapshot["effective"],
+            limiter_key=limiter_key,
+        )
+        _RayJobVlmRateLimiter._emit_rate_limit_values(
+            "recovery",
+            self._model(),
+            snapshot["configured"],
+            snapshot["effective"],
+            extra_tags={"limiter_key": limiter_key},
+        )
+
+    def _local_rate_limit_snapshot(self, now: float) -> dict[str, Any]:
+        token_events = self._token_events
+        request_events = self._request_events
+        last_limited_at = self._adaptive_last_limited_at
+        return {
+            "configured": {
+                "rpm": float(self.rpm) if self.rpm is not None else None,
+                "tpm": float(self.tpm) if self.tpm is not None else None,
+            },
+            "effective": dict(self._adaptive_effective_limits),
+            "last_limited_at": last_limited_at,
+            "seconds_since_last_limited": None if last_limited_at is None else max(0.0, now - last_limited_at),
+            "window": {
+                "requests": len(request_events),
+                "tokens": sum(tokens for _, tokens in token_events),
+                "next_available_at": self._rate_limit_next_available_at,
+            },
+        }
+
+    def _endpoint_local_rate_limit_state(self, endpoint_config: _VlmEndpointConfig) -> dict[str, Any]:
+        limiter_key = self._endpoint_limiter_key(endpoint_config)
+        if limiter_key not in self._endpoint_rate_limit_states:
+            self._endpoint_rate_limit_states[limiter_key] = {
+                "request_events": deque(),
+                "token_events": deque(),
+                "next_available_at": 0.0,
+                "adaptive_effective_limits": {
+                    "rpm": float(endpoint_config.rpm) if endpoint_config.rpm is not None else None,
+                    "tpm": float(endpoint_config.tpm) if endpoint_config.tpm is not None else None,
+                },
+                "adaptive_last_limited_at": None,
+            }
+        return self._endpoint_rate_limit_states[limiter_key]
+
+    def _prune_endpoint_local_rate_limit_events(self, state: dict[str, Any], now: float) -> None:
+        request_events = state["request_events"]
+        token_events = state["token_events"]
+        while request_events and now - request_events[0] >= RATE_LIMIT_WINDOW_SECONDS:
+            request_events.popleft()
+        while token_events and now - token_events[0][0] >= RATE_LIMIT_WINDOW_SECONDS:
+            token_events.popleft()
+
+    def _endpoint_local_rate_limit_snapshot(
+        self,
+        endpoint_config: _VlmEndpointConfig,
+        state: dict[str, Any],
+        now: float,
+    ) -> dict[str, Any]:
+        token_events = state["token_events"]
+        request_events = state["request_events"]
+        last_limited_at = state["adaptive_last_limited_at"]
+        return {
+            "configured": {
+                "rpm": float(endpoint_config.rpm) if endpoint_config.rpm is not None else None,
+                "tpm": float(endpoint_config.tpm) if endpoint_config.tpm is not None else None,
+            },
+            "effective": dict(state["adaptive_effective_limits"]),
+            "last_limited_at": last_limited_at,
+            "seconds_since_last_limited": None if last_limited_at is None else max(0.0, now - last_limited_at),
+            "window": {
+                "requests": len(request_events),
+                "tokens": sum(tokens for _, tokens in token_events),
+                "next_available_at": state["next_available_at"],
+            },
+        }
+
     def _setup_ray_rate_limiter(self) -> None:
         self._rate_limiter_actor = None
         self._rate_limiter_actor_name = None
-        if self.rpm is None and self.tpm is None:
+        if self.rpm is None and self.tpm is None and len(self._endpoint_configs) <= 1:
             return
         ray = _try_import_ray()
         if ray is None or not ray.is_initialized():
@@ -465,7 +1231,15 @@ class VlmApiResponseMapper(Pipeline):
             actor = ray.get_actor(actor_name)
         except ValueError:
             actor = _remote_vlm_rate_limiter_actor(ray).options(name=actor_name, num_cpus=0).remote()
-        ray.get(actor.register.remote(self._model(), self.rpm, self.tpm))
+        for endpoint_config in self._endpoint_configs:
+            ray.get(
+                actor.register.remote(
+                    self._model(),
+                    endpoint_config.rpm,
+                    endpoint_config.tpm,
+                    self._endpoint_limiter_key(endpoint_config),
+                )
+            )
         self._rate_limiter_actor = actor
         self._rate_limiter_actor_name = actor_name
 
@@ -504,70 +1278,7 @@ class VlmApiResponseMapper(Pipeline):
         return sum(len(self._image_values(sample.get(key))) for key in self.image_keys or [self.image_key])
 
     def _estimate_image_tokens(self, sample: dict[str, Any]) -> int:
-        if self.image_token_divisor is None:
-            return self.image_tokens_per_image * self._image_count(sample)
-        total = 0
-        for key in self.image_keys or [self.image_key]:
-            total += sum(self._estimate_one_image_tokens(image) for image in self._iter_raw_images(sample.get(key)))
-        return total
-
-    def _estimate_one_image_tokens(self, image: Any) -> int:
-        size = self._image_size(image)
-        if size is None:
-            return self.image_tokens_per_image
-        width, height = size
-        tokens = math.ceil(width * height / self.image_token_divisor)
-        if self.max_image_tokens is not None:
-            tokens = min(tokens, self.max_image_tokens)
-        return tokens
-
-    def _iter_raw_images(self, value: Any):
-        if hasattr(value, "as_py"):
-            value = value.as_py()
-        if hasattr(value, "tolist") and not isinstance(value, (str, bytes, bytearray, memoryview)):
-            value = value.tolist()
-        if isinstance(value, (bytes, bytearray, memoryview, str)):
-            if self._image_values(value):
-                yield value
-            return
-        if isinstance(value, dict):
-            if self._image_size(value) is not None:
-                yield value
-                return
-            for item in value.values():
-                yield from self._iter_raw_images(item)
-            return
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                yield from self._iter_raw_images(item)
-
-    @staticmethod
-    def _image_size(value: Any) -> tuple[int, int] | None:
-        if isinstance(value, dict):
-            width = value.get("width") or value.get("image_width")
-            height = value.get("height") or value.get("image_height")
-            if width and height:
-                try:
-                    return int(width), int(height)
-                except (TypeError, ValueError):
-                    return None
-            return None
-        if isinstance(value, str):
-            if not value.startswith("data:") or "," not in value:
-                return None
-            try:
-                value = base64.b64decode(value.split(",", 1)[1])
-            except (ValueError, TypeError):
-                return None
-        if not isinstance(value, (bytes, bytearray, memoryview)):
-            return None
-        try:
-            from PIL import Image
-
-            with Image.open(io.BytesIO(bytes(value))) as image:
-                return image.size
-        except Exception:
-            return None
+        return DEFAULT_IMAGE_TOKENS_PER_IMAGE * self._image_count(sample)
 
     def _response_text(self, response: dict[str, Any]) -> str:
         if self._is_responses_api() and self.response_path == CHAT_COMPLETIONS_RESPONSE_PATH:
@@ -679,22 +1390,28 @@ class VlmApiResponseMapper(Pipeline):
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as err:
             body = err.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"VLM API request failed with HTTP {err.code}: {body}") from err
+            raise _VlmApiHttpError(err.code, body) from err
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, endpoint_config: _VlmEndpointConfig | None = None) -> dict[str, str]:
+        endpoint_config = endpoint_config or self._endpoint_configs[0]
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if endpoint_config.api_key:
+            headers["Authorization"] = f"Bearer {endpoint_config.api_key}"
         headers.update(self.extra_headers)
         return headers
 
-    def _api_url(self) -> str:
-        base_url = (self.base_url or "").rstrip("/")
+    def _api_url(self, endpoint_config: _VlmEndpointConfig | None = None) -> str:
+        endpoint_config = endpoint_config or self._endpoint_configs[0]
+        base_url = (endpoint_config.base_url or "").rstrip("/")
         if not base_url:
             raise RuntimeError("base_url must be set")
         if base_url.endswith(("/chat/completions", "/responses")):
             return base_url
-        endpoint = self.endpoint if self.endpoint.startswith("/") else f"/{self.endpoint}"
+        endpoint = (
+            endpoint_config.endpoint
+            if endpoint_config.endpoint.startswith("/")
+            else f"/{endpoint_config.endpoint}"
+        )
         if base_url.endswith(endpoint):
             return base_url
         return f"{base_url}{endpoint}"
@@ -709,11 +1426,12 @@ class VlmApiResponseMapper(Pipeline):
         parsed = urllib.parse.urlsplit(url)
         return parsed.path or "POST"
 
-    def _is_responses_api(self) -> bool:
+    def _is_responses_api(self, endpoint_config: _VlmEndpointConfig | None = None) -> bool:
         if self.api_format is not None:
             return self.api_format == "responses"
-        endpoint = self.endpoint.rstrip("/")
-        base_url = (self.base_url or "").rstrip("/")
+        endpoint_config = endpoint_config or self._endpoint_configs[0]
+        endpoint = endpoint_config.endpoint.rstrip("/")
+        base_url = (endpoint_config.base_url or "").rstrip("/")
         return endpoint.endswith("/responses") or base_url.endswith("/responses")
 
     def _response_path(self) -> str:
@@ -727,6 +1445,70 @@ class VlmApiResponseMapper(Pipeline):
         if not self.model:
             raise RuntimeError("model must be set")
         return self.model
+
+    def _normalize_endpoint_pool(self) -> list[_VlmEndpointConfig]:
+        if self.endpoint_pool is None:
+            return [
+                _VlmEndpointConfig(
+                    base_url=self.base_url or "",
+                    endpoint=self.endpoint,
+                    api_key=self.api_key,
+                    rpm=self.rpm,
+                    tpm=self.tpm,
+                    weight=1,
+                    name="default",
+                    limiter_key=None,
+                )
+            ]
+        if not isinstance(self.endpoint_pool, list) or not self.endpoint_pool:
+            raise ValueError("endpoint_pool must be a non-empty list")
+        endpoint_configs = []
+        for index, item in enumerate(self.endpoint_pool):
+            if isinstance(item, str):
+                item = {"base_url": item}
+            if not isinstance(item, dict):
+                raise ValueError("endpoint_pool items must be URL strings or dictionaries")
+            base_url = item.get("base_url")
+            if not isinstance(base_url, str) or not base_url:
+                raise ValueError("endpoint_pool item base_url must be a non-empty string")
+            endpoint = item.get("endpoint", self.endpoint)
+            if not isinstance(endpoint, str) or not endpoint:
+                raise ValueError("endpoint_pool item endpoint must be a non-empty string")
+            endpoint_configs.append(
+                _VlmEndpointConfig(
+                    base_url=base_url,
+                    endpoint=endpoint,
+                    api_key=item.get("api_key", self.api_key),
+                    rpm=item.get("rpm", self.rpm),
+                    tpm=item.get("tpm", self.tpm),
+                    weight=int(item.get("weight", 1)),
+                    name=str(item.get("name", index)),
+                    limiter_key=item.get("limiter_key"),
+                )
+            )
+        return endpoint_configs
+
+    def _next_local_endpoint(self) -> _VlmEndpointConfig:
+        if len(self._endpoint_configs) == 1:
+            return self._endpoint_configs[0]
+        total_weight = sum(endpoint_config.weight for endpoint_config in self._endpoint_configs)
+        cursor = self._endpoint_cursor % total_weight
+        self._endpoint_cursor += 1
+        cumulative = 0
+        for endpoint_config in self._endpoint_configs:
+            cumulative += endpoint_config.weight
+            if cursor < cumulative:
+                return endpoint_config
+        return self._endpoint_configs[0]
+
+    def _has_any_tpm_limit(self) -> bool:
+        return any(endpoint_config.tpm is not None for endpoint_config in self._endpoint_configs)
+
+    def _endpoint_pool_key(self) -> str:
+        return "|".join(self._endpoint_limiter_key(endpoint_config) for endpoint_config in self._endpoint_configs)
+
+    def _endpoint_limiter_key(self, endpoint_config: _VlmEndpointConfig) -> str:
+        return endpoint_config.limiter_key or self._api_url(endpoint_config)
 
     def _prompt(self, sample: dict[str, Any] | None = None) -> str:
         if self.prompt_template is not None:

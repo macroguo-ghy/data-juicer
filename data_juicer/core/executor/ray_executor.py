@@ -10,6 +10,7 @@ from pydantic import PositiveInt
 
 from data_juicer.core.data.dataset_builder import DatasetBuilder
 from data_juicer.core.data.ray_dataset import RayDataset
+from data_juicer.core.data.ray_join import validate_no_checkpoint_with_ray_join
 from data_juicer.core.executor import ExecutorBase
 from data_juicer.core.executor.dag_execution_mixin import DAGExecutionMixin
 from data_juicer.core.executor.event_logging_mixin import EventLoggingMixin
@@ -243,6 +244,7 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         checkpoint_cfg = getattr(self.cfg, "ray_data_checkpoint", None)
         ray_data_checkpoint_enabled = bool(getattr(checkpoint_cfg, "enabled", False))
         if ray_data_checkpoint_enabled:
+            validate_no_checkpoint_with_ray_join(self.cfg)
             if skip_export:
                 raise ValueError("Ray Data checkpointing requires an export sink; `skip_export=True` is not supported.")
             self.datasetbuilder.validate_ray_data_checkpoint_support()

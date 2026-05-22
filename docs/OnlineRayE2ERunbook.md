@@ -45,6 +45,8 @@ bytedcli --json bits rpc-call "$PSM" <MethodName> \
 - `job_def_version.image_meta.image_url`：运行镜像，例如 `hub.byted.org/ad_stats/data_juicer:<tag>`。
 - `job_def_version.entrypoint_full_script`：真实执行的 Data-Juicer 命令。
 
+线上 Ray E2E 是分布式执行，不要把仓库内样例文件作为真实输入数据，例如 `demos/.../*.jsonl`。driver 能看到当前仓库，不代表 worker 的 runtime working directory 一定有同一份文件；这类配置容易在线上失败为 `FileNotFoundError`。线上 E2E 尽可能使用 HDFS 中的小样本数据，提交前可用 `ExecuteHdfsCommand` 确认路径存在和文件大小。仓库本地样例只适合本地 dry-run 或本地单机 smoke test。
+
 调试时建议显式指定 `job_id`，方便把 Ray UI、Data-Juicer 日志和导出路径串起来：
 
 ```bash

@@ -137,9 +137,6 @@ process:
       rpm: 120
       tpm: 500000
       estimated_tokens_per_request: 4096
-      image_token_divisor: 1764
-      max_image_tokens: 5120
-      image_tokens_per_image: 5120
       repartition_num_blocks: 160
       batch_size: 1
       num_proc: 32
