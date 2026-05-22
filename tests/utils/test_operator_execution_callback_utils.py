@@ -80,6 +80,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "x-use-ppe": "1",
             },
             timeout=30.0,
+            retry_attempts=5,
         )
         self.assertEqual(
             fake_client.requests,
@@ -208,6 +209,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "x-use-ppe": "1",
             },
             timeout=30.0,
+            retry_attempts=5,
         )
         self.assertEqual(
             fake_client.requests,
@@ -258,6 +260,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
                 "x-tt-logid": "log-001",
             },
             timeout=30.0,
+            retry_attempts=5,
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")

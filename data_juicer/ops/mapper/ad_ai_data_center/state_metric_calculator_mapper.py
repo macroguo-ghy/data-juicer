@@ -38,6 +38,7 @@ class StateMetricCalculatorMapper(Mapper):
         operators: list[dict] | None = None,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -51,6 +52,7 @@ class StateMetricCalculatorMapper(Mapper):
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -63,6 +65,8 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("result_mode must be object")
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
         self.operators = self._normalize_operators(operators)
 
         self.state_key = state_key
@@ -71,6 +75,7 @@ class StateMetricCalculatorMapper(Mapper):
         self.fail_policy = fail_policy
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self._operator_details: dict[int, dict[str, Any]] | None = None
         self._operator_details_error: str | None = None
         self._calculate_runners: dict[int, PythonScriptRunner] = {}
@@ -118,29 +123,41 @@ class StateMetricCalculatorMapper(Mapper):
     def _calculate_metric_outputs(self, sample: dict[str, Any]) -> dict[str, Any]:
         details = self._get_operator_details(sample)
         self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
-        metrics = []
-        for operator_config in self.operators:
-            operator_id = operator_config["operator_id"]
-            detail = details.get(operator_id)
-            try:
-                if self._operator_details_error:
-                    raise ValueError(self._operator_details_error)
-                if detail is None:
-                    raise ValueError(f"operator detail not found: {operator_id}")
-                metrics.append(self._calculate_one_metric(
-                    sample,
-                    operator_config,
-                    detail,
-                ))
-            except Exception as exc:
-                metrics.append(self._metric_failure_result(
-                    operator_id,
-                    detail,
-                    str(exc),
-                ))
+        output_id, item_ids, id_source_field = self._resolve_output_items(
+            sample,
+            details,
+        )
+        items = []
+        for item_id in item_ids:
+            metrics = []
+            for operator_config in self.operators:
+                operator_id = operator_config["operator_id"]
+                detail = details.get(operator_id)
+                try:
+                    if self._operator_details_error:
+                        raise ValueError(self._operator_details_error)
+                    if detail is None:
+                        raise ValueError(f"operator detail not found: {operator_id}")
+                    metrics.append(self._calculate_one_metric(
+                        sample,
+                        operator_config,
+                        detail,
+                        current_id=item_id,
+                        id_source_field=id_source_field,
+                    ))
+                except Exception as exc:
+                    metrics.append(self._metric_failure_result(
+                        operator_id,
+                        detail,
+                        str(exc),
+                    ))
+            items.append({
+                "id": item_id,
+                "metrics": metrics,
+            })
         return {
-            "id": self._resolve_output_id(sample, details),
-            "metrics": metrics,
+            "id": output_id,
+            "items": items,
         }
 
     def _validate_state_key_when_all_metrics_depend_on_state(
@@ -177,6 +194,8 @@ class StateMetricCalculatorMapper(Mapper):
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         detail: dict[str, Any],
+        current_id: str | None = None,
+        id_source_field: str | None = None,
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
         parameters = self._parse_input_parameters(detail)
@@ -186,6 +205,8 @@ class StateMetricCalculatorMapper(Mapper):
             operator_config,
             parameters,
             inspect.signature(runner.process_func),
+            current_id=current_id,
+            id_source_field=id_source_field,
         )
         value = runner.run_with_args(*args)
         return {
@@ -201,6 +222,8 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         parameters: list[dict[str, Any]],
         signature: inspect.Signature,
+        current_id: str | None = None,
+        id_source_field: str | None = None,
     ) -> list[Any]:
         parameters_by_name = {
             parameter["key_name_en"]: parameter
@@ -225,6 +248,8 @@ class StateMetricCalculatorMapper(Mapper):
                         sample,
                         operator_config,
                         parameters_by_name[name],
+                        current_id=current_id,
+                        id_source_field=id_source_field,
                     )
                 )
             elif func_parameter.default is not inspect.Parameter.empty:
@@ -238,12 +263,24 @@ class StateMetricCalculatorMapper(Mapper):
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         parameter: dict[str, Any],
+        current_id: str | None = None,
+        id_source_field: str | None = None,
     ):
         name = parameter.get("key_name_en")
         data_type = parameter.get("data_type")
         missing = object()
 
-        if data_type == "placeholder":
+        if (
+            current_id is not None
+            and data_type == "placeholder"
+            and self._is_current_id_parameter(
+                operator_config,
+                name,
+                id_source_field,
+            )
+        ):
+            value = current_id
+        elif data_type == "placeholder":
             mapping = operator_config.get("parameter_mapping") or {}
             field_name = mapping.get(name)
             value = sample.get(field_name, missing) if field_name else missing
@@ -263,11 +300,35 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError(f"sample.{self.state_key} must be provided")
         return self._normalize_state_value(value)
 
+    def _resolve_output_items(
+        self,
+        sample: dict[str, Any],
+        details: dict[int, dict[str, Any]],
+    ) -> tuple[str, list[str], str | None]:
+        candidate = self._resolve_output_id_candidate(sample, details)
+        if candidate is None:
+            return "unknown", ["unknown"], None
+
+        _, _, _, _, source_field, value = candidate
+        output_id = self._stringify_output_id(value)
+        item_ids = self._split_output_id_value(value)
+        return output_id, item_ids, source_field
+
     def _resolve_output_id(
         self,
         sample: dict[str, Any],
         details: dict[int, dict[str, Any]],
     ) -> str:
+        candidate = self._resolve_output_id_candidate(sample, details)
+        if candidate is None:
+            return "unknown"
+        return self._stringify_output_id(candidate[5])
+
+    def _resolve_output_id_candidate(
+        self,
+        sample: dict[str, Any],
+        details: dict[int, dict[str, Any]],
+    ):
         candidates = []
         for operator_index, operator_config in enumerate(self.operators):
             operator_id = operator_config["operator_id"]
@@ -292,12 +353,16 @@ class StateMetricCalculatorMapper(Mapper):
                     priority,
                     operator_index,
                     parameter_index,
-                    self._stringify_output_id(value),
+                    parameter.get("key_name_en"),
+                    (operator_config.get("parameter_mapping") or {}).get(
+                        parameter.get("key_name_en")
+                    ),
+                    value,
                 ))
         if not candidates:
-            return "unknown"
+            return None
         candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-        return candidates[0][3]
+        return candidates[0]
 
     @staticmethod
     def _id_parameter_priority(name: str | None):
@@ -313,10 +378,38 @@ class StateMetricCalculatorMapper(Mapper):
         return None
 
     @staticmethod
+    def _is_current_id_parameter(
+        operator_config: dict[str, Any],
+        parameter_name: str | None,
+        id_source_field: str | None,
+    ) -> bool:
+        if id_source_field is None:
+            return False
+        if StateMetricCalculatorMapper._id_parameter_priority(parameter_name) is None:
+            return False
+        mapping = operator_config.get("parameter_mapping") or {}
+        return mapping.get(parameter_name) == id_source_field
+
+    @staticmethod
     def _stringify_output_id(value) -> str:
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False)
         return str(value)
+
+    @staticmethod
+    def _split_output_id_value(value) -> list[str]:
+        if isinstance(value, list):
+            items = [
+                StateMetricCalculatorMapper._stringify_output_id(item).strip()
+                for item in value
+            ]
+        else:
+            items = [
+                item.strip()
+                for item in str(value).split(",")
+            ]
+        items = [item for item in items if item]
+        return items or ["unknown"]
 
     @staticmethod
     def _stringify_metric_output(value) -> str:
@@ -355,6 +448,7 @@ class StateMetricCalculatorMapper(Mapper):
             method="POST",
             headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
         result = client.request(
             json_body={
@@ -497,7 +591,7 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "metricCode": StateMetricCalculatorMapper._result_key(detail, operator_id),
             "metricName": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
-            "output": None,
+            "output": StateMetricCalculatorMapper._stringify_metric_output(None),
             "error": error,
         }
 

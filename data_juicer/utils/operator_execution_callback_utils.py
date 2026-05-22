@@ -53,9 +53,13 @@ class OperatorExecutionCallbackClient:
         ctx: dict[str, Any],
         operator_execution_id: int | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 5,
     ):
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self.operator_execution_id = operator_execution_id
         self.api_base = self._get_api_base()
         self.user_account = self._get_ctx_required_value("userAccount")
@@ -211,6 +215,7 @@ class OperatorExecutionCallbackClient:
             method="POST",
             headers=self._build_headers(record_log_id=record_log_id),
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
         result = client.request(json_body=payload)
         if not result["ok"]:

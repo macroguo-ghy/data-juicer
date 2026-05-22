@@ -150,6 +150,7 @@ process:
         self.assertIsNone(ops[0].metadata_field)
         self.assertEqual(ops[0].poll_interval_seconds, 2.0)
         self.assertEqual(ops[0].max_poll_attempts, 300)
+        self.assertEqual(ops[0].retry_attempts, 3)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_submits_prompt_from_template_polls_result_and_writes_output(self, mock_client_cls):
@@ -201,6 +202,7 @@ process:
                     method="POST",
                     headers=expected_headers,
                     timeout=30.0,
+                    retry_attempts=3,
                 ),
                 call(
                     endpoint=(
@@ -210,6 +212,7 @@ process:
                     method="POST",
                     headers=expected_headers,
                     timeout=30.0,
+                    retry_attempts=3,
                 ),
                 call(
                     endpoint=(
@@ -219,6 +222,7 @@ process:
                     method="POST",
                     headers=expected_headers,
                     timeout=30.0,
+                    retry_attempts=3,
                 ),
             ],
         )
@@ -565,6 +569,7 @@ process:
                 "metadata_field": "meta",
                 "poll_interval_seconds": 3,
                 "max_poll_attempts": 10,
+                "retry_attempts": 3,
             }
         )
         self.mock_send_test_card_notification.assert_not_called()

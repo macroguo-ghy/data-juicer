@@ -33,6 +33,7 @@ class ExternalEvalDataImportMapper(Mapper):
         python_code: str | None = None,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -44,6 +45,7 @@ class ExternalEvalDataImportMapper(Mapper):
         :param python_code: Python script defining ``process(data, context)``.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -56,12 +58,15 @@ class ExternalEvalDataImportMapper(Mapper):
             raise ValueError(f"Unsupported data_type: {data_type}")
         if not python_code:
             raise ValueError("python_code must be provided")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
 
         self.sheet_url = sheet_url
         self.data_type = data_type
         self.output_field = OUTPUT_FIELD
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self.script_runner = PythonScriptRunner(
             python_code,
             entrypoint="process",
@@ -95,6 +100,7 @@ class ExternalEvalDataImportMapper(Mapper):
             endpoint=endpoint,
             method="POST",
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
             headers=headers,
         )
         result = client.request(json_body={"docUrl": self.sheet_url})

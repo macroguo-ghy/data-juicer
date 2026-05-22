@@ -44,6 +44,7 @@ class LLMInferenceMapper(Mapper):
         max_poll_attempts: int = 300,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -60,6 +61,7 @@ class LLMInferenceMapper(Mapper):
         :param max_poll_attempts: maximum result polling attempts.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for submit/result requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -74,6 +76,8 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("poll_interval_seconds must be >= 0")
         if max_poll_attempts <= 0:
             raise ValueError("max_poll_attempts must be > 0")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
 
         self.prompt = prompt
         self.prompt_template = prompt_template
@@ -85,6 +89,7 @@ class LLMInferenceMapper(Mapper):
         self.max_poll_attempts = max_poll_attempts
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self._operator_execution_callback_client = None
 
     def process_single(self, sample):
@@ -197,6 +202,7 @@ class LLMInferenceMapper(Mapper):
             method="POST",
             headers=add_record_log_id_header(self._build_headers(ctx), sample),
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
         result = client.request(json_body=json_body)
         if not result["ok"]:
@@ -258,6 +264,7 @@ class LLMInferenceMapper(Mapper):
             "metadata_field": self.metadata_field,
             "poll_interval_seconds": self.poll_interval_seconds,
             "max_poll_attempts": self.max_poll_attempts,
+            "retry_attempts": self.retry_attempts,
         }
 
     def _prompt_source(self) -> str:

@@ -35,6 +35,7 @@ class HttpMapper(Mapper):
         headers: dict[str, str] | None = None,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        retry_attempts: int = 3,
         *args,
         **kwargs,
     ):
@@ -49,6 +50,7 @@ class HttpMapper(Mapper):
         :param headers: HTTP request headers.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for mapper requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -61,6 +63,8 @@ class HttpMapper(Mapper):
             raise ValueError("output_field must be provided")
         if not error_field:
             raise ValueError("error_field must be provided")
+        if retry_attempts < 0:
+            raise ValueError("retry_attempts must be non-negative")
 
         self.input_fields = list(input_fields)
         self.output_field = output_field
@@ -70,6 +74,7 @@ class HttpMapper(Mapper):
         self.headers = dict(headers or {})
         self.ctx = ctx
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
         self._operator_execution_callback_client = None
 
     def process_single(self, sample):
@@ -143,6 +148,7 @@ class HttpMapper(Mapper):
             method=self.method,
             headers=headers,
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
         )
 
     @staticmethod
