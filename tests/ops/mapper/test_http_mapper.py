@@ -378,7 +378,7 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.http_mapper.HttpClient")
-    def test_sends_test_card_notification_only_on_operator_start(self, mock_client_cls):
+    def test_lifecycle_does_not_send_test_card_notification(self, mock_client_cls):
         op = HttpMapper(
             endpoint="http://example.test/invoke",
             input_fields=["prompt"],
@@ -390,27 +390,9 @@ process:
         op.before_operator_started()
         op.after_operator_finished(error=None)
 
-        self.assertEqual(
-            self.mock_send_test_card_notification.call_args_list,
-            [
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "http_mapper",
-                        "stage": "开始",
-                        "content": (
-                            '{"endpoint": "http://example.test/invoke", '
-                            '"input_fields": ["prompt"], '
-                            '"output_field": "http_result", '
-                            '"error_field": "http_error", '
-                            '"method": "POST", "headers": {}}'
-                        ),
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
-            ],
-        )
+        self.mock_callback.start.assert_called_once()
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_send_test_card_notification.assert_not_called()
 
     def test_does_not_send_finish_notification_for_failed_operator(self):
         op = HttpMapper(
