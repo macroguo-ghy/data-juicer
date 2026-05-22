@@ -118,7 +118,7 @@ class StateMetricCalculatorMapper(Mapper):
     def _calculate_metric_outputs(self, sample: dict[str, Any]) -> dict[str, Any]:
         details = self._get_operator_details(sample)
         self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
-        output_id, item_ids, id_parameter_name = self._resolve_output_items(
+        output_id, item_ids, id_source_field = self._resolve_output_items(
             sample,
             details,
         )
@@ -138,7 +138,7 @@ class StateMetricCalculatorMapper(Mapper):
                         operator_config,
                         detail,
                         current_id=item_id,
-                        id_parameter_name=id_parameter_name,
+                        id_source_field=id_source_field,
                     ))
                 except Exception as exc:
                     metrics.append(self._metric_failure_result(
@@ -190,7 +190,7 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         detail: dict[str, Any],
         current_id: str | None = None,
-        id_parameter_name: str | None = None,
+        id_source_field: str | None = None,
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
         parameters = self._parse_input_parameters(detail)
@@ -201,7 +201,7 @@ class StateMetricCalculatorMapper(Mapper):
             parameters,
             inspect.signature(runner.process_func),
             current_id=current_id,
-            id_parameter_name=id_parameter_name,
+            id_source_field=id_source_field,
         )
         value = runner.run_with_args(*args)
         return {
@@ -218,7 +218,7 @@ class StateMetricCalculatorMapper(Mapper):
         parameters: list[dict[str, Any]],
         signature: inspect.Signature,
         current_id: str | None = None,
-        id_parameter_name: str | None = None,
+        id_source_field: str | None = None,
     ) -> list[Any]:
         parameters_by_name = {
             parameter["key_name_en"]: parameter
@@ -244,7 +244,7 @@ class StateMetricCalculatorMapper(Mapper):
                         operator_config,
                         parameters_by_name[name],
                         current_id=current_id,
-                        id_parameter_name=id_parameter_name,
+                        id_source_field=id_source_field,
                     )
                 )
             elif func_parameter.default is not inspect.Parameter.empty:
@@ -259,7 +259,7 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         parameter: dict[str, Any],
         current_id: str | None = None,
-        id_parameter_name: str | None = None,
+        id_source_field: str | None = None,
     ):
         name = parameter.get("key_name_en")
         data_type = parameter.get("data_type")
@@ -267,9 +267,12 @@ class StateMetricCalculatorMapper(Mapper):
 
         if (
             current_id is not None
-            and id_parameter_name is not None
-            and name == id_parameter_name
             and data_type == "placeholder"
+            and self._is_current_id_parameter(
+                operator_config,
+                name,
+                id_source_field,
+            )
         ):
             value = current_id
         elif data_type == "placeholder":
@@ -301,10 +304,10 @@ class StateMetricCalculatorMapper(Mapper):
         if candidate is None:
             return "unknown", ["unknown"], None
 
-        _, _, _, parameter_name, value = candidate
+        _, _, _, _, source_field, value = candidate
         output_id = self._stringify_output_id(value)
         item_ids = self._split_output_id_value(value)
-        return output_id, item_ids, parameter_name
+        return output_id, item_ids, source_field
 
     def _resolve_output_id(
         self,
@@ -314,7 +317,7 @@ class StateMetricCalculatorMapper(Mapper):
         candidate = self._resolve_output_id_candidate(sample, details)
         if candidate is None:
             return "unknown"
-        return self._stringify_output_id(candidate[4])
+        return self._stringify_output_id(candidate[5])
 
     def _resolve_output_id_candidate(
         self,
@@ -346,6 +349,9 @@ class StateMetricCalculatorMapper(Mapper):
                     operator_index,
                     parameter_index,
                     parameter.get("key_name_en"),
+                    (operator_config.get("parameter_mapping") or {}).get(
+                        parameter.get("key_name_en")
+                    ),
                     value,
                 ))
         if not candidates:
@@ -365,6 +371,19 @@ class StateMetricCalculatorMapper(Mapper):
         if normalized.endswith("id"):
             return 2
         return None
+
+    @staticmethod
+    def _is_current_id_parameter(
+        operator_config: dict[str, Any],
+        parameter_name: str | None,
+        id_source_field: str | None,
+    ) -> bool:
+        if id_source_field is None:
+            return False
+        if StateMetricCalculatorMapper._id_parameter_priority(parameter_name) is None:
+            return False
+        mapping = operator_config.get("parameter_mapping") or {}
+        return mapping.get(parameter_name) == id_source_field
 
     @staticmethod
     def _stringify_output_id(value) -> str:

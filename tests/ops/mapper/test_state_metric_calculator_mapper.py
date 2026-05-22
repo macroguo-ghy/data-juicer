@@ -606,6 +606,101 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_id_like_parameters_from_same_field_receive_current_item_id(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 209,
+                    "operatorNameEn": "metric_with_ids",
+                    "operatorNameCn": "IDS 指标",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids):\n    return ids\n",
+                },
+                {
+                    "id": 210,
+                    "operatorNameEn": "metric_with_adv_id",
+                    "operatorNameCn": "广告 ID 指标",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "adv_id", '
+                        '"default_or_placeholder_value": "adv_id"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, adv_id):\n    return adv_id\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[
+                {
+                    "operator_id": 209,
+                    "parameter_mapping": {
+                        "ids": "material_ids",
+                    },
+                },
+                {
+                    "operator_id": 210,
+                    "parameter_mapping": {
+                        "adv_id": "material_ids",
+                    },
+                },
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "material_ids": "1854751525764108,1853671159428096",
+            "state": {},
+        })
+
+        self.assertEqual(
+            result["query_metric_data_outputs"]["items"],
+            [
+                {
+                    "id": "1854751525764108",
+                    "metrics": [
+                        {
+                            "metricCode": "metric_with_ids",
+                            "metricName": "IDS 指标",
+                            "output": '"1854751525764108"',
+                            "error": "",
+                        },
+                        {
+                            "metricCode": "metric_with_adv_id",
+                            "metricName": "广告 ID 指标",
+                            "output": '"1854751525764108"',
+                            "error": "",
+                        },
+                    ],
+                },
+                {
+                    "id": "1853671159428096",
+                    "metrics": [
+                        {
+                            "metricCode": "metric_with_ids",
+                            "metricName": "IDS 指标",
+                            "output": '"1853671159428096"',
+                            "error": "",
+                        },
+                        {
+                            "metricCode": "metric_with_adv_id",
+                            "metricName": "广告 ID 指标",
+                            "output": '"1853671159428096"',
+                            "error": "",
+                        },
+                    ],
+                },
+            ],
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_http_failure_records_each_metric_failure_without_raising(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": False,
