@@ -90,11 +90,7 @@ class PythonScriptMapper(Mapper):
             self._get_operator_execution_callback_client()
         except Exception as exc:
             logger.warning("Failed to start operator execution callback: {}", exc)
-        self._try_send_test_card_notification(
-            stage="开始",
-            content=self._operator_config(),
-            err_msg="",
-        )
+        # Test card notifications are temporarily disabled for ADC business operators.
 
     def after_operator_finished(self, dataset=None, context=None, error=None):
         try:

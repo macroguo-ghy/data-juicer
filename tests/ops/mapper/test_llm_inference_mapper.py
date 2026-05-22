@@ -544,7 +544,7 @@ process:
         with self.assertRaisesRegex(TimeoutError, "task-001"):
             op.process_single({RECORD_KEY_FIELD: "record-1"})
 
-    def test_before_operator_started_sends_start_callback_and_notification(self):
+    def test_before_operator_started_sends_start_callback_without_notification(self):
         op = LLMInferenceMapper(
             prompt_template="请总结：{{ text }}",
             model="doubao",
@@ -567,20 +567,7 @@ process:
                 "max_poll_attempts": 10,
             }
         )
-        self.mock_send_test_card_notification.assert_called_once_with(
-            template_id="AAqt1lQ72dVxK",
-            template_variable={
-                "operator": "llm_inference_mapper",
-                "stage": "开始",
-                "content": (
-                    '{"prompt_source": "prompt_template", "model": "doubao", '
-                    '"output_field": "out", "metadata_field": "meta", '
-                    '"poll_interval_seconds": 3, "max_poll_attempts": 10}'
-                ),
-                "errMsg": "",
-            },
-            ctx=self._ctx(),
-        )
+        self.mock_send_test_card_notification.assert_not_called()
 
     def test_after_operator_finished_finalizes_without_finish_notification(self):
         op = LLMInferenceMapper(

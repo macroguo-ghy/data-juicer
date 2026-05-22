@@ -169,7 +169,7 @@ class PythonScriptMapperTest(unittest.TestCase):
             error_message="consume failed"
         )
 
-    def test_sends_test_card_notification_only_on_operator_start(self):
+    def test_lifecycle_does_not_send_test_card_notification(self):
         op = PythonScriptMapper(
             python_code="def process(sample, context):\n    return sample",
             ctx=self._ctx(),
@@ -178,21 +178,9 @@ class PythonScriptMapperTest(unittest.TestCase):
         op.before_operator_started()
         op.after_operator_finished(error=None)
 
-        self.assertEqual(
-            self.mock_send_test_card_notification.call_args_list,
-            [
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "python_script_mapper",
-                        "stage": "开始",
-                        "content": '{"entrypoint": "process"}',
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
-            ],
-        )
+        self.mock_callback.start.assert_called_once()
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_send_test_card_notification.assert_not_called()
 
     def test_does_not_send_finish_notification_for_failed_operator(self):
         op = PythonScriptMapper(

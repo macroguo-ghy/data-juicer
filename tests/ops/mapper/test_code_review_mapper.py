@@ -277,7 +277,7 @@ process:
             error_message="consume failed"
         )
 
-    def test_sends_test_card_notification_only_on_operator_start(self):
+    def test_lifecycle_does_not_send_test_card_notification(self):
         op = CodeReviewMapper(
             input_field="state",
             python_code="def review_row(value, row, context):\n    return True, ''",
@@ -287,24 +287,9 @@ process:
         op.before_operator_started()
         op.after_operator_finished(error=None)
 
-        self.assertEqual(
-            self.mock_send_test_card_notification.call_args_list,
-            [
-                call(
-                    template_id="AAqt1lQ72dVxK",
-                    template_variable={
-                        "operator": "code_review_mapper",
-                        "stage": "开始",
-                        "content": (
-                            '{"input_field": "state", "status_field": "review_status", '
-                            '"reason_field": "review_reason", "entrypoint": "review_row"}'
-                        ),
-                        "errMsg": "",
-                    },
-                    ctx=self._ctx(),
-                ),
-            ],
-        )
+        self.mock_callback.start.assert_called_once()
+        self.mock_callback.finalize.assert_called_once_with()
+        self.mock_send_test_card_notification.assert_not_called()
 
 
 if __name__ == "__main__":
