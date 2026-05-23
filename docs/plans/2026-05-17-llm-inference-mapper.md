@@ -433,7 +433,7 @@ Cover:
 - `NEED_CTX = True`
 - prompt can be built from `prompt_field`
 - prompt can be built from `prompt_template`
-- submit request posts `prompt` and `model`
+- submit request posts `systemPrompt`, `userPrompt`, and `model`
 - result polling retries while `resultStatus = RUNNING`
 - success writes `output_field` as a string
 - success writes `metadata_field` as a string only when `metadata_field` is explicitly configured
@@ -504,7 +504,7 @@ Also pass `x-tt-env` and `x-use-ppe` when present in `ctx`.
 **Step 4: Implement polling**
 
 Flow:
-1. submit prompt/model
+1. submit systemPrompt/userPrompt/model
 2. require returned `data.taskId`
 3. loop result call
 4. if `resultStatus = RUNNING` or `finished = false`, sleep and continue
