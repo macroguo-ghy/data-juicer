@@ -48,6 +48,7 @@ class StateMetricCalculatorMapper(Mapper):
         end_date_key: str | None = None,
         timeout: float = 30.0,
         retry_attempts: int = 3,
+        summary_success_only: bool = False,
         *args,
         repartition_num_blocks: int | None = None,
         **kwargs,
@@ -67,6 +68,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param end_date_key: optional sample field containing metric end date.
         :param timeout: HTTP timeout in seconds.
         :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
+        :param summary_success_only: when true, summary output keeps only
+            successful DF-compatible fields.
         :param repartition_num_blocks: Ray Dataset block count before metric calculation.
             None means num_proc * 4 when num_proc is positive.
         :param args: extra args.
@@ -102,6 +105,7 @@ class StateMetricCalculatorMapper(Mapper):
         self.end_date_key = end_date_key
         self.timeout = timeout
         self.retry_attempts = retry_attempts
+        self.summary_success_only = summary_success_only
         self.repartition_num_blocks = repartition_num_blocks
         self._operator_details: dict[int, dict[str, Any]] | None = None
         self._operator_details_error: str | None = None
@@ -145,7 +149,8 @@ class StateMetricCalculatorMapper(Mapper):
             metric_outputs = self._calculate_metric_outputs(sample)
             if self.result_mode == "summary":
                 output_sample[self.output_key] = self._build_summary_output(
-                    metric_outputs
+                    metric_outputs,
+                    success_only=self.summary_success_only,
                 )
             else:
                 output_sample[self.output_key] = metric_outputs
@@ -256,7 +261,10 @@ class StateMetricCalculatorMapper(Mapper):
         }
 
     @staticmethod
-    def _build_summary_output(metric_outputs: dict[str, Any]) -> str:
+    def _build_summary_output(
+        metric_outputs: dict[str, Any],
+        success_only: bool = False,
+    ) -> str:
         summary = {}
         for item in metric_outputs.get("items", []) or []:
             if not isinstance(item, dict):
@@ -270,23 +278,49 @@ class StateMetricCalculatorMapper(Mapper):
                 continue
             payload = {}
             if has_metrics:
-                payload["metrics"] = [
-                    StateMetricCalculatorMapper._normalize_summary_metric(metric)
+                metrics_out = [
+                    StateMetricCalculatorMapper._normalize_summary_metric(
+                        metric,
+                        success_only=success_only,
+                    )
                     for metric in metrics
-                    if isinstance(metric, dict)
+                    if (
+                        isinstance(metric, dict)
+                        and (
+                            not success_only
+                            or StateMetricCalculatorMapper._is_success_summary_item(metric)
+                        )
+                    )
                 ]
+                if metrics_out:
+                    payload["metrics"] = metrics_out
             if has_tools:
-                payload["tools"] = [
-                    StateMetricCalculatorMapper._normalize_summary_tool(tool)
+                tools_out = [
+                    StateMetricCalculatorMapper._normalize_summary_tool(
+                        tool,
+                        success_only=success_only,
+                    )
                     for tool in tools
-                    if isinstance(tool, dict)
+                    if (
+                        isinstance(tool, dict)
+                        and (
+                            not success_only
+                            or StateMetricCalculatorMapper._is_success_summary_item(tool)
+                        )
+                    )
                 ]
-            summary[item_id] = payload
+                if tools_out:
+                    payload["tools"] = tools_out
+            if payload:
+                summary[item_id] = payload
         return json.dumps(summary, ensure_ascii=False) if summary else ""
 
     @staticmethod
-    def _normalize_summary_metric(metric: dict[str, Any]) -> dict[str, str]:
-        return {
+    def _normalize_summary_metric(
+        metric: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, str]:
+        result = {
             "metricCode": str(metric.get("metricCode") or ""),
             "metricName": str(metric.get("metricName") or ""),
             "output": str(
@@ -294,21 +328,40 @@ class StateMetricCalculatorMapper(Mapper):
                 if metric.get("output") is not None
                 else "null"
             ),
-            "error": str(metric.get("error") or ""),
         }
+        if not success_only:
+            result["error"] = str(metric.get("error") or "")
+        return result
 
     @staticmethod
-    def _normalize_summary_tool(tool: dict[str, Any]) -> dict[str, str]:
-        return {
+    def _normalize_summary_tool(
+        tool: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, str]:
+        result = {
             "tool": str(tool.get("tool") or ""),
-            "toolName": str(tool.get("toolName") or ""),
             "output": str(
                 tool.get("output")
                 if tool.get("output") is not None
                 else "null"
             ),
-            "error": str(tool.get("error") or ""),
         }
+        if not success_only:
+            result["toolName"] = str(tool.get("toolName") or "")
+            result["error"] = str(tool.get("error") or "")
+        return result
+
+    @staticmethod
+    def _is_success_summary_item(item: dict[str, Any]) -> bool:
+        output = item.get("output")
+        if output is None:
+            return False
+        output_text = str(output)
+        return (
+            bool(output_text.strip())
+            and "返回调用失败" not in output_text
+            and not item.get("error")
+        )
 
     def _validate_state_key_when_all_metrics_depend_on_state(
         self,
@@ -769,6 +822,7 @@ class StateMetricCalculatorMapper(Mapper):
             "end_date_key": self.end_date_key,
             "output_format": "dataset_factory_summary",
             "preserve_error": True,
+            "summary_success_only": self.summary_success_only,
             "runtime": "adc_operator_code",
             "operators": copy.deepcopy(self.operators),
             "repartition_num_blocks": self.repartition_num_blocks,

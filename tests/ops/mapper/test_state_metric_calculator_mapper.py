@@ -405,6 +405,87 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_summary_success_only_outputs_df_success_fields(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 201,
+                    "operatorType": "metric",
+                    "operatorNameEn": "BidAdjustmentTimes",
+                    "operatorNameCn": "是否频繁调整出价",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(id_value):\n"
+                        "    return f'指标名称:是否频繁调整出价, 指标值：计划ID:{id_value}：否'\n"
+                    ),
+                },
+                {
+                    "id": 202,
+                    "operatorType": "metric",
+                    "operatorNameEn": "failed_metric",
+                    "operatorNameCn": "失败指标",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    raise ValueError('bad metric')\n",
+                },
+                {
+                    "id": 203,
+                    "operatorType": "metric",
+                    "operatorNameEn": "failed_output_metric",
+                    "operatorNameCn": "失败输出指标",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return '返回调用失败'\n",
+                },
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "customer_info_acquisition",
+                    "toolNameCn": "客户信息获取",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return \"{'adv_name':'焱焱香文化'}\"\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            summary_success_only=True,
+            operators=[
+                {"operator_id": 201, "parameter_mapping": {}},
+                {"operator_id": 202, "parameter_mapping": {}},
+                {"operator_id": 203, "parameter_mapping": {}},
+                {"operator_id": 301, "parameter_mapping": {}},
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1812218125331659",
+            "state": {},
+        })
+
+        self.assertEqual(self._summary(result), {
+            "1812218125331659": {
+                "metrics": [
+                    {
+                        "metricCode": "BidAdjustmentTimes",
+                        "metricName": "是否频繁调整出价",
+                        "output": (
+                            "指标名称:是否频繁调整出价, "
+                            "指标值：计划ID:1812218125331659：否"
+                        ),
+                    },
+                ],
+                "tools": [
+                    {
+                        "tool": "customer_info_acquisition",
+                        "output": "{'adv_name':'焱焱香文化'}",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_object_result_mode_includes_metrics_and_tools(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
@@ -1487,6 +1568,7 @@ process:
                 "end_date_key": None,
                 "output_format": "dataset_factory_summary",
                 "preserve_error": True,
+                "summary_success_only": False,
                 "runtime": "adc_operator_code",
                 "operators": self._operators(),
                 "repartition_num_blocks": None,

@@ -22,6 +22,7 @@ process:
       id_source_key: issue_id
       output_key: query_metric_data_outputs
       result_mode: summary
+      summary_success_only: false
       start_date_key: "客户反馈的问题周期开始时间"
       end_date_key: "客户反馈的问题周期结束时间"
       operators:
@@ -41,6 +42,7 @@ process:
 | `id_source_key` | 否 | 样本里的公共 ID 字段，支持逗号分隔多个 ID。 |
 | `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
 | `result_mode` | 否 | 输出模式，支持 `summary` 和 `object`，默认 `summary`。 |
+| `summary_success_only` | 否 | 仅 `summary` 模式生效；默认 `false` 保留成功和失败结果，`true` 时只输出 DF 成功字段。 |
 | `start_date_key` | 否 | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 使用。 |
 | `end_date_key` | 否 | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 使用。 |
 | `operators` | 是 | 本次要执行的指标列表。 |
@@ -228,6 +230,8 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 `result_mode=summary` 时，`output_key` 字段写入的是 JSON 字符串。下游需要先 `json.loads(...)`。这是推荐模式，适合写 Lance/Magnus 表，schema 更稳定。
 
+默认 `summary_success_only=false`，summary 会保留成功和失败结果，并保留 `error`、`toolName` 等扩展字段，方便排查。
+
 示例输出：
 
 ```json
@@ -267,6 +271,42 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 - `tool`、`toolName`、`output`、`error` 也会稳定输出为字符串。
 - 单个 metric/tool 失败不会中断整条样本，失败原因写入对应结果的 `error`。
 - 如果没有可输出的 metric/tool 结果，`output_key` 会是空字符串。
+
+如果配置：
+
+```yaml
+summary_success_only: true
+```
+
+summary 会按 DF 最终输入格式只保留成功字段：
+
+- 过滤 `output` 为空的结果。
+- 过滤 `output` 包含 `返回调用失败` 的结果。
+- 过滤带 `error` 的结果。
+- metric 只输出 `metricCode`、`metricName`、`output`。
+- tool 只输出 `tool`、`output`。
+
+示例：
+
+```json
+{
+  "1812218125331659": {
+    "metrics": [
+      {
+        "metricCode": "BidAdjustmentTimes",
+        "metricName": "是否频繁调整出价",
+        "output": "指标名称:是否频繁调整出价, 指标值：计划ID:1834567890123456：否"
+      }
+    ],
+    "tools": [
+      {
+        "tool": "customer_info_acquisition",
+        "output": "{'adv_name':'焱焱香文化','account_type':80,'adv_id':'1812218125331659'}"
+      }
+    ]
+  }
+}
+```
 
 ## 6. metric 和 tool 怎么区分
 
