@@ -4,9 +4,9 @@
 
 **Goal:** Add `system_prompt` and `user_prompt` to `llm_inference_mapper`, send them to the backend LLM OpenAPI as separate fields, and make these the preferred prompt configuration path.
 
-**Architecture:** Keep the current LLM submit/result polling flow and record callback behavior unchanged. Add a new prompt-building path that renders `system_prompt` and `user_prompt` with the same Jinja2 renderer planned for `prompt_template`, then submit `{systemPrompt, userPrompt, model}` to `/openapi/synthesis/llm-inference/submit`. Keep legacy `prompt`, `prompt_template`, and `prompt_field` temporarily for backward compatibility, but reject mixed new/legacy prompt configs and stop exposing legacy fields in user-facing docs.
+**Architecture:** Keep the current LLM submit/result polling flow and record callback behavior unchanged. Add a new prompt-building path that renders `system_prompt` and `user_prompt` with the same Jinja2 renderer planned for `prompt_template`, then submit `{systemPrompt, userPrompt, model}` to `/openapi/synthesis/llm-inference/submit`. Keep legacy `prompt`, `prompt_template`, and `prompt_field` temporarily for backward compatibility by mapping their rendered prompt into `userPrompt`, but reject mixed new/legacy prompt configs and stop exposing legacy fields in user-facing docs.
 
-**Critical Assumptions & Early Checks:** The backend submit API accepts `systemPrompt` and `userPrompt` in addition to or instead of `prompt`; confirm exact field names before implementation (`systemPrompt/userPrompt` vs `system_prompt/user_prompt`). `user_prompt` should be required for the new mode, while `system_prompt` is optional. Existing YAMLs that use `prompt_template`, `prompt_field`, or `prompt` must keep working unless they are mixed with the new parameters.
+**Critical Assumptions & Early Checks:** The backend submit API requires non-blank `systemPrompt` and `userPrompt`. `user_prompt` should be required for the new mode, while `system_prompt` is optional on the YAML surface and defaults to a non-blank system prompt at submit time. Existing YAMLs that use `prompt_template`, `prompt_field`, or `prompt` must keep working by mapping the legacy prompt into `userPrompt` unless they are mixed with the new parameters.
 
 **Tech Stack:** Data-Juicer `Mapper`, ADC `HttpClient`, existing LLM mapper tests, Jinja2 prompt renderer from `docs/plans/2026-05-23-llm-inference-jinja2-prompt-template.md`, `unittest`.
 
@@ -71,11 +71,12 @@ Submit payload in new mode:
 }
 ```
 
-Submit payload in legacy mode remains unchanged:
+Submit payload in legacy mode is mapped to the backend's required fields:
 
 ```json
 {
-  "prompt": "请根据下面的 State 模板生成...",
+  "systemPrompt": "你是一个数据合成助手。",
+  "userPrompt": "请根据下面的 State 模板生成...",
   "model": "doubao-seed-1.6-flash"
 }
 ```
@@ -394,8 +395,8 @@ Run:
 
 Expected:
 
-- Existing tests pass without changing expected legacy payloads.
-- Legacy mode still sends `{"prompt": ..., "model": ...}`.
+- Existing legacy YAMLs still work.
+- Legacy mode sends `{"systemPrompt": "...", "userPrompt": "...", "model": "..."}`.
 
 **Step 2: Keep old methods where useful**
 
@@ -522,4 +523,3 @@ git add \
   docs/plans/2026-05-23-llm-inference-jinja2-prompt-template.md
 git commit -m "feat: support system and user prompts for llm mapper"
 ```
-

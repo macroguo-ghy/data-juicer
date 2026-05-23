@@ -239,7 +239,8 @@ process:
         )
         self.assertEqual(submit_client.requests, [{
             "json_body": {
-                "prompt": "请总结：long text",
+                "systemPrompt": "你是一个数据合成助手。",
+                "userPrompt": "请总结：long text",
                 "model": "doubao",
             }
         }])
@@ -306,7 +307,8 @@ process:
         })
 
         self.assertEqual(submit_client.requests[0]["json_body"], {
-            "prompt": "direct prompt",
+            "systemPrompt": "你是一个数据合成助手。",
+            "userPrompt": "direct prompt",
             "model": "",
         })
 

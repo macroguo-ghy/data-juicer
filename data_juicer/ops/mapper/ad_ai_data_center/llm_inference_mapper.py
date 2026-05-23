@@ -28,6 +28,7 @@ OPERATOR_TAG = "business_operator"
 TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 SUBMIT_PATH = "/openapi/synthesis/llm-inference/submit"
 RESULT_PATH = "/openapi/synthesis/llm-inference/result"
+DEFAULT_SYSTEM_PROMPT = "你是一个数据合成助手。"
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -226,24 +227,34 @@ class LLMInferenceMapper(Mapper):
             user_prompt = self._render_prompt_text(self.user_prompt, sample, "user_prompt")
             if not user_prompt.strip():
                 raise ValueError("user_prompt must be a non-empty string")
-            payload = {
-                "userPrompt": user_prompt,
-                "model": self.model,
-            }
-            if self.system_prompt is not None:
-                system_prompt = self._render_prompt_text(
-                    self.system_prompt,
-                    sample,
-                    "system_prompt",
-                )
-                if system_prompt:
-                    payload["systemPrompt"] = system_prompt
-            return payload
+            return self._build_submit_payload(
+                user_prompt=user_prompt,
+                system_prompt=self._build_system_prompt(sample),
+            )
 
+        return self._build_submit_payload(
+            user_prompt=self._build_prompt(sample),
+            system_prompt=self._build_system_prompt(sample),
+        )
+
+    def _build_submit_payload(self, user_prompt: str, system_prompt: str) -> dict[str, Any]:
         return {
-            "prompt": self._build_prompt(sample),
+            "systemPrompt": system_prompt,
+            "userPrompt": user_prompt,
             "model": self.model,
         }
+
+    def _build_system_prompt(self, sample: dict[str, Any]) -> str:
+        if self.system_prompt is None:
+            return DEFAULT_SYSTEM_PROMPT
+        system_prompt = self._render_prompt_text(
+            self.system_prompt,
+            sample,
+            "system_prompt",
+        )
+        if not system_prompt.strip():
+            return DEFAULT_SYSTEM_PROMPT
+        return system_prompt
 
     @staticmethod
     def _render_prompt_text(template: str, sample: dict[str, Any], field_name: str) -> str:
