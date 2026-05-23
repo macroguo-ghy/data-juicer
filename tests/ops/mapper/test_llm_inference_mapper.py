@@ -661,6 +661,24 @@ process:
         self.assertIs(result, dataset)
         self.assertEqual(dataset.repartition_calls, [])
 
+    def test_retry_attempts_positional_argument_keeps_legacy_order(self):
+        op = LLMInferenceMapper(
+            "static prompt",
+            None,
+            None,
+            "",
+            "llm_output",
+            None,
+            2.0,
+            300,
+            self._ctx(),
+            30.0,
+            5,
+        )
+
+        self.assertEqual(op.retry_attempts, 5)
+        self.assertIsNone(op.repartition_num_blocks)
+
     def test_rejects_invalid_constructor_arguments(self):
         with self.assertRaisesRegex(ValueError, "prompt"):
             LLMInferenceMapper(ctx=self._ctx())

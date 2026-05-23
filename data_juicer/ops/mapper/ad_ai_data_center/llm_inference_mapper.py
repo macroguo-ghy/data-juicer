@@ -44,8 +44,8 @@ class LLMInferenceMapper(Mapper):
         max_poll_attempts: int = 300,
         ctx: dict | None = None,
         timeout: float = 30.0,
-        repartition_num_blocks: int | None = None,
         retry_attempts: int = 3,
+        repartition_num_blocks: int | None = None,
         *args,
         **kwargs,
     ):
@@ -62,9 +62,9 @@ class LLMInferenceMapper(Mapper):
         :param max_poll_attempts: maximum result polling attempts.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param retry_attempts: HTTP retry attempts for submit/result requests.
         :param repartition_num_blocks: Ray Dataset block count before inference.
             None means num_proc * 4 when num_proc is positive.
-        :param retry_attempts: HTTP retry attempts for submit/result requests.
         :param args: extra args.
         :param kwargs: extra args.
         """
