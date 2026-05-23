@@ -25,6 +25,7 @@ dependencies = [
     "loguru", # logging
     "tqdm", # progress bars
     "jsonargparse[signatures]", # configuration
+    "Jinja2", # prompt template rendering for ADC LLM operators
     "packaging", # requirement parsing for operator runtime environments
     "bytedeuler", # internal Euler RPC client
     "bytedance.metrics>=0.5.2,<1.0.0", # internal Metrics 1.0 SDK for RPC/VLM QPS monitoring

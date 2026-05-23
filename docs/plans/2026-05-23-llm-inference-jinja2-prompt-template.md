@@ -57,7 +57,8 @@ Compatibility behavior to preserve:
 - Object/list values render as JSON with `ensure_ascii=False` when inserted directly.
 - Existing `{{ items[*].metric }}` and `{{ items[].metric }}` templates keep working by preconverting those paths into a renderable value.
 
-No `system_prompt` or `user_prompt` parameters are added in this change.
+`system_prompt` and `user_prompt` are handled by the follow-up plan
+`docs/plans/2026-05-23-llm-inference-system-user-prompt.md`; they should reuse the same Jinja2 renderer.
 
 ---
 
@@ -412,4 +413,3 @@ git commit -m "feat: support jinja2 prompt templates for llm mapper"
 ```
 
 If `pyproject.toml` is not changed, omit it from `git add`.
-
