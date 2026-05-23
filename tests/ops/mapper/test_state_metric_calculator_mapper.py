@@ -1431,6 +1431,59 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_ad_roi_bench_can_average_list_series(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 224,
+                    "operatorNameEn": "AdROIBench",
+                    "operatorNameCn": "ROI同行数据",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(state, id_value, id_key, helpers=None):\n"
+                        "    bench = state.get('world_state', {}).get('bench_roi')\n"
+                        "    bench_val = bench[0] if isinstance(bench, list) else bench\n"
+                        "    for adv in state.get('adv_state', []):\n"
+                        "        if str(adv.get('adv_id')) == str(id_value):\n"
+                        "            values = helpers.extract_numeric_values_in_range(\n"
+                        "                adv.get('adv_roi'), None, None)\n"
+                        "            cur = helpers.average(values) or 0.0\n"
+                        "            word, pct = helpers.calc_bench_compare(cur, bench_val)\n"
+                        "            return f'指标名称:当前ROI及其在同行中的占比, 指标值：广告主ID:{id_value}：{cur:.4f} {word}{pct:.2f}%同行'\n"
+                        "    return 'missing'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="adv_id",
+            operators=[{"operator_id": 224, "parameter_mapping": {}}],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "adv_id": "9283746510928374",
+            "state": {
+                "world_state": {
+                    "bench_roi": [0.2, 0.4],
+                },
+                "adv_state": [
+                    {
+                        "adv_id": "9283746510928374",
+                        "adv_roi": [0.28, 0.33, 0.41],
+                    },
+                ],
+            },
+        })
+
+        metric = self._summary(result)["9283746510928374"]["metrics"][0]
+        self.assertEqual(metric["metricCode"], "AdROIBench")
+        self.assertEqual(metric["error"], "")
+        self.assertIn("广告主ID:9283746510928374：0.3400", metric["output"])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_dataset_factory_summary_serializes_outputs_as_strings(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client

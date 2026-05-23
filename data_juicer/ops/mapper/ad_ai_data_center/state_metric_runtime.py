@@ -69,6 +69,12 @@ class MetricHelpers:
     def extract_numeric_values_in_range(series_map, start_date, end_date):
         if not series_map:
             return []
+        if isinstance(series_map, (list, tuple)):
+            return [
+                float(value)
+                for value in series_map
+                if isinstance(value, (int, float))
+            ]
         values = []
         for key, value in series_map.items():
             try:
@@ -106,6 +112,21 @@ class MetricHelpers:
     ):
         if not numerator_series or not denominator_series:
             return 0.0
+        if isinstance(numerator_series, (list, tuple)) and isinstance(
+            denominator_series, (list, tuple)
+        ):
+            daily_ratios = []
+            for n, dn in zip(numerator_series, denominator_series):
+                if (
+                    not isinstance(n, (int, float))
+                    or not isinstance(dn, (int, float))
+                    or dn == 0
+                ):
+                    continue
+                daily_ratios.append(round(float(n) / float(dn), 6))
+            if not daily_ratios:
+                return 0.0
+            return round(sum(daily_ratios) / len(daily_ratios), 6)
         daily_ratios = []
         for key in numerator_series:
             try:
@@ -255,6 +276,8 @@ class MetricHelpers:
             return end_date, end_date
         date_keys = []
         for series_map in series_maps or []:
+            if isinstance(series_map, (list, tuple)):
+                continue
             for key in (series_map or {}).keys():
                 try:
                     date_keys.append(datetime.date.fromisoformat(str(key)))
@@ -291,6 +314,8 @@ class MetricHelpers:
     def _sequential_ranges_for_series_maps(series_maps, start_date, end_date):
         date_keys = []
         for series_map in series_maps or []:
+            if isinstance(series_map, (list, tuple)):
+                continue
             for key in (series_map or {}).keys():
                 try:
                     date_keys.append(datetime.date.fromisoformat(str(key)))
