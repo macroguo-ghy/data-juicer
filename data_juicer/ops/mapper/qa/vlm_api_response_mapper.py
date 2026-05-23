@@ -35,7 +35,7 @@ ADAPTIVE_RATE_LIMIT_PENALTY_FACTOR = 0.5
 ADAPTIVE_RATE_LIMIT_RECOVERY_FACTOR = 1.2
 ADAPTIVE_RATE_LIMIT_MIN_RATIO = 0.1
 DEFAULT_IMAGE_TOKENS_PER_IMAGE = 5120
-REMOVED_IMAGE_TOKEN_CONFIG_KEYS = frozenset(
+DEPRECATED_IMAGE_TOKEN_CONFIG_KEYS = frozenset(
     {
         "image_tokens_per_image",
         "image_token_divisor",
@@ -583,12 +583,14 @@ class VlmApiResponseMapper(Pipeline):
         *args,
         **kwargs,
     ):
-        removed_config_keys = REMOVED_IMAGE_TOKEN_CONFIG_KEYS.intersection(kwargs)
-        if removed_config_keys:
-            raise TypeError(
-                "Unsupported VlmApiResponseMapper image token parameters: "
-                f"{', '.join(sorted(removed_config_keys))}. "
-                "Use estimated_tokens_per_request for VLM token limit estimation."
+        deprecated_config_keys = DEPRECATED_IMAGE_TOKEN_CONFIG_KEYS.intersection(kwargs)
+        if deprecated_config_keys:
+            for key in deprecated_config_keys:
+                kwargs.pop(key)
+            logger.warning(
+                "Deprecated VlmApiResponseMapper image token parameters are ignored: {}. "
+                "Use estimated_tokens_per_request for VLM token limit estimation.",
+                ", ".join(sorted(deprecated_config_keys)),
             )
         super().__init__(*args, **kwargs)
         self.image_key = image_key

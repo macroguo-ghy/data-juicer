@@ -2552,15 +2552,20 @@ class VlmApiResponseMapperTest(unittest.TestCase):
                     VlmApiResponseMapper(**kwargs)
         self.assertEqual(VlmApiResponseMapper().rate_limit_retry_attempts, 1)
 
-    def test_removed_image_token_rate_limit_knobs_are_rejected(self):
-        for kwargs in [
-            {"image_tokens_per_image": 5120},
-            {"image_token_divisor": 1764},
-            {"max_image_tokens": 5120},
-        ]:
-            with self.subTest(kwargs=kwargs):
-                with self.assertRaisesRegex(TypeError, "estimated_tokens_per_request"):
-                    VlmApiResponseMapper(**kwargs)
+    def test_deprecated_image_token_rate_limit_knobs_warn_and_are_ignored(self):
+        kwargs = {
+            "image_tokens_per_image": 5120,
+            "image_token_divisor": 1764,
+            "max_image_tokens": 5120,
+        }
+        with patch("data_juicer.ops.mapper.qa.vlm_api_response_mapper.logger.warning") as log_warning:
+            op = VlmApiResponseMapper(**kwargs)
+
+        self.assertIsInstance(op, VlmApiResponseMapper)
+        self.assertEqual(log_warning.call_count, 1)
+        self.assertIn("image_token_divisor", log_warning.call_args.args[1])
+        self.assertIn("image_tokens_per_image", log_warning.call_args.args[1])
+        self.assertIn("max_image_tokens", log_warning.call_args.args[1])
 
     def test_response_path_raw_error_and_fail_on_error_paths(self):
         class CapturingMapper(VlmApiResponseMapper):
