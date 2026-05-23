@@ -45,6 +45,8 @@
 
 这些参数不要写入 `inputParameter.params`，算子会按 `calculate(...)` 签名自动注入：`state`、`id_value`、`id_key`、`start_date`、`end_date`、`helpers`。业务参数才写入 `inputParameter.params` 并通过 YAML `parameter_mapping` 映射。
 
+外部题目或样本字段里的 ID 是主输入来源，通常通过 `id_source_key` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。`id_key` 不是直接取外部字段名，而是用外部 ID 到生成后的 State 里匹配得到：当前只检查 `ad_state[].ad_id`、`adv_state[].adv_id` 和 `adv_state[].meta_data.adv_id`，不会通过 `ad_state[].related_adv_id` 推断 `adv_id`。
+
 ## 2. Metric 清单
 
 | 分组 | operatorNameEn | operatorNameCn | inputParameter 建议 | 代码文档 | DF 来源 |
