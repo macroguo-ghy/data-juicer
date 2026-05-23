@@ -8,6 +8,8 @@
 
 **关键假设与前置确认:** 后端 operator detail payload 必须继续提供 `id`、`operatorNameEn`、`operatorNameCn`、`operatorCode`、`inputParameter.params` 等字段；实现前先用现有 mock 或真实接口样例确认字段含义。所有新增输出必须保持 Ray/PyArrow schema 稳定，尤其是嵌套 `metrics.output` 和 `metrics.error` 必须始终是字符串。不能把 Dataset Factory 的指标实现硬复制进 Data-Juicer，Data-Juicer 只维护公共运行时能力和公共数学方法。
 
+**兼容性决策:** 本次会把 `output_key` 的默认写出值从旧对象结构改为 Dataset Factory summary JSON 字符串，这是有意的输出契约变更。`result_mode` 必须同步改为 `summary` 语义，不能继续上报或校验为 `object`；旧 `{"id": ..., "items": ...}` 结构只作为内部中间结果存在，并通过内部 helper 测试覆盖。
+
 **技术栈:** Python 3、Data-Juicer `Mapper`、Ray Dataset、PyArrow schema 稳定性、`PythonScriptRunner` 动态执行可信 Python、ADC OpenAPI `HttpClient`。
 
 ---
@@ -42,6 +44,8 @@ Dataset Factory 阶段 4 的完整流程是：
 - 没有一套 Data-Juicer 内部维护的公共数学函数和公共工具函数。
 - `calculate(...)` 只能靠普通参数映射拿数据，缺少 `id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这类公共上下文。
 - 输出结构还没有对齐 Dataset Factory 的按 id 分组 summary；同时我们还需要在失败项中保留 `error` 字段，不能像 Dataset Factory summary 那样只收集成功输出。
+- 当前构造参数和 callback 仍声明 `result_mode="object"`，但新输出契约需要 `result_mode="summary"`，否则平台侧看到的配置和真实输出会冲突。
+- 当前既有测试和潜在下游消费方仍按 `query_metric_data_outputs["items"]` 读取旧对象结构，需要在实现中同步迁移测试、示例配置和消费方说明。
 - Dataset Factory 的其他工具执行链路和指标计算不同，本计划暂不纳入。
 
 ## 真实源码参考边界
@@ -110,6 +114,7 @@ def calculate(state, ids, id_key, start_date=None, end_date=None, helpers=None):
 - 不实现 `get_industry_creative_tips` 等辅助工具；tool 支持需要单独元数据模型或单独算子设计。
 - 不改变指标元信息从 ADC 接口获取的事实。
 - 不保留当前 `{"id": "...", "items": [...]}` 作为最终默认输出结构；如需调试，可在内部 helper 或临时变量中保留中间结构。
+- 不继续把 `result_mode="object"` 作为默认或 callback 语义；如需要历史对象输出，应另起显式 legacy 模式，本计划不实现 legacy 写出。
 
 ---
 
@@ -384,11 +389,14 @@ git commit -m "add state metric calculation context"
 
 **Step 1: 写失败测试**
 
-当前算子主要按逗号拆分字符串。新增 mixed string 用例；预期行为以 `/Users/bytedance/develop/dataset_factory/core/metric_runner.py` 的 `extract_numeric_ids(...)` 为准：
+当前算子主要按逗号拆分字符串。新增 mixed string 用例；预期行为以 `/Users/bytedance/develop/dataset_factory/core/metric_runner.py` 的 `extract_numeric_ids(...)` 为准。
+
+在 Task 4 阶段，如果 `process_single` 仍临时写旧对象结构，可以先对内部 `_calculate_metric_outputs(...)` 或等价中间 helper 断言 `items`。但最终到 Task 5 后，所有面向 `output_key` 的测试都必须改为 `json.loads(result[output_key])` 后断言 summary 顶层 id，不再读取 `result[output_key]["items"]`。
 
 ```python
-def test_output_items_extract_numeric_ids_from_mixed_issue_id(...):
+def test_intermediate_items_extract_numeric_ids_from_mixed_issue_id(...):
     sample["issue_id"] = "ad:1854751525764108, adv:1853671159428096, again:1854751525764108"
+    output = op._calculate_metric_outputs(sample)
     assert [item["id"] for item in output["items"]] == [
         "1854751525764108",
         "1853671159428096",
@@ -398,15 +406,16 @@ def test_output_items_extract_numeric_ids_from_mixed_issue_id(...):
 新增 fallback 用例：
 
 ```python
-def test_output_items_fallback_to_original_when_no_numeric_id(...):
+def test_intermediate_items_fallback_to_original_when_no_numeric_id(...):
     sample["issue_id"] = "abc_def"
+    output = op._calculate_metric_outputs(sample)
     assert output["items"][0]["id"] == "abc_def"
 ```
 
 **Step 2: 跑测试确认失败**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_output_items_extract_numeric_ids_from_mixed_issue_id
+./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_intermediate_items_extract_numeric_ids_from_mixed_issue_id
 ```
 
 预期：当前输出仍带 `ad:` / `adv:` 片段或没有 Dataset Factory 风格去重。
@@ -447,6 +456,18 @@ git commit -m "align state metric id extraction"
 - 修改测试: `tests/ops/mapper/test_state_metric_calculator_mapper.py`
 
 **Step 1: 写失败测试**
+
+实现前先核对 Dataset Factory 真正写 summary 的 app 层代码，不只看 `serialize_run_results(...)`：
+
+```bash
+sed -n '470,555p' /Users/bytedance/develop/dataset_factory/app.py
+```
+
+需要确认的真实行为：
+
+- `metrics_by_id` 和 `tools_by_id` 是按 `one_id` 聚合。
+- Dataset Factory 默认只把成功结果放进 summary：`output` 非空、不含 `返回调用失败`、没有 `error`。
+- Data-Juicer 本次保留 Dataset Factory 的按 id 聚合和 JSON 字符串写出，但有意改变失败处理：失败 metric 也进入 `metrics`，并保留 `error`。
 
 `output_key` 对应字段应直接写入 Dataset Factory summary 风格的 JSON 字符串。成功和失败指标都要保留，其中失败指标保留 `error` 字段：
 
@@ -510,6 +531,17 @@ def _build_summary_output(metric_outputs: dict[str, Any]) -> str:
 - `process_single` 最终写入 `output_sample[self.output_key] = summary_string`。
 - 中间对象结构可以保留在局部变量中，但不要作为默认输出写出。
 
+同时迁移旧对象输出相关测试和断言：
+
+- 所有读取 `result["query_metric_data_outputs"]["items"]` 或 `["id"]` 的面向 `process_single` 测试，改为 `json.loads(result["query_metric_data_outputs"])` 后断言 summary。
+- 多 id 测试从断言 `items[*].id` 改为断言 `set(summary.keys())` 或保持顺序时断言 `list(summary.keys())`。
+- 如果仍需要覆盖旧中间对象结构，只能直接测试 `_calculate_metric_outputs(...)` 或拆出的中间 helper，不再通过 `output_key` 暴露。
+- 搜索命令：
+
+```bash
+rg -n 'query_metric_data_outputs.*\\[\"items\"\\]|query_metric_data_outputs.*\\[\"id\"\\]|\\[\"items\"\\]' tests/ops/mapper/test_state_metric_calculator_mapper.py
+```
+
 **Step 4: 跑测试确认通过**
 
 跑新增测试。
@@ -537,12 +569,27 @@ git commit -m "align state metric summary output"
 
 **Step 1: 写失败测试**
 
+先把构造参数契约迁移到 `summary`：
+
+```python
+op = StateMetricCalculatorMapper(operators=self._operators(), ctx=self._ctx())
+assert op.result_mode == "summary"
+
+with self.assertRaisesRegex(ValueError, "result_mode"):
+    StateMetricCalculatorMapper(
+        operators=self._operators(),
+        result_mode="object",
+        ctx=self._ctx(),
+    )
+```
+
 扩展已有 callback config 测试，期望包含：
 
 ```python
 {
     "start_date_key": None,
     "end_date_key": None,
+    "result_mode": "summary",
     "output_format": "dataset_factory_summary",
     "preserve_error": True,
     "runtime": "adc_operator_code",
@@ -565,9 +612,12 @@ git commit -m "align state metric summary output"
 
 - 不要把接口拉到的完整 operator detail 放进 callback。
 - 不要把 `operatorCode` 放进 callback，避免泄露代码和增大 payload。
+- `result_mode` 默认值和唯一支持值改为 `summary`；不要在 callback 里继续上报 `result_mode: object`。
 - `output_format` 明确标记默认输出已经是 Dataset Factory summary 风格。
 - `preserve_error` 明确标记失败 metric 会保留 `error` 字段。
 - callback 只记录 Data-Juicer 当前采用的 metric runtime 行为，不声明 tool 支持。
+
+同步修改构造函数 docstring 和配置示例，避免用户继续以为 `object` 是有效模式。旧对象中间结构如果保留，只能作为内部 helper 返回值，不作为 `result_mode` 暴露。
 
 **Step 4: 跑测试确认通过**
 
@@ -586,7 +636,7 @@ git commit -m "report state metric runtime config"
 
 **文件:**
 - 修改测试: `tests/ops/mapper/test_state_metric_calculator_mapper.py`
-- 只有 Ray mapper hook 行为变化时才修改: `tests/core/data/test_ray_dataset.py`
+- 修改测试: `tests/core/data/test_ray_dataset.py` 或新增最近的 Ray/Arrow mapper 测试文件
 
 **Step 1: 增加 mixed success/failure schema 测试**
 
@@ -609,7 +659,37 @@ git commit -m "report state metric runtime config"
 ./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_dataset_factory_summary_keeps_arrow_schema_stable
 ```
 
-**Step 3: 跑最终验证命令**
+**Step 3: 增加 Ray/PyArrow block 级测试**
+
+需要覆盖真实 Ray Dataset / PyArrow block concat 风险，不只做 Python dict 断言。测试可以放在 `tests/core/data/test_ray_dataset.py`，或如果 `test_state_metric_calculator_mapper.py` 已有 Ray skip 机制，也可以放在 mapper 测试文件中。
+
+测试形状：
+
+- 使用 `ray.data.from_items(...)` 构造至少 3 条样本，并通过 `repartition(2)` 或等价方式制造多个 block。
+- 第一条输出非空 summary，包含成功 metric。
+- 第二条输出非空 summary，包含失败 metric，`output` 为 `"null"`，`error` 为字符串。
+- 第三条输出空 summary，即 `output_key == ""`。
+- 通过 Ray/Data-Juicer mapper 路径执行后，断言 `query_metric_data_outputs` 这一列在 Arrow schema 中是 `string`，不是 struct/list/null。
+- `take_all()` 或 `iter_batches(batch_format="pyarrow")` 后断言所有行该字段都是字符串。
+
+示例断言：
+
+```python
+schema = result_dataset.schema()
+assert schema.field("query_metric_data_outputs").type == pa.string()
+```
+
+如果本地 Ray 版本的 `schema()` 不稳定，可以用 `iter_batches(batch_format="pyarrow")` 检查每个 block 的列类型。
+
+**Step 4: 跑 Ray/PyArrow focused test**
+
+```bash
+./.venv/bin/python -m unittest tests.core.data.test_ray_dataset.RayDatasetImportTest.test_state_metric_summary_output_stays_string_across_blocks
+```
+
+如果本地没有安装 Ray，这个测试应使用现有 `skipUnless(importlib.util.find_spec("ray"), "ray is not installed")` 风格跳过，并在最终说明中明确。
+
+**Step 5: 跑最终验证命令**
 
 ```bash
 python3 -m py_compile \
@@ -622,13 +702,16 @@ python3 -m py_compile \
   tests.ops.mapper.test_state_metric_runtime \
   tests.ops.mapper.test_state_metric_calculator_mapper
 
+./.venv/bin/python -m unittest \
+  tests.core.data.test_ray_dataset.RayDatasetImportTest.test_state_metric_summary_output_stays_string_across_blocks
+
 git diff --check
 ```
 
-**Step 4: 提交**
+**Step 6: 提交**
 
 ```bash
-git add tests/ops/mapper/test_state_metric_calculator_mapper.py
+git add tests/ops/mapper/test_state_metric_calculator_mapper.py tests/core/data/test_ray_dataset.py
 git commit -m "verify state metric summary schema"
 ```
 
@@ -637,7 +720,10 @@ git commit -m "verify state metric summary schema"
 ## 兼容性说明
 
 - 现有 `calculate(...)` 函数继续有效。
-- `output_key` 默认输出 Dataset Factory summary 风格 JSON 字符串。
+- `output_key` 默认输出 Dataset Factory summary 风格 JSON 字符串，这是对旧对象结构的输出契约变更。
+- `result_mode` 默认值和唯一支持值应改为 `summary`；不要继续使用或上报 `object`，避免配置语义和真实输出冲突。
+- 所有既有读取 `query_metric_data_outputs["items"]` / `["id"]` 的单测、示例配置和下游消费说明都必须迁移到 `json.loads(query_metric_data_outputs)` 后按 summary 结构读取。
+- 旧 `{"id": "...", "items": [...]}` 结构只能作为内部中间结构存在；如果需要继续对它做测试，应直接测试内部 helper，不通过 `output_key` 暴露。
 - 与 Dataset Factory 不同，失败 metric 也会保留在 summary 中，并带 `error` 字段。
 - ADC 接口仍然是指标元信息来源。
 - 公共 helper 通过可选保留参数注入，指标代码不声明就不会收到。
@@ -658,6 +744,9 @@ python3 -m py_compile \
 ./.venv/bin/python -m unittest \
   tests.ops.mapper.test_state_metric_runtime \
   tests.ops.mapper.test_state_metric_calculator_mapper
+
+./.venv/bin/python -m unittest \
+  tests.core.data.test_ray_dataset.RayDatasetImportTest.test_state_metric_summary_output_stays_string_across_blocks
 
 git diff --check
 ```
