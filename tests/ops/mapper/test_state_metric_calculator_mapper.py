@@ -779,6 +779,108 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_id_source_key_provides_common_ids_when_metric_has_no_id_mapping(
+        self,
+        mock_client_cls,
+    ):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 208,
+                    "operatorNameEn": "id_context",
+                    "operatorNameCn": "ID 上下文",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(state, id_value, id_key):\n"
+                        "    return f'{id_key}:{id_value}'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            operators=[{
+                "operator_id": 208,
+                "parameter_mapping": {},
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1854751525764108, 1853671159428096",
+            "state": {
+                "adv_state": [
+                    {"adv_id": "1854751525764108"},
+                    {"adv_id": "1853671159428096"},
+                ],
+            },
+        })
+
+        self.assertEqual(self._summary(result), {
+            "1854751525764108": {
+                "metrics": [
+                    {
+                        "metricCode": "id_context",
+                        "metricName": "ID 上下文",
+                        "output": '"adv_id:1854751525764108"',
+                        "error": "",
+                    },
+                ],
+            },
+            "1853671159428096": {
+                "metrics": [
+                    {
+                        "metricCode": "id_context",
+                        "metricName": "ID 上下文",
+                        "output": '"adv_id:1853671159428096"',
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_metric_id_mapping_overrides_common_id_source_key(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 208,
+                    "operatorNameEn": "echo_id",
+                    "operatorNameCn": "ID 回显",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids):\n    return ids\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="common_ids",
+            operators=[{
+                "operator_id": 208,
+                "parameter_mapping": {
+                    "ids": "metric_ids",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "common_ids": "111",
+            "metric_ids": "222,333",
+            "state": {},
+        })
+
+        self.assertEqual(list(self._summary(result).keys()), ["222", "333"])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_intermediate_items_extract_numeric_ids_from_mixed_issue_id(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
@@ -1158,6 +1260,12 @@ process:
                 fail_policy="stop",
                 ctx=self._ctx(),
             )
+        with self.assertRaisesRegex(ValueError, "id_source_key"):
+            StateMetricCalculatorMapper(
+                operators=self._operators(),
+                id_source_key="",
+                ctx=self._ctx(),
+            )
         with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
             StateMetricCalculatorMapper(
                 operators=self._operators(),
@@ -1184,6 +1292,7 @@ process:
         self.mock_callback.start.assert_called_once_with(
             operator_config={
                 "state_key": "state",
+                "id_source_key": None,
                 "output_key": "metric_outputs",
                 "result_mode": "summary",
                 "fail_policy": "continue",
