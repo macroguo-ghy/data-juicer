@@ -342,27 +342,32 @@ metric 和 tool 的共同要求：
 9. 不把 `state`、`id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这些 runtime 注入参数写进 `inputParameter.params`，除非明确要覆盖注入行为。
 10. 如果 metric/tool 依赖 `id_key`，确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
 11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
-12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`，不要按对象列读取。只有明确需要中间结构时才使用 `result_mode=object`。
+12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
 
 ## 8. 常见问题
 
 ### `result_mode` 应该配什么？
 
-默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`object` 也支持，会输出内部中间对象结构：
+默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`object` 也支持，会输出同一套 summary 的对象形态。两者结构一致，只差一次 JSON 序列化。
+
+`summary` 模式输出字符串：
+
+```json
+"{\"123\":{\"metrics\":[],\"tools\":[]}}"
+```
+
+`object` 模式输出对象：
 
 ```json
 {
-  "id": "123",
-  "items": [
-    {
-      "id": "123",
-      "metrics": []
-    }
-  ]
+  "123": {
+    "metrics": [],
+    "tools": []
+  }
 }
 ```
 
-`object` 模式的嵌套结构更复杂，写入 Lance/Magnus 时更容易遇到 schema 推断或跨 block 类型不稳定问题，因此生产写表场景优先用 `summary`。
+生产写表场景仍优先用 `summary`，因为字符串列的 schema 最稳定；`object` 更适合本地调试或不需要写复杂嵌套表结构的场景。
 
 ### 为什么指标代码里拿不到 `start_date`？
 

@@ -153,7 +153,10 @@ class StateMetricCalculatorMapper(Mapper):
                     success_only=self.summary_success_only,
                 )
             else:
-                output_sample[self.output_key] = metric_outputs
+                output_sample[self.output_key] = self._build_summary_object(
+                    metric_outputs,
+                    success_only=self.summary_success_only,
+                )
         except Exception as exc:
             self._report_record_failure(
                 input_sample,
@@ -265,6 +268,17 @@ class StateMetricCalculatorMapper(Mapper):
         metric_outputs: dict[str, Any],
         success_only: bool = False,
     ) -> str:
+        summary = StateMetricCalculatorMapper._build_summary_object(
+            metric_outputs,
+            success_only=success_only,
+        )
+        return json.dumps(summary, ensure_ascii=False) if summary else ""
+
+    @staticmethod
+    def _build_summary_object(
+        metric_outputs: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, Any]:
         summary = {}
         for item in metric_outputs.get("items", []) or []:
             if not isinstance(item, dict):
@@ -313,7 +327,7 @@ class StateMetricCalculatorMapper(Mapper):
                     payload["tools"] = tools_out
             if payload:
                 summary[item_id] = payload
-        return json.dumps(summary, ensure_ascii=False) if summary else ""
+        return summary
 
     @staticmethod
     def _normalize_summary_metric(

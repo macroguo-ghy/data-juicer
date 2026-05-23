@@ -324,7 +324,7 @@ process:
         self.mock_callback.report_record_success.assert_called_once()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_object_result_mode_writes_intermediate_metric_object(self, mock_client_cls):
+    def test_object_result_mode_writes_summary_object(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
@@ -343,20 +343,16 @@ process:
         })
 
         self.assertEqual(result["query_metric_data_outputs"], {
-            "id": "1854168911595796",
-            "items": [
-                {
-                    "id": "1854168911595796",
-                    "metrics": [
-                        {
-                            "metricCode": "bench_roi_score",
-                            "metricName": "行业基准 ROI 得分",
-                            "output": "0.82",
-                            "error": "",
-                        },
-                    ],
-                },
-            ],
+            "1854168911595796": {
+                "metrics": [
+                    {
+                        "metricCode": "bench_roi_score",
+                        "metricName": "行业基准 ROI 得分",
+                        "output": "0.82",
+                        "error": "",
+                    },
+                ],
+            },
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
@@ -527,28 +523,24 @@ process:
         })
 
         self.assertEqual(result["query_metric_data_outputs"], {
-            "id": "123",
-            "items": [
-                {
-                    "id": "123",
-                    "metrics": [
-                        {
-                            "metricCode": "AdOnlineMaterialsCount",
-                            "metricName": "在投素材数环比",
-                            "output": "metric:123",
-                            "error": "",
-                        },
-                    ],
-                    "tools": [
-                        {
-                            "tool": "get_industry_creative_tips",
-                            "toolName": "行业创意建议",
-                            "output": "tool:123",
-                            "error": "",
-                        },
-                    ],
-                },
-            ],
+            "123": {
+                "metrics": [
+                    {
+                        "metricCode": "AdOnlineMaterialsCount",
+                        "metricName": "在投素材数环比",
+                        "output": "metric:123",
+                        "error": "",
+                    },
+                ],
+                "tools": [
+                    {
+                        "tool": "get_industry_creative_tips",
+                        "toolName": "行业创意建议",
+                        "output": "tool:123",
+                        "error": "",
+                    },
+                ],
+            },
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
