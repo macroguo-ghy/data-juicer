@@ -132,7 +132,45 @@ def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=N
 
 注意：如果 `inputParameter.params` 里显式声明了同名参数，例如 `start_date` 或 `helpers`，则声明参数优先，会走 `parameter_mapping` 或 `defaultValue`，不会走 runtime 注入。一般不要把这些保留参数写进 `inputParameter.params`。
 
-### 4.2 ID 识别和多 ID 计算
+### 4.2 公共函数兼容策略
+
+指标计算代码不要直接 import Dataset Factory 里的模块，例如不要写：
+
+```python
+from utils.math import calc_sequential_stats
+```
+
+Data-Juicer 不会加载 Dataset Factory 的运行环境，也不会把 `utils.math` 这类路径注入到 `operatorCode` 的执行环境中。公共数学、日期和格式化能力统一通过 `helpers` 参数调用：
+
+```python
+def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
+    series = {}
+    cur, prev, ratio = helpers.calc_sequential_stats(series, start_date, end_date)
+    return helpers.fmt4(cur or 0.0)
+```
+
+当前 `helpers` 支持的常用方法包括：
+
+| 方法 | 说明 |
+| --- | --- |
+| `extract_numeric_values_in_range` | 从日期序列中取指定周期内的数值。 |
+| `sum_numeric_values_in_range` | 对指定周期内的数值求和。 |
+| `safe_divide` | 安全除法，分母为 0 或类型错误时返回默认值。 |
+| `calc_ratio_from_series` | 基于两个日期序列计算平均比例。 |
+| `calc_sequential_stats` | 计算普通数值类本周期均值、上周期均值和环比。 |
+| `calc_sequential_stats_integer` | 计算计数类本周期均值、上周期均值和环比，均值取整数。 |
+| `calc_sequential_stats_for_fraction` | 计算率类指标本周期比例、上周期比例和环比。 |
+| `calc_bench_compare` | 计算当前值与同行基准的高低关系和差异百分比。 |
+| `calc_sequential_ratio` | 返回 `[上周期均值, 本周期均值, 环比]`。 |
+| `parse_percent_to_ratio` | 把百分数字符串或数值转成比例。 |
+| `resolve_date_range_from_series` | 从序列中推导默认日期范围。 |
+| `parse_duration_seconds` | 解析秒数。 |
+| `average` | 求均值。 |
+| `fmt4` | 小数格式化，最多保留 4 位并去掉尾随 0。 |
+
+如果从 DF 迁移某个指标时缺少公共方法，优先把该方法补到 `MetricHelpers`，再在 `operatorCode` 中通过 `helpers.xxx(...)` 调用。不要在每个指标代码里重复粘贴公共函数，也不要依赖 DF 的 import 路径。
+
+### 4.3 ID 识别和多 ID 计算
 
 推荐通过算子级 `id_source_key` 配置公共 ID 字段。这样所有指标默认共用同一个 ID 来源，不需要在每个指标的 `parameter_mapping` 里重复配置 `ids`。
 
