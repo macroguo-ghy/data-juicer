@@ -204,9 +204,17 @@ class PrepareRecordKeyMapper(Mapper):
         sample.pop(ADC_LOG_ID_FIELD, None)
         return {
             RECORD_KEY_FIELD: record_key,
-            ADC_LOG_ID_FIELD: PrepareRecordKeyMapper._generate_log_id(),
+            ADC_LOG_ID_FIELD: PrepareRecordKeyMapper._try_generate_log_id(),
             **sample,
         }
+
+    @staticmethod
+    def _try_generate_log_id() -> str:
+        try:
+            return PrepareRecordKeyMapper._generate_log_id()
+        except Exception as exc:
+            logger.warning("Failed to generate ADC log id: {}", exc)
+            return ""
 
     @staticmethod
     def _generate_log_id() -> str:
