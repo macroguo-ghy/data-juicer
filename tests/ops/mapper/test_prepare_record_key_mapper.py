@@ -201,6 +201,23 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         self.assertEqual(result, "company-log-id")
         self.log_id_patcher.start()
 
+    def test_log_id_generation_failure_does_not_block_record_key_generation(self):
+        self.log_id_patcher.stop()
+        op = PrepareRecordKeyMapper(ctx=self._ctx(), auto_op_parallelism=False)
+
+        with patch.object(PrepareRecordKeyMapper, "_generate_log_id", side_effect=ImportError("logid missing")):
+            result = op.process_single({"query": "hello"})
+
+        self.assertEqual(result[RECORD_KEY_FIELD], stable_hash({"query": "hello"}))
+        self.assertEqual(result[ADC_LOG_ID_FIELD], "")
+        self.mock_callback.report_record_success.assert_called_once_with(
+            record_key=result[RECORD_KEY_FIELD],
+            input_data={"query": "hello"},
+            output_data=result,
+            started_at=ANY,
+        )
+        self.log_id_patcher.start()
+
     def test_does_not_request_bytedlogid_runtime_env_dependency(self):
         op = PrepareRecordKeyMapper(ctx=self._ctx())
 
