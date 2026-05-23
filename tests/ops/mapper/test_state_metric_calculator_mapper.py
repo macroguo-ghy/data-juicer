@@ -30,6 +30,16 @@ class FakeHttpClient:
         return self.result
 
 
+class FakeRayDataset:
+
+    def __init__(self):
+        self.repartition_calls = []
+
+    def repartition(self, **kwargs):
+        self.repartition_calls.append(kwargs)
+        return self
+
+
 def success_envelope(data):
     return {
         "ok": True,
@@ -189,6 +199,7 @@ process:
 
         self.assertIsInstance(ops[0], StateMetricCalculatorMapper)
         self.assertEqual(ops[0].operators[0]["operator_id"], 201)
+        self.assertIsNone(ops[0].repartition_num_blocks)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_calculates_metrics_and_caches_operator_details(self, mock_client_cls):
@@ -836,6 +847,18 @@ process:
                 fail_policy="stop",
                 ctx=self._ctx(),
             )
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            StateMetricCalculatorMapper(
+                operators=self._operators(),
+                repartition_num_blocks=0,
+                ctx=self._ctx(),
+            )
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            StateMetricCalculatorMapper(
+                operators=self._operators(),
+                repartition_num_blocks=True,
+                ctx=self._ctx(),
+            )
 
     def test_before_operator_started_starts_running_once(self):
         op = StateMetricCalculatorMapper(
@@ -854,8 +877,60 @@ process:
                 "result_mode": "object",
                 "fail_policy": "continue",
                 "operators": self._operators(),
+                "repartition_num_blocks": None,
             }
         )
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_with_explicit_num_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = StateMetricCalculatorMapper(
+            operators=self._operators(),
+            ctx=self._ctx(),
+            repartition_num_blocks=16,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 16,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_to_four_times_positive_num_proc_by_default(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = StateMetricCalculatorMapper(
+            operators=self._operators(),
+            ctx=self._ctx(),
+            num_proc=5,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 20,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_does_not_repartition_for_auto_num_proc_without_explicit_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = StateMetricCalculatorMapper(
+            operators=self._operators(),
+            ctx=self._ctx(),
+            num_proc=-1,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [])
 
     def test_after_operator_finished_finalizes_success_or_failure(self):
         op = StateMetricCalculatorMapper(

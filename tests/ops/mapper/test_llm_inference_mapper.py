@@ -27,6 +27,16 @@ class FakeHttpClient:
         return self.result
 
 
+class FakeRayDataset:
+
+    def __init__(self):
+        self.repartition_calls = []
+
+    def repartition(self, **kwargs):
+        self.repartition_calls.append(kwargs)
+        return self
+
+
 def success_envelope(data):
     return {
         "ok": True,
@@ -151,6 +161,7 @@ process:
         self.assertEqual(ops[0].poll_interval_seconds, 2.0)
         self.assertEqual(ops[0].max_poll_attempts, 300)
         self.assertEqual(ops[0].retry_attempts, 3)
+        self.assertIsNone(ops[0].repartition_num_blocks)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_submits_prompt_from_template_polls_result_and_writes_output(self, mock_client_cls):
@@ -246,6 +257,35 @@ process:
             output_data=result[0],
             started_at=ANY,
         )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
+    def test_submits_system_and_user_prompt_payload(self, mock_client_cls):
+        submit_client = FakeHttpClient(success_envelope(self._submit_data()))
+        success_client = FakeHttpClient(success_envelope(self._success_result_data()))
+        mock_client_cls.side_effect = [submit_client, success_client]
+        dataset = Dataset.from_list([{
+            "state_template": {"ad_state": [{"ad_roi": "ROI"}]},
+            "input": {"user_query": "怎么提升 ROI"},
+            RECORD_KEY_FIELD: "record-1",
+        }])
+        op = LLMInferenceMapper(
+            system_prompt="你是广告诊断专家：{{ input.user_query }}",
+            user_prompt="模板：{{ state_template }}",
+            model="doubao",
+            ctx=self._ctx(),
+            poll_interval_seconds=0,
+            auto_op_parallelism=False,
+        )
+
+        op.run(dataset).to_list()
+
+        self.assertEqual(submit_client.requests, [{
+            "json_body": {
+                "systemPrompt": "你是广告诊断专家：怎么提升 ROI",
+                "userPrompt": '模板：{"ad_state": [{"ad_roi": "ROI"}]}',
+                "model": "doubao",
+            }
+        }])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_prompt_field_takes_precedence_and_sends_empty_model_by_default(self, mock_client_cls):
@@ -406,6 +446,55 @@ process:
             '模板：{"ad_state": {"click_rate": "点击率"}}；城市：北京；指标：[1, 2]',
         )
 
+    def test_prompt_template_supports_jinja2_if_and_for_blocks(self):
+        op = LLMInferenceMapper(
+            prompt_template=(
+                "用户：{{ input.user_query }}\n"
+                "{% if review_reason %}失败原因：{{ review_reason }}{% endif %}\n"
+                "{% for item in adv_state %}计划：{{ item.adv_id }}={{ item.adv_roi }};{% endfor %}"
+            ),
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "input": {"user_query": "怎么提升 ROI"},
+            "review_reason": "ROI 为空",
+            "adv_state": [
+                {"adv_id": "1", "adv_roi": 1.2},
+                {"adv_id": "2", "adv_roi": 1.5},
+            ],
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertIn("用户：怎么提升 ROI", prompt)
+        self.assertIn("失败原因：ROI 为空", prompt)
+        self.assertIn("计划：1=1.2;计划：2=1.5;", prompt)
+
+    def test_prompt_template_supports_tojson_cn_filter(self):
+        op = LLMInferenceMapper(
+            prompt_template="State：{{ state | tojson_cn }}",
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "state": {"广告": [{"roi": 1.2}]},
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, 'State：{"广告": [{"roi": 1.2}]}')
+
+    def test_prompt_template_missing_nested_field_raises_clear_error(self):
+        op = LLMInferenceMapper(
+            prompt_template="用户：{{ input.user_query }}",
+            ctx=self._ctx(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "prompt_template missing field: input.user_query"):
+            op._build_prompt({
+                "input": {},
+                RECORD_KEY_FIELD: "record-1",
+            })
+
     def test_prompt_template_keeps_single_brace_text_literal(self):
         op = LLMInferenceMapper(
             prompt_template="请保留：{state_template}；替换：{{ state_template }}",
@@ -449,6 +538,45 @@ process:
         })
 
         self.assertEqual(prompt, "请总结：hello")
+
+    def test_rejects_mixed_new_and_legacy_prompt_configs(self):
+        with self.assertRaisesRegex(ValueError, "cannot be configured together"):
+            LLMInferenceMapper(
+                user_prompt="hello",
+                prompt_template="{{ text }}",
+                ctx=self._ctx(),
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be configured together"):
+            LLMInferenceMapper(
+                user_prompt="hello",
+                prompt_template="",
+                ctx=self._ctx(),
+            )
+
+    def test_rejects_system_prompt_without_user_prompt(self):
+        with self.assertRaisesRegex(ValueError, "user_prompt must be provided"):
+            LLMInferenceMapper(
+                system_prompt="system only",
+                ctx=self._ctx(),
+            )
+
+    def test_rejects_empty_rendered_user_prompt(self):
+        with self.assertRaisesRegex(ValueError, "user_prompt must be a non-empty string"):
+            LLMInferenceMapper(
+                user_prompt="   ",
+                ctx=self._ctx(),
+            )
+
+        op = LLMInferenceMapper(
+            user_prompt="{{ missing_or_empty }}",
+            ctx=self._ctx(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "user_prompt must be a non-empty string"):
+            op._build_prompt_payload({
+                "missing_or_empty": "",
+                RECORD_KEY_FIELD: "record-1",
+            })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_failed_result_reports_record_failure_and_raises(self, mock_client_cls):
@@ -564,15 +692,64 @@ process:
         self.mock_callback.start.assert_called_once_with(
             operator_config={
                 "prompt_source": "prompt_template",
+                "has_system_prompt": False,
                 "model": "doubao",
                 "output_field": "out",
                 "metadata_field": "meta",
                 "poll_interval_seconds": 3,
                 "max_poll_attempts": 10,
                 "retry_attempts": 3,
+                "repartition_num_blocks": None,
             }
         )
         self.mock_send_test_card_notification.assert_not_called()
+
+    def test_before_operator_started_reports_system_user_prompt_source(self):
+        op = LLMInferenceMapper(
+            system_prompt="system",
+            user_prompt="user",
+            model="doubao",
+            ctx=self._ctx(),
+        )
+
+        op.before_operator_started()
+
+        self.mock_callback.start.assert_called_once_with(
+            operator_config={
+                "prompt_source": "system_user_prompt",
+                "has_system_prompt": True,
+                "model": "doubao",
+                "output_field": "llm_output",
+                "metadata_field": None,
+                "poll_interval_seconds": 2.0,
+                "max_poll_attempts": 300,
+                "retry_attempts": 3,
+                "repartition_num_blocks": None,
+            }
+        )
+
+    def test_empty_system_prompt_is_treated_as_user_prompt_source(self):
+        op = LLMInferenceMapper(
+            system_prompt="",
+            user_prompt="user",
+            ctx=self._ctx(),
+        )
+
+        op.before_operator_started()
+
+        self.mock_callback.start.assert_called_once_with(
+            operator_config={
+                "prompt_source": "user_prompt",
+                "has_system_prompt": False,
+                "model": "",
+                "output_field": "llm_output",
+                "metadata_field": None,
+                "poll_interval_seconds": 2.0,
+                "max_poll_attempts": 300,
+                "retry_attempts": 3,
+                "repartition_num_blocks": None,
+            }
+        )
 
     def test_after_operator_finished_finalizes_without_finish_notification(self):
         op = LLMInferenceMapper(
@@ -598,6 +775,75 @@ process:
         self.mock_callback.start.assert_called_once()
         self.mock_callback.finalize.assert_called_once_with()
 
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_with_explicit_num_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            repartition_num_blocks=80,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 80,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_to_four_times_positive_num_proc_by_default(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            num_proc=10,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 40,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_does_not_repartition_for_auto_num_proc_without_explicit_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            num_proc=-1,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [])
+
+    def test_retry_attempts_positional_argument_keeps_legacy_order(self):
+        op = LLMInferenceMapper(
+            "static prompt",
+            None,
+            None,
+            "",
+            "llm_output",
+            None,
+            2.0,
+            300,
+            self._ctx(),
+            30.0,
+            5,
+        )
+
+        self.assertEqual(op.retry_attempts, 5)
+        self.assertIsNone(op.repartition_num_blocks)
+
     def test_rejects_invalid_constructor_arguments(self):
         with self.assertRaisesRegex(ValueError, "prompt"):
             LLMInferenceMapper(ctx=self._ctx())
@@ -607,6 +853,10 @@ process:
             LLMInferenceMapper(prompt="x", metadata_field="", ctx=self._ctx())
         with self.assertRaisesRegex(ValueError, "max_poll_attempts"):
             LLMInferenceMapper(prompt="x", max_poll_attempts=0, ctx=self._ctx())
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            LLMInferenceMapper(prompt="x", repartition_num_blocks=0, ctx=self._ctx())
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            LLMInferenceMapper(prompt="x", repartition_num_blocks=True, ctx=self._ctx())
 
 
 if __name__ == "__main__":

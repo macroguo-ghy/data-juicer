@@ -4,8 +4,10 @@ import copy
 import json
 import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
+from jinja2 import Environment, StrictUndefined, UndefinedError
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
@@ -45,12 +47,17 @@ class LLMInferenceMapper(Mapper):
         ctx: dict | None = None,
         timeout: float = 30.0,
         retry_attempts: int = 3,
+        repartition_num_blocks: int | None = None,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
         *args,
         **kwargs,
     ):
         """
         Initialization method.
 
+        :param system_prompt: optional system instruction prompt rendered from the sample.
+        :param user_prompt: user task prompt rendered from the sample.
         :param prompt: static prompt for every sample.
         :param prompt_template: template rendered from Jinja-style sample field placeholders.
         :param prompt_field: sample field that stores the prompt.
@@ -62,12 +69,19 @@ class LLMInferenceMapper(Mapper):
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
         :param retry_attempts: HTTP retry attempts for submit/result requests.
+        :param repartition_num_blocks: Ray Dataset block count before inference.
+            None means num_proc * 4 when num_proc is positive.
         :param args: extra args.
         :param kwargs: extra args.
         """
         super().__init__(*args, **kwargs)
-        if not any([prompt, prompt_template, prompt_field]):
-            raise ValueError("one of prompt, prompt_template, or prompt_field must be provided")
+        self._validate_prompt_sources(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            prompt=prompt,
+            prompt_template=prompt_template,
+            prompt_field=prompt_field,
+        )
         if not output_field:
             raise ValueError("output_field must be provided")
         if metadata_field == "":
@@ -76,9 +90,16 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("poll_interval_seconds must be >= 0")
         if max_poll_attempts <= 0:
             raise ValueError("max_poll_attempts must be > 0")
+        if (
+            repartition_num_blocks is not None
+            and (type(repartition_num_blocks) is not int or repartition_num_blocks <= 0)
+        ):
+            raise ValueError("repartition_num_blocks must be a positive integer")
         if retry_attempts < 0:
             raise ValueError("retry_attempts must be non-negative")
 
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
         self.prompt = prompt
         self.prompt_template = prompt_template
         self.prompt_field = prompt_field
@@ -89,16 +110,45 @@ class LLMInferenceMapper(Mapper):
         self.max_poll_attempts = max_poll_attempts
         self.ctx = ctx
         self.timeout = timeout
+        self.repartition_num_blocks = repartition_num_blocks
         self.retry_attempts = retry_attempts
         self._operator_execution_callback_client = None
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        return super().run(
+            self.prepare_ray_dataset(dataset),
+            exporter=exporter,
+            tracer=tracer,
+        )
+
+    def prepare_ray_dataset(self, dataset):
+        repartition_num_blocks = self._effective_repartition_num_blocks()
+        if repartition_num_blocks is None:
+            return dataset
+        repartition = getattr(dataset, "repartition", None)
+        if not callable(repartition):
+            return dataset
+        logger.info(
+            "LLMInferenceMapper repartition input to {} blocks before inference",
+            repartition_num_blocks,
+        )
+        return repartition(num_blocks=repartition_num_blocks, shuffle=False)
+
+    def _effective_repartition_num_blocks(self) -> int | None:
+        if self.repartition_num_blocks is not None:
+            return self.repartition_num_blocks
+        num_proc = getattr(self, "num_proc", None)
+        if isinstance(num_proc, int) and num_proc > 0:
+            return num_proc * 4
+        return None
 
     def process_single(self, sample):
         ctx = self._get_ctx()
         record_started_at = current_time_millis()
         input_sample = copy.deepcopy(sample)
         try:
-            prompt = self._build_prompt(sample)
-            submit_data = self._submit(prompt, ctx, sample)
+            prompt_payload = self._build_prompt_payload(sample)
+            submit_data = self._submit(prompt_payload, ctx, sample)
             task_id = self._get_required_response_value(submit_data, "taskId")
             result_data = self._poll_result(task_id, ctx, sample)
             output = result_data.get("output")
@@ -123,6 +173,36 @@ class LLMInferenceMapper(Mapper):
         )
         return sample
 
+    @staticmethod
+    def _validate_prompt_sources(
+        *,
+        system_prompt: str | None,
+        user_prompt: str | None,
+        prompt: str | None,
+        prompt_template: str | None,
+        prompt_field: str | None,
+    ):
+        has_new_prompt = user_prompt is not None or system_prompt is not None
+        has_legacy_prompt = any(
+            value is not None
+            for value in (prompt, prompt_template, prompt_field)
+        )
+        if has_new_prompt:
+            if user_prompt is None:
+                raise ValueError("user_prompt must be provided when system_prompt is configured")
+            if not user_prompt.strip():
+                raise ValueError("user_prompt must be a non-empty string")
+            if has_legacy_prompt:
+                raise ValueError(
+                    "user_prompt/system_prompt cannot be configured together with "
+                    "prompt, prompt_template, or prompt_field"
+                )
+            return
+        if not has_legacy_prompt:
+            raise ValueError(
+                "one of user_prompt, prompt, prompt_template, or prompt_field must be provided"
+            )
+
     def before_operator_started(self, dataset=None, context=None):
         try:
             self._get_operator_execution_callback_client()
@@ -141,6 +221,41 @@ class LLMInferenceMapper(Mapper):
             logger.warning("Failed to finish operator execution callback: {}", exc)
         # Finish notifications are temporarily disabled for ADC business operators.
 
+    def _build_prompt_payload(self, sample: dict[str, Any]) -> dict[str, Any]:
+        if self.user_prompt is not None:
+            user_prompt = self._render_prompt_text(self.user_prompt, sample, "user_prompt")
+            if not user_prompt.strip():
+                raise ValueError("user_prompt must be a non-empty string")
+            payload = {
+                "userPrompt": user_prompt,
+                "model": self.model,
+            }
+            if self.system_prompt is not None:
+                system_prompt = self._render_prompt_text(
+                    self.system_prompt,
+                    sample,
+                    "system_prompt",
+                )
+                if system_prompt:
+                    payload["systemPrompt"] = system_prompt
+            return payload
+
+        return {
+            "prompt": self._build_prompt(sample),
+            "model": self.model,
+        }
+
+    @staticmethod
+    def _render_prompt_text(template: str, sample: dict[str, Any], field_name: str) -> str:
+        try:
+            value = _SamplePromptRenderer(sample).render(template)
+        except KeyError as exc:
+            missing_field = exc.args[0]
+            raise ValueError(f"{field_name} missing field: {missing_field}") from exc
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must render to a string")
+        return value
+
     def _build_prompt(self, sample: dict[str, Any]) -> str:
         if self.prompt_field:
             prompt = sample.get(self.prompt_field)
@@ -157,15 +272,12 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("prompt must be a non-empty string")
         return prompt
 
-    def _submit(self, prompt: str, ctx: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
+    def _submit(self, prompt_payload: dict[str, Any], ctx: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
         return self._post_openapi(
             path=SUBMIT_PATH,
             ctx=ctx,
             sample=sample,
-            json_body={
-                "prompt": prompt,
-                "model": self.model,
-            },
+            json_body=prompt_payload,
         )
 
     def _poll_result(self, task_id: str, ctx: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
@@ -259,15 +371,21 @@ class LLMInferenceMapper(Mapper):
     def _operator_config(self):
         return {
             "prompt_source": self._prompt_source(),
+            "has_system_prompt": bool(self.system_prompt),
             "model": self.model,
             "output_field": self.output_field,
             "metadata_field": self.metadata_field,
             "poll_interval_seconds": self.poll_interval_seconds,
             "max_poll_attempts": self.max_poll_attempts,
             "retry_attempts": self.retry_attempts,
+            "repartition_num_blocks": self.repartition_num_blocks,
         }
 
     def _prompt_source(self) -> str:
+        if self.user_prompt is not None:
+            if self.system_prompt:
+                return "system_user_prompt"
+            return "user_prompt"
         if self.prompt_field:
             return "prompt_field"
         if self.prompt_template:
@@ -377,7 +495,7 @@ class LLMInferenceMapper(Mapper):
 
 
 class _SamplePromptRenderer:
-    """Render Jinja-style prompt placeholders from sample fields."""
+    """Render prompt templates with Jinja2 and ADC compatibility filters."""
 
     JINJA_FIELD_PATTERN = re.compile(
         r"{{\s*([A-Za-z_][A-Za-z0-9_]*(?:\[\*\]|\[\])?"
@@ -388,16 +506,40 @@ class _SamplePromptRenderer:
         self.sample = sample
 
     def render(self, template: str) -> str:
+        context = self._wrap_value(self.sample, "")
+        render_template = self._rewrite_legacy_array_paths(template, context)
+        env = Environment(
+            autoescape=False,
+            undefined=StrictUndefined,
+        )
+        env.filters["tojson_cn"] = self._tojson_cn
+        env.finalize = self._finalize_template_value
+        try:
+            return env.from_string(render_template).render(**context)
+        except KeyError as exc:
+            raise
+        except UndefinedError as exc:
+            raise KeyError(self._extract_undefined_name(str(exc))) from exc
+
+    def _rewrite_legacy_array_paths(self, template: str, context: Mapping[str, Any]) -> str:
+        legacy_context = {}
+
         def replace(match):
             field_name = match.group(1)
+            if "[*]" not in field_name and "[]" not in field_name:
+                return match.group(0)
+            variable_name = f"__adc_jinja_path_{len(legacy_context)}"
             value = self._resolve_path(
-                self.sample,
+                context,
                 self._parse_path(field_name),
                 field_name,
             )
-            return self._stringify_template_value(field_name, value)
+            legacy_context[variable_name] = value
+            return "{{ " + variable_name + " }}"
 
-        return self.JINJA_FIELD_PATTERN.sub(replace, template)
+        render_template = self.JINJA_FIELD_PATTERN.sub(replace, template)
+        context.update(legacy_context)
+        return render_template
 
     @staticmethod
     def _parse_path(field_name: str) -> list[tuple[str, bool]]:
@@ -431,6 +573,8 @@ class _SamplePromptRenderer:
         name, wildcard = segments[0]
         child = cls._get_child_value(value, name, field_name)
         if wildcard:
+            if isinstance(child, _PromptList):
+                child = child.unwrap()
             if not isinstance(child, list):
                 raise ValueError(f"prompt_template field must be a list: {field_name}")
             return [cls._resolve_path(item, segments[1:], field_name) for item in child]
@@ -438,19 +582,99 @@ class _SamplePromptRenderer:
 
     @staticmethod
     def _get_child_value(value, name: str, field_name: str):
+        if isinstance(value, _PromptDict):
+            try:
+                return value[name]
+            except KeyError:
+                raise KeyError(field_name) from None
         if isinstance(value, dict) and name in value:
             return value[name]
         raise KeyError(field_name)
 
-    @staticmethod
-    def _stringify_template_value(field_name: str, value):
-        if isinstance(value, (dict, list)):
-            try:
-                return json.dumps(value, ensure_ascii=False)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"prompt_template field is not JSON serializable: {field_name}"
-                ) from exc
+    @classmethod
+    def _finalize_template_value(cls, value):
+        value = cls._unwrap_value(value)
         if value is None:
             return ""
-        return str(value)
+        if isinstance(value, (dict, list)):
+            return cls._tojson_cn(value)
+        return value
+
+    @classmethod
+    def _tojson_cn(cls, value):
+        try:
+            return json.dumps(cls._unwrap_value(value), ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("prompt_template value is not JSON serializable") from exc
+
+    @classmethod
+    def _wrap_value(cls, value, path: str):
+        if isinstance(value, dict):
+            return _PromptDict({
+                key: cls._wrap_value(
+                    child,
+                    f"{path}.{key}" if path else str(key),
+                )
+                for key, child in value.items()
+            }, path)
+        if isinstance(value, list):
+            return _PromptList([
+                cls._wrap_value(child, f"{path}[]")
+                for child in value
+            ], path)
+        return value
+
+    @classmethod
+    def _unwrap_value(cls, value):
+        if isinstance(value, _PromptDict):
+            return value.unwrap()
+        if isinstance(value, _PromptList):
+            return value.unwrap()
+        return value
+
+    @staticmethod
+    def _extract_undefined_name(message: str) -> str:
+        match = re.search(r"'([^']+)' is undefined", message)
+        if match:
+            return match.group(1)
+        match = re.search(r"'[^']+' has no attribute '([^']+)'", message)
+        if match:
+            return match.group(1)
+        return message
+
+
+class _PromptDict(dict):
+    """Dict wrapper that keeps path information for Jinja missing-field errors."""
+
+    def __init__(self, value: dict[str, Any], path: str):
+        super().__init__(value)
+        self._path = path
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        try:
+            return self[name]
+        except KeyError:
+            missing_path = f"{self._path}.{name}" if self._path else name
+            raise KeyError(missing_path) from None
+
+    def unwrap(self):
+        return {
+            key: _SamplePromptRenderer._unwrap_value(value)
+            for key, value in self.items()
+        }
+
+
+class _PromptList(list):
+    """List wrapper that can be converted back to JSON-serializable values."""
+
+    def __init__(self, value: list[Any], path: str):
+        super().__init__(value)
+        self._path = path
+
+    def unwrap(self):
+        return [
+            _SamplePromptRenderer._unwrap_value(value)
+            for value in self
+        ]

@@ -149,9 +149,11 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `prompt` | `str` | No | `None` | Static prompt. |
-| `prompt_template` | `str` | No | `None` | Prompt template rendered from Jinja-style sample field placeholders, for example `请总结：{{ text }}`. |
-| `prompt_field` | `str` | No | `None` | Field name that stores the prompt in each sample. |
+| `system_prompt` | `str` | No | `None` | System instruction prompt. Supports Jinja2. |
+| `user_prompt` | `str` | Yes in new mode | `None` | User task prompt. Supports Jinja2. |
+| `prompt` | `str` | Legacy | `None` | Static prompt. Keep only for old YAML compatibility. |
+| `prompt_template` | `str` | Legacy | `None` | Legacy prompt template. New configs should use `user_prompt`. |
+| `prompt_field` | `str` | Legacy | `None` | Field name that stores the full prompt in each sample. |
 | `model` | `str` | No | `""` | Model name. Empty string is sent when not configured. |
 | `output_field` | `str` | No | `"llm_output"` | Field used to store `data.output` as a string. Object and array outputs are JSON-stringified. |
 | `metadata_field` | `str` | No | `None` | Optional field used to store JSON-stringified task metadata such as `taskId`, `conversationId`, and `requestId`. If omitted or set to `null`, metadata is not written. |
@@ -160,20 +162,40 @@ data_juicer/ops/mapper/ad_ai_data_center/llm_inference_mapper.py
 | `timeout` | `float` | No | `30.0` | HTTP request timeout in seconds. |
 | `ctx` | `dict` | Yes | `None` | Backend-injected platform context. |
 
-Prompt source precedence:
+Preferred prompt mode:
+
+```yaml
+system_prompt: |
+  你是一个广告诊断专家。
+  只输出 JSON，不要输出 Markdown 或解释。
+user_prompt: |
+  请根据下面的 State 模板生成数据：
+
+  {{ state_template }}
+
+  用户问题：
+  {{ input.user_query }}
+```
+
+`user_prompt` is required in the new mode. `system_prompt` is optional. Both support Jinja2 and are submitted to the
+backend as separate `systemPrompt` and `userPrompt` fields.
+
+Legacy prompt source precedence:
 
 1. `prompt_field`
 2. `prompt_template`
 3. `prompt`
 
-At least one prompt source must be configured. Empty prompt after rendering is invalid. `prompt_field` and
+At least one prompt source must be configured. New `user_prompt/system_prompt` configs cannot be mixed with
+legacy `prompt`, `prompt_template`, or `prompt_field`. Empty prompt after rendering is invalid. `prompt_field` and
 `prompt_template` both read values from the current sample. `prompt_field` treats one sample field as the complete
 prompt. `prompt_template` reads one or more sample fields and renders them into a prompt.
 
 ### Prompt Template Syntax
 
-`prompt_template` only treats Jinja-style `{{ field }}` placeholders as variables. A placeholder name must match a
-field path in the current sample. Single-brace text such as `{field}` is kept as ordinary prompt text.
+`user_prompt`, `system_prompt`, and legacy `prompt_template` support Jinja2 syntax. Variables come from the current
+sample. Use `{{ field }}` for simple fields, `{{ a.b.c }}` for nested objects, `{% if ... %}` for conditional text,
+and `{% for item in items %}` for loops. Single-brace text such as `{field}` is kept as ordinary prompt text.
 
 Sample:
 
@@ -187,7 +209,7 @@ Sample:
 Template:
 
 ```yaml
-prompt_template: "请总结文章《{{ title }}》：{{ text }}"
+user_prompt: "请总结文章《{{ title }}》：{{ text }}"
 ```
 
 Rendered prompt:
@@ -199,7 +221,7 @@ Rendered prompt:
 For multiline prompts, use a YAML block scalar:
 
 ```yaml
-prompt_template: |
+user_prompt: |
   请根据以下信息生成摘要：
 
   标题：{{ title }}
@@ -210,19 +232,22 @@ prompt_template: |
 
 If a placeholder field is missing from the sample, the mapper should raise a clear `ValueError` that includes the missing field name.
 
-Jinja-style placeholders support object paths and array expansion:
+Jinja2 supports object paths and loops:
 
 ```yaml
-prompt_template: |
+user_prompt: |
   State 模板：
   {{ state_template }}
 
   城市：{{ a.b.d }}
-  指标：{{ items[*].metric }}
+
+  {% for item in items %}
+  指标：{{ item.metric }}
+  {% endfor %}
 ```
 
-If a placeholder value is a `dict` or `list`, the mapper serializes it with `json.dumps(..., ensure_ascii=False)`
-before rendering. This keeps object and array fields as standard JSON text instead of Python `dict` / `list` repr.
+If a placeholder value is a `dict` or `list`, the mapper serializes it with `json.dumps(..., ensure_ascii=False)`.
+For clarity, users can also write `{{ state | tojson_cn }}` to embed object/list values as JSON.
 The mapper only resolves and serializes fields referenced by placeholders, so unrelated complex fields in the sample
 do not affect prompt rendering.
 
@@ -241,7 +266,7 @@ Sample:
 Template:
 
 ```yaml
-prompt_template: "请总结对象：{{ content }}；标签：{{ tags }}"
+user_prompt: "请总结对象：{{ content }}；标签：{{ tags }}"
 ```
 
 Rendered prompt:
@@ -265,7 +290,7 @@ Object fields can be addressed with dot paths:
 Template:
 
 ```yaml
-prompt_template: "城市：{{ a.b.d }}"
+user_prompt: "城市：{{ a.b.d }}"
 ```
 
 Rendered prompt:
@@ -274,7 +299,8 @@ Rendered prompt:
 城市：北京
 ```
 
-Array-object fields support whole-array expansion with `[]` or `[*]`. Specific numeric indexes are not supported.
+For arrays, prefer native Jinja2 loops. Legacy `prompt_template` also keeps compatibility with whole-array expansion
+using `[]` or `[*]`. Specific numeric indexes are not supported in the compatibility syntax.
 
 ```json
 {
@@ -294,13 +320,17 @@ Array-object fields support whole-array expansion with `[]` or `[*]`. Specific n
 Template:
 
 ```yaml
-prompt_template: "指标：{{ items[*].metric }}；名称：{{ items[].name }}"
+user_prompt: |
+  {% for item in items %}
+  指标：{{ item.metric }}；名称：{{ item.name }}
+  {% endfor %}
 ```
 
 Rendered prompt:
 
 ```text
-指标：[1, 2]；名称：["曝光", "点击"]
+指标：1；名称：曝光
+指标：2；名称：点击
 ```
 
 If the prompt is already prepared in a sample field, use `prompt_field`:
