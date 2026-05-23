@@ -1319,6 +1319,19 @@ process:
                 ctx=self._ctx(),
             )
 
+    def test_defaults_empty_optional_output_config_values(self):
+        for value in (None, ""):
+            op = StateMetricCalculatorMapper(
+                operators=self._operators(),
+                output_key=value,
+                result_mode=value,
+                fail_policy=value,
+                ctx=self._ctx(),
+            )
+            self.assertEqual(op.output_key, "query_metric_data_outputs")
+            self.assertEqual(op.result_mode, "summary")
+            self.assertEqual(op.fail_policy, "continue")
+
     def test_before_operator_started_starts_running_once(self):
         op = StateMetricCalculatorMapper(
             operators=self._operators(),

@@ -76,10 +76,14 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("state_key must be provided")
         if id_source_key is not None and not id_source_key:
             raise ValueError("id_source_key must be a non-empty string")
-        if not output_key:
-            raise ValueError("output_key must be provided")
+        if output_key is None or output_key == "":
+            output_key = "query_metric_data_outputs"
+        if result_mode is None or result_mode == "":
+            result_mode = "summary"
         if result_mode != "summary":
             raise ValueError("result_mode must be summary")
+        if fail_policy is None or fail_policy == "":
+            fail_policy = "continue"
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
         if retry_attempts < 0:

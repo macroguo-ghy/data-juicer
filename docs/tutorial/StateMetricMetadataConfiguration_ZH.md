@@ -39,8 +39,9 @@ process:
 | --- | --- | --- |
 | `state_key` | 否 | State 所在样本字段，默认 `state`。 |
 | `id_source_key` | 否 | 样本里的公共 ID 字段，支持逗号分隔多个 ID。 |
-| `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
-| `result_mode` | 否 | 当前只支持 `summary`，可省略；不要配置 `object`。 |
+| `output_key` | 否 | 输出字段；省略、`null` 或空字符串都会按 `query_metric_data_outputs` 处理。 |
+| `result_mode` | 否 | 当前只支持 `summary`；省略、`null` 或空字符串都会按 `summary` 处理，不要配置 `object`。 |
+| `fail_policy` | 否 | 当前只支持 `continue`；省略、`null` 或空字符串都会按 `continue` 处理。 |
 | `start_date_key` | 否 | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 使用。 |
 | `end_date_key` | 否 | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 使用。 |
 | `operators` | 是 | 本次要执行的指标列表。 |
@@ -272,7 +273,7 @@ Dataset Factory 里 metric 和 tool 是两条路径：metric 走指标注册和 
 
 ### 为什么我配置了 `result_mode: object` 会失败？
 
-当前算子只支持 Dataset Factory summary 字符串输出，所以 `result_mode` 必须是 `summary`。这个字段可以不配，默认就是 `summary`。
+当前算子只支持 Dataset Factory summary 字符串输出，所以 `result_mode` 只能是 `summary`。这个字段可以不配；如果前端传了 `null` 或空字符串，也会按 `summary` 处理。明确传 `object` 仍然会失败。
 
 ### 为什么指标代码里拿不到 `start_date`？
 
