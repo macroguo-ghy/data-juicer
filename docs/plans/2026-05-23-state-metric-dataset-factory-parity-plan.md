@@ -632,7 +632,47 @@ git commit -m "report state metric runtime config"
 
 ---
 
-### Task 7: schema 和 Ray 相关验证
+### Task 7: 迁移旧文档、示例配置和消费方说明
+
+**文件:**
+- 修改: `docs/plans/2026-05-18-state-metric-calculator-mapper.md` 或标记为 historical
+- 修改: `docs/plans/2026-05-18-state-metric-calculator-lance-test.md` 或标记为 historical
+- 按搜索结果修改: `docs/`、`demos/`、`tools/` 下其他引用旧输出结构或 `result_mode: object` 的文件
+
+**Step 1: 搜索旧契约引用**
+
+```bash
+rg -n 'query_metric_data_outputs|result_mode.*object|result_mode: object|result_mode: "object"|\\["items"\\]|\\["id"\\]' docs demos tools tests data_juicer
+```
+
+预期至少能看到旧 plan 文档和 mapper 测试里的引用。
+
+**Step 2: 分类处理搜索结果**
+
+- 当前实现代码和测试：按 Task 5/6 的新契约迁移。
+- 当前可运行 demo / tools / 用户文档：更新为 `result_mode: summary` 和 Dataset Factory summary JSON 字符串读取方式。
+- 历史 plan 文档：如果不应改写历史内容，在文件顶部追加明确 historical note，说明该文档描述的是旧对象输出契约，新实现以 `2026-05-23-state-metric-dataset-factory-parity-plan.md` 为准。
+- 不要无差别重写所有历史记录；只处理会误导后续执行者或用户的旧契约描述。
+
+**Step 3: 验证旧契约引用已收敛**
+
+```bash
+rg -n 'result_mode.*object|result_mode: object|result_mode: "object"' docs demos tools data_juicer
+rg -n 'query_metric_data_outputs.*\\[\"items\"\\]|query_metric_data_outputs.*\\[\"id\"\\]' docs demos tools data_juicer
+```
+
+预期：没有当前文档/示例继续把 `query_metric_data_outputs` 当旧对象结构消费；历史文件如果保留旧内容，必须有同文件 historical note。
+
+**Step 4: 提交**
+
+```bash
+git add docs demos tools data_juicer
+git commit -m "docs: migrate state metric summary contract references"
+```
+
+---
+
+### Task 8: schema 和 Ray 相关验证
 
 **文件:**
 - 修改测试: `tests/ops/mapper/test_state_metric_calculator_mapper.py`
@@ -656,7 +696,7 @@ git commit -m "report state metric runtime config"
 **Step 2: 跑 focused schema test**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_dataset_factory_summary_keeps_arrow_schema_stable
+./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_dataset_factory_summary_serializes_outputs_as_strings
 ```
 
 **Step 3: 增加 Ray/PyArrow block 级测试**
