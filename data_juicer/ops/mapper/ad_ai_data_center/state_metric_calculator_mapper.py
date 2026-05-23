@@ -72,7 +72,7 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("retry_attempts must be non-negative")
         if (
             repartition_num_blocks is not None
-            and (not isinstance(repartition_num_blocks, int) or repartition_num_blocks <= 0)
+            and (type(repartition_num_blocks) is not int or repartition_num_blocks <= 0)
         ):
             raise ValueError("repartition_num_blocks must be a positive integer")
         self.operators = self._normalize_operators(operators)

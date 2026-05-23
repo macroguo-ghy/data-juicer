@@ -81,7 +81,7 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("max_poll_attempts must be > 0")
         if (
             repartition_num_blocks is not None
-            and (not isinstance(repartition_num_blocks, int) or repartition_num_blocks <= 0)
+            and (type(repartition_num_blocks) is not int or repartition_num_blocks <= 0)
         ):
             raise ValueError("repartition_num_blocks must be a positive integer")
         if retry_attempts < 0:

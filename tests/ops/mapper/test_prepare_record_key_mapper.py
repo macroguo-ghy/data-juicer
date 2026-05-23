@@ -535,6 +535,12 @@ process:
                 ctx=self._ctx(),
                 repartition_num_blocks=0,
             )
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            PrepareRecordKeyMapper(
+                source_fields=["query"],
+                ctx=self._ctx(),
+                repartition_num_blocks=True,
+            )
 
 
 if __name__ == "__main__":

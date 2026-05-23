@@ -853,6 +853,12 @@ process:
                 repartition_num_blocks=0,
                 ctx=self._ctx(),
             )
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            StateMetricCalculatorMapper(
+                operators=self._operators(),
+                repartition_num_blocks=True,
+                ctx=self._ctx(),
+            )
 
     def test_before_operator_started_starts_running_once(self):
         op = StateMetricCalculatorMapper(

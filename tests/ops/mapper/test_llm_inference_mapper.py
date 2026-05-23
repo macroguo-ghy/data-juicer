@@ -690,6 +690,8 @@ process:
             LLMInferenceMapper(prompt="x", max_poll_attempts=0, ctx=self._ctx())
         with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
             LLMInferenceMapper(prompt="x", repartition_num_blocks=0, ctx=self._ctx())
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            LLMInferenceMapper(prompt="x", repartition_num_blocks=True, ctx=self._ctx())
 
 
 if __name__ == "__main__":
