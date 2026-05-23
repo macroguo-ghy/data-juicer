@@ -31,8 +31,6 @@ FAILED_RECORD_KEY_PREFIX = "prepare_record_key_failed:"
 class PrepareRecordKeyMapper(Mapper):
     """Prepare a stable internal record key for downstream ADC status callbacks."""
 
-    _requirements = ["bytedlogid"]
-
     def __init__(
         self,
         source_field: str | None = None,
@@ -217,7 +215,7 @@ class PrepareRecordKeyMapper(Mapper):
         except ImportError as exc:
             raise ImportError(
                 "bytedlogid is required to generate ADC log id. "
-                "Install it with `pip install bytedlogid -i https://bytedpypi.byted.org/simple/`."
+                "Please include it in the base runtime image instead of Ray runtime_env dependencies."
             ) from exc
         return str(logid.generate_v2())
 

@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import ANY, patch
@@ -151,6 +152,11 @@ class StateMetricCalculatorMapperTest(unittest.TestCase):
             ]
         }
 
+    def _summary(self, result, output_key="query_metric_data_outputs"):
+        value = result[output_key]
+        self.assertIsInstance(value, str)
+        return json.loads(value) if value else {}
+
     def test_declares_operator_metadata(self):
         self.assertEqual(OP_NAME, "state_metric_calculator")
         self.assertEqual(CONFIG_PAGE_KEY, "state_metric_calculator")
@@ -256,30 +262,26 @@ process:
                 "operatorIds": [201, 202],
             }
         }])
-        self.assertEqual(result[0]["query_metric_data_outputs"], {
-            "id": "1854168911595796",
-            "items": [
-                {
-                    "id": "1854168911595796",
-                    "metrics": [
-                        {
-                            "metricCode": "bench_roi_score",
-                            "metricName": "行业基准 ROI 得分",
-                            "output": "0.82",
-                            "error": "",
-                        },
-                        {
-                            "metricCode": "quality_score",
-                            "metricName": "质量得分",
-                            "output": "9",
-                            "error": "",
-                        },
-                    ],
-                },
-            ],
+        self.assertEqual(self._summary(result[0]), {
+            "1854168911595796": {
+                "metrics": [
+                    {
+                        "metricCode": "bench_roi_score",
+                        "metricName": "行业基准 ROI 得分",
+                        "output": "0.82",
+                        "error": "",
+                    },
+                    {
+                        "metricCode": "quality_score",
+                        "metricName": "质量得分",
+                        "output": "9",
+                        "error": "",
+                    },
+                ],
+            },
         })
         self.assertEqual(
-            result[1]["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"],
+            self._summary(result[1])["2854168911595796"]["metrics"][0]["output"],
             "2.0",
         )
         self.mock_callback.report_record_success.assert_any_call(
@@ -306,25 +308,18 @@ process:
             },
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"],
-            {
-                "id": "1854168911595796",
-                "items": [
+        self.assertEqual(self._summary(result), {
+            "1854168911595796": {
+                "metrics": [
                     {
-                        "id": "1854168911595796",
-                        "metrics": [
-                            {
-                                "metricCode": "bench_roi_score",
-                                "metricName": "行业基准 ROI 得分",
-                                "output": "null",
-                                "error": "missing required parameter: bench_roi",
-                            },
-                        ],
+                        "metricCode": "bench_roi_score",
+                        "metricName": "行业基准 ROI 得分",
+                        "output": "null",
+                        "error": "missing required parameter: bench_roi",
                     },
                 ],
             },
-        )
+        })
         self.mock_callback.report_record_failure.assert_not_called()
         self.mock_callback.report_record_success.assert_called_once()
 
@@ -371,25 +366,18 @@ process:
             ),
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"],
-            {
-                "id": "unknown",
-                "items": [
+        self.assertEqual(self._summary(result), {
+            "unknown": {
+                "metrics": [
                     {
-                        "id": "unknown",
-                        "metrics": [
-                            {
-                                "metricCode": "ad_roi_trend",
-                                "metricName": "ROI趋势",
-                                "output": "0.63",
-                                "error": "",
-                            },
-                        ],
+                        "metricCode": "ad_roi_trend",
+                        "metricName": "ROI趋势",
+                        "output": "0.63",
+                        "error": "",
                     },
                 ],
             },
-        )
+        })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_complex_metric_output_is_preserved(self, mock_client_cls):
@@ -422,7 +410,7 @@ process:
         })
 
         self.assertEqual(
-            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"],
+            self._summary(result)["unknown"]["metrics"][0]["output"],
             '{"first": 0.28, "latest": 0.91, "trend": "up"}',
         )
 
@@ -440,25 +428,205 @@ process:
             "state": '{"quality": 8}',
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"],
-            {
-                "id": "unknown",
-                "items": [
+        self.assertEqual(self._summary(result), {
+            "unknown": {
+                "metrics": [
                     {
-                        "id": "unknown",
-                        "metrics": [
-                            {
-                                "metricCode": "quality_score",
-                                "metricName": "质量得分",
-                                "output": "9",
-                                "error": "",
-                            },
-                        ],
+                        "metricCode": "quality_score",
+                        "metricName": "质量得分",
+                        "output": "9",
+                        "error": "",
                     },
                 ],
             },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_calculate_can_receive_metric_context(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 220,
+                    "operatorNameEn": "context_metric",
+                    "operatorNameCn": "上下文指标",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": (
+                        "def calculate(state, ids, id_key, id_value, "
+                        "start_date=None, end_date=None, helpers=None):\n"
+                        "    return {\n"
+                        "        'ids': ids,\n"
+                        "        'id_key': id_key,\n"
+                        "        'id_value': id_value,\n"
+                        "        'start': str(start_date),\n"
+                        "        'end': str(end_date),\n"
+                        "        'fmt': helpers.fmt4(1.2300),\n"
+                        "    }\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 220,
+                "parameter_mapping": {
+                    "ids": "issue_id",
+                },
+            }],
+            ctx=self._ctx(),
+            start_date_key="start",
+            end_date_key="end",
         )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "123",
+            "start": "2024-01-01",
+            "end": "2024-01-07",
+            "state": {"ad_state": [{"ad_id": "123"}]},
+        })
+
+        output = json.loads(self._summary(result)["123"]["metrics"][0]["output"])
+        self.assertEqual(output["ids"], "123")
+        self.assertEqual(output["id_key"], "ad_id")
+        self.assertEqual(output["id_value"], "123")
+        self.assertEqual(output["start"], "2024-01-01")
+        self.assertEqual(output["end"], "2024-01-07")
+        self.assertEqual(output["fmt"], "1.23")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_declared_params_take_precedence_over_reserved_context_names(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 223,
+                    "operatorNameEn": "declared_start_date",
+                    "operatorNameCn": "显式开始日期",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"},'
+                        '{"data_type": "placeholder", "key_name_en": "start_date", '
+                        '"default_or_placeholder_value": "start_date"}'
+                        ']}'
+                    ),
+                    "operatorCode": (
+                        "def calculate(state, ids, start_date):\n"
+                        "    return {'ids': ids, 'start_date': start_date}\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 223,
+                "parameter_mapping": {
+                    "ids": "issue_id",
+                    "start_date": "mapped_start",
+                },
+            }],
+            ctx=self._ctx(),
+            start_date_key="context_start",
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "123",
+            "mapped_start": "mapped-value",
+            "context_start": "2024-01-01",
+            "state": {"ad_state": [{"ad_id": "123"}]},
+        })
+
+        output = json.loads(self._summary(result)["123"]["metrics"][0]["output"])
+        self.assertEqual(output["start_date"], "mapped-value")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_invalid_context_date_is_reported_as_metric_failure(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 224,
+                    "operatorNameEn": "date_metric",
+                    "operatorNameCn": "日期指标",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids, start_date=None):\n    return str(start_date)\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 224,
+                "parameter_mapping": {
+                    "ids": "issue_id",
+                },
+            }],
+            ctx=self._ctx(),
+            start_date_key="bad_start",
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "123",
+            "bad_start": "not-a-date",
+            "state": {"ad_state": [{"ad_id": "123"}]},
+        })
+
+        metric = self._summary(result)["123"]["metrics"][0]
+        self.assertEqual(metric["metricCode"], "date_metric")
+        self.assertEqual(metric["output"], "null")
+        self.assertIn("sample.bad_start must be a YYYY-MM-DD date", metric["error"])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_unknown_id_is_reported_as_metric_failure(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 225,
+                    "operatorNameEn": "id_key_metric",
+                    "operatorNameCn": "ID 类型指标",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids, id_key):\n    return id_key\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 225,
+                "parameter_mapping": {
+                    "ids": "issue_id",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "999",
+            "state": {"ad_state": [{"ad_id": "123"}]},
+        })
+
+        metric = self._summary(result)["999"]["metrics"][0]
+        self.assertEqual(metric["metricCode"], "id_key_metric")
+        self.assertEqual(metric["output"], "null")
+        self.assertEqual(metric["error"], "Unknown id: 999")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_output_id_prefers_ids_then_id_then_other_id_params(self, mock_client_cls):
@@ -532,11 +700,10 @@ process:
             "state": "{}",
             "task_id_field": "task-1",
             "id_field": "id-1",
-            "ids_field": "ids-1",
+            "ids_field": "idsabc",
         })
 
-        self.assertEqual(result["query_metric_data_outputs"]["id"], "ids-1")
-        self.assertEqual(result["query_metric_data_outputs"]["items"][0]["id"], "ids-1")
+        self.assertEqual(list(self._summary(result).keys()), ["idsabc"])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_comma_separated_ids_are_calculated_as_separate_items(self, mock_client_cls):
@@ -588,35 +755,147 @@ process:
             },
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"],
-            {
-                "id": "1854751525764108, 1853671159428096",
-                "items": [
+        self.assertEqual(self._summary(result), {
+            "1854751525764108": {
+                "metrics": [
                     {
-                        "id": "1854751525764108",
-                        "metrics": [
-                            {
-                                "metricCode": "ad_roi_latest",
-                                "metricName": "广告最新 ROI",
-                                "output": "0.33",
-                                "error": "",
-                            },
-                        ],
-                    },
-                    {
-                        "id": "1853671159428096",
-                        "metrics": [
-                            {
-                                "metricCode": "ad_roi_latest",
-                                "metricName": "广告最新 ROI",
-                                "output": "0.52",
-                                "error": "",
-                            },
-                        ],
+                        "metricCode": "ad_roi_latest",
+                        "metricName": "广告最新 ROI",
+                        "output": "0.33",
+                        "error": "",
                     },
                 ],
             },
+            "1853671159428096": {
+                "metrics": [
+                    {
+                        "metricCode": "ad_roi_latest",
+                        "metricName": "广告最新 ROI",
+                        "output": "0.52",
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_intermediate_items_extract_numeric_ids_from_mixed_issue_id(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 208,
+                    "operatorNameEn": "echo_id",
+                    "operatorNameCn": "ID 回显",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids):\n    return ids\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 208,
+                "parameter_mapping": {
+                    "ids": "material_ids",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        output = op._calculate_metric_outputs({
+            RECORD_KEY_FIELD: "record-1",
+            "material_ids": (
+                "ad:1854751525764108, adv:1853671159428096, "
+                "again:1854751525764108"
+            ),
+            "state": {},
+        })
+
+        self.assertEqual(
+            [item["id"] for item in output["items"]],
+            ["1854751525764108", "1853671159428096"],
+        )
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_intermediate_items_fallback_to_original_when_no_numeric_id(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 208,
+                    "operatorNameEn": "echo_id",
+                    "operatorNameCn": "ID 回显",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids):\n    return ids\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 208,
+                "parameter_mapping": {
+                    "ids": "material_ids",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        output = op._calculate_metric_outputs({
+            RECORD_KEY_FIELD: "record-1",
+            "material_ids": "abc_def",
+            "state": {},
+        })
+
+        self.assertEqual(output["items"][0]["id"], "abc_def")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_intermediate_items_preserve_list_id_inputs(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 208,
+                    "operatorNameEn": "echo_id",
+                    "operatorNameCn": "ID 回显",
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "ids", '
+                        '"default_or_placeholder_value": "ids"}'
+                        ']}'
+                    ),
+                    "operatorCode": "def calculate(state, ids):\n    return ids\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 208,
+                "parameter_mapping": {
+                    "ids": "material_ids",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        output = op._calculate_metric_outputs({
+            RECORD_KEY_FIELD: "record-1",
+            "material_ids": ["123", "456"],
+            "state": {},
+        })
+
+        self.assertEqual(
+            [item["id"] for item in output["items"]],
+            ["123", "456"],
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
@@ -674,45 +953,40 @@ process:
             "state": {},
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"]["items"],
-            [
-                {
-                    "id": "1854751525764108",
-                    "metrics": [
-                        {
-                            "metricCode": "metric_with_ids",
-                            "metricName": "IDS 指标",
-                            "output": '"1854751525764108"',
-                            "error": "",
-                        },
-                        {
-                            "metricCode": "metric_with_adv_id",
-                            "metricName": "广告 ID 指标",
-                            "output": '"1854751525764108"',
-                            "error": "",
-                        },
-                    ],
-                },
-                {
-                    "id": "1853671159428096",
-                    "metrics": [
-                        {
-                            "metricCode": "metric_with_ids",
-                            "metricName": "IDS 指标",
-                            "output": '"1853671159428096"',
-                            "error": "",
-                        },
-                        {
-                            "metricCode": "metric_with_adv_id",
-                            "metricName": "广告 ID 指标",
-                            "output": '"1853671159428096"',
-                            "error": "",
-                        },
-                    ],
-                },
-            ],
-        )
+        self.assertEqual(self._summary(result), {
+            "1854751525764108": {
+                "metrics": [
+                    {
+                        "metricCode": "metric_with_ids",
+                        "metricName": "IDS 指标",
+                        "output": '"1854751525764108"',
+                        "error": "",
+                    },
+                    {
+                        "metricCode": "metric_with_adv_id",
+                        "metricName": "广告 ID 指标",
+                        "output": '"1854751525764108"',
+                        "error": "",
+                    },
+                ],
+            },
+            "1853671159428096": {
+                "metrics": [
+                    {
+                        "metricCode": "metric_with_ids",
+                        "metricName": "IDS 指标",
+                        "output": '"1853671159428096"',
+                        "error": "",
+                    },
+                    {
+                        "metricCode": "metric_with_adv_id",
+                        "metricName": "广告 ID 指标",
+                        "output": '"1853671159428096"',
+                        "error": "",
+                    },
+                ],
+            },
+        })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_http_failure_records_each_metric_failure_without_raising(self, mock_client_cls):
@@ -737,28 +1011,65 @@ process:
             "state": {},
         })
 
-        self.assertEqual(
-            result["query_metric_data_outputs"]["id"],
-            "unknown",
-        )
+        summary = self._summary(result)
+        self.assertEqual(list(summary.keys()), ["unknown"])
         self.assertEqual(
             [
                 metric["metricCode"]
-                for metric in result["query_metric_data_outputs"]["items"][0]["metrics"]
+                for metric in summary["unknown"]["metrics"]
             ],
             ["operator_201", "operator_202"],
         )
         self.assertEqual(
-            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"],
+            summary["unknown"]["metrics"][0]["output"],
             "null",
         )
         self.assertIn(
             "Failed to fetch state metric operators",
-            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["error"],
+            summary["unknown"]["metrics"][0]["error"],
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_metric_failure_output_keeps_arrow_schema_as_string(self, mock_client_cls):
+    def test_missing_state_only_fails_metrics_that_require_state(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 221,
+                    "operatorNameEn": "needs_state",
+                    "operatorNameCn": "依赖 State",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(state):\n    return state.get('value')\n",
+                },
+                {
+                    "id": 222,
+                    "operatorNameEn": "no_state",
+                    "operatorNameCn": "不依赖 State",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate():\n    return 'ok'\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[
+                {"operator_id": 221, "parameter_mapping": {}},
+                {"operator_id": 222, "parameter_mapping": {}},
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({RECORD_KEY_FIELD: "record-1"})
+
+        metrics = self._summary(result)["unknown"]["metrics"]
+        self.assertEqual(metrics[0]["metricCode"], "needs_state")
+        self.assertEqual(metrics[0]["output"], "null")
+        self.assertIn("sample.state must be provided", metrics[0]["error"])
+        self.assertEqual(metrics[1]["metricCode"], "no_state")
+        self.assertEqual(metrics[1]["output"], '"ok"')
+        self.assertEqual(metrics[1]["error"], "")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_dataset_factory_summary_serializes_outputs_as_strings(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
@@ -775,13 +1086,13 @@ process:
         })
 
         metric_output = (
-            result["query_metric_data_outputs"]["items"][0]["metrics"][0]["output"]
+            self._summary(result)["1854168911595796"]["metrics"][0]["output"]
         )
         self.assertEqual(metric_output, "null")
         table = pa.Table.from_pylist([{
             "query_metric_data_outputs": result["query_metric_data_outputs"],
         }])
-        self.assertIn("output: string", str(table.schema))
+        self.assertEqual(table.schema.field("query_metric_data_outputs").type, pa.string())
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_missing_state_key_when_all_metrics_depend_on_state_fails_record(self, mock_client_cls):
@@ -838,7 +1149,7 @@ process:
         with self.assertRaisesRegex(ValueError, "result_mode"):
             StateMetricCalculatorMapper(
                 operators=self._operators(),
-                result_mode="list",
+                result_mode="object",
                 ctx=self._ctx(),
             )
         with self.assertRaisesRegex(ValueError, "fail_policy"):
@@ -874,8 +1185,13 @@ process:
             operator_config={
                 "state_key": "state",
                 "output_key": "metric_outputs",
-                "result_mode": "object",
+                "result_mode": "summary",
                 "fail_policy": "continue",
+                "start_date_key": None,
+                "end_date_key": None,
+                "output_format": "dataset_factory_summary",
+                "preserve_error": True,
+                "runtime": "adc_operator_code",
                 "operators": self._operators(),
                 "repartition_num_blocks": None,
             }

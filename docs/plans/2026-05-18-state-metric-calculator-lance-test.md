@@ -1,5 +1,11 @@
 # State Metric Calculator Lance Test Guide
 
+> Historical note: this guide targets the first object-output version of
+> `state_metric_calculator`. The current output contract is superseded by
+> `docs/plans/2026-05-23-state-metric-dataset-factory-parity-plan.md`, where
+> `query_metric_data_outputs` is a Dataset Factory summary JSON string and
+> `result_mode` is `summary`.
+
 This guide shows how to test `state_metric_calculator` with Lance source and output tables. The test focuses on:
 
 - loading selected State derived metric definitions through OpenAPI

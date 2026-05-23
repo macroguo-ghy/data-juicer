@@ -29,6 +29,112 @@ class RayDatasetImportTest(unittest.TestCase):
 
         self.assertEqual(get_configured_ray_columns(cfg), ["id", "text", "image"])
 
+    def test_state_metric_summary_output_stays_string_across_blocks(self):
+        import pyarrow as pa
+        import ray
+
+        from data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper import (
+            StateMetricCalculatorMapper,
+        )
+        from data_juicer.utils.operator_execution_callback_utils import RECORD_KEY_FIELD
+
+        class DummyCallback:
+            def report_record_success(self, **kwargs):
+                return None
+
+            def report_record_failure(self, **kwargs):
+                return None
+
+        detail = {
+            "id": 901,
+            "operatorNameEn": "echo_value",
+            "operatorNameCn": "值回显",
+            "inputParameter": (
+                '{"params": ['
+                '{"data_type": "placeholder", "key_name_en": "ids", '
+                '"default_or_placeholder_value": "ids"},'
+                '{"data_type": "placeholder", "key_name_en": "value", '
+                '"default_or_placeholder_value": "value"}'
+                ']}'
+            ),
+            "operatorCode": (
+                "def calculate(value):\n"
+                "    if value == 'bad':\n"
+                "        raise ValueError('bad value')\n"
+                "    return value\n"
+            ),
+        }
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 901,
+                "parameter_mapping": {
+                    "ids": "metric_id",
+                    "value": "value",
+                },
+            }],
+            ctx={
+                "apiBase": "https://ai-data-center.bytedance.net/api",
+                "userAccount": "wangjianda.667",
+            },
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+        op._operator_details = {901: detail}
+        op._operator_execution_callback_client = DummyCallback()
+
+        def apply_state_metric(batch):
+            rows = []
+            for row in batch.to_pylist():
+                if row.get("empty_summary"):
+                    row["query_metric_data_outputs"] = ""
+                else:
+                    row = op.process_single(row)
+                rows.append(row)
+            return pa.Table.from_pylist(rows)
+
+        started_ray = False
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True, include_dashboard=False)
+            started_ray = True
+        try:
+            result = (
+                ray.data.from_items([
+                    {
+                        RECORD_KEY_FIELD: "record-1",
+                        "metric_id": "metric-1",
+                        "value": "ok",
+                    },
+                    {
+                        RECORD_KEY_FIELD: "record-2",
+                        "metric_id": "metric-2",
+                        "value": "bad",
+                    },
+                    {
+                        RECORD_KEY_FIELD: "record-3",
+                        "metric_id": "metric-3",
+                        "value": "ignored",
+                        "empty_summary": True,
+                    },
+                ])
+                .repartition(2)
+                .map_batches(apply_state_metric, batch_format="pyarrow")
+            )
+
+            values = []
+            for batch in result.iter_batches(batch_format="pyarrow"):
+                self.assertEqual(
+                    batch.schema.field("query_metric_data_outputs").type,
+                    pa.string(),
+                )
+                values.extend(batch.column("query_metric_data_outputs").to_pylist())
+
+            self.assertIn("", values)
+            self.assertTrue(all(isinstance(value, str) for value in values))
+            self.assertTrue(any('"error": "bad value"' in value for value in values))
+        finally:
+            if started_ray:
+                ray.shutdown()
+
     def test_process_materializes_and_calls_after_hook_after_each_op_when_enabled(self):
         from data_juicer.core.data.ray_dataset import RayDataset
         from data_juicer.ops import Mapper
