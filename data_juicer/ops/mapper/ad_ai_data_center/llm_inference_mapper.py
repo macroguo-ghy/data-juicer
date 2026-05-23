@@ -44,6 +44,7 @@ class LLMInferenceMapper(Mapper):
         max_poll_attempts: int = 300,
         ctx: dict | None = None,
         timeout: float = 30.0,
+        repartition_num_blocks: int | None = None,
         retry_attempts: int = 3,
         *args,
         **kwargs,
@@ -61,6 +62,8 @@ class LLMInferenceMapper(Mapper):
         :param max_poll_attempts: maximum result polling attempts.
         :param ctx: platform context injected by backend when NEED_CTX is True.
         :param timeout: HTTP timeout in seconds.
+        :param repartition_num_blocks: Ray Dataset block count before inference.
+            None means num_proc * 4 when num_proc is positive.
         :param retry_attempts: HTTP retry attempts for submit/result requests.
         :param args: extra args.
         :param kwargs: extra args.
@@ -76,6 +79,11 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("poll_interval_seconds must be >= 0")
         if max_poll_attempts <= 0:
             raise ValueError("max_poll_attempts must be > 0")
+        if (
+            repartition_num_blocks is not None
+            and (not isinstance(repartition_num_blocks, int) or repartition_num_blocks <= 0)
+        ):
+            raise ValueError("repartition_num_blocks must be a positive integer")
         if retry_attempts < 0:
             raise ValueError("retry_attempts must be non-negative")
 
@@ -89,8 +97,37 @@ class LLMInferenceMapper(Mapper):
         self.max_poll_attempts = max_poll_attempts
         self.ctx = ctx
         self.timeout = timeout
+        self.repartition_num_blocks = repartition_num_blocks
         self.retry_attempts = retry_attempts
         self._operator_execution_callback_client = None
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        return super().run(
+            self.prepare_ray_dataset(dataset),
+            exporter=exporter,
+            tracer=tracer,
+        )
+
+    def prepare_ray_dataset(self, dataset):
+        repartition_num_blocks = self._effective_repartition_num_blocks()
+        if repartition_num_blocks is None:
+            return dataset
+        repartition = getattr(dataset, "repartition", None)
+        if not callable(repartition):
+            return dataset
+        logger.info(
+            "LLMInferenceMapper repartition input to {} blocks before inference",
+            repartition_num_blocks,
+        )
+        return repartition(num_blocks=repartition_num_blocks, shuffle=False)
+
+    def _effective_repartition_num_blocks(self) -> int | None:
+        if self.repartition_num_blocks is not None:
+            return self.repartition_num_blocks
+        num_proc = getattr(self, "num_proc", None)
+        if isinstance(num_proc, int) and num_proc > 0:
+            return num_proc * 4
+        return None
 
     def process_single(self, sample):
         ctx = self._get_ctx()
@@ -265,6 +302,7 @@ class LLMInferenceMapper(Mapper):
             "poll_interval_seconds": self.poll_interval_seconds,
             "max_poll_attempts": self.max_poll_attempts,
             "retry_attempts": self.retry_attempts,
+            "repartition_num_blocks": self.repartition_num_blocks,
         }
 
     def _prompt_source(self) -> str:

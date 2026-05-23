@@ -27,6 +27,16 @@ class FakeHttpClient:
         return self.result
 
 
+class FakeRayDataset:
+
+    def __init__(self):
+        self.repartition_calls = []
+
+    def repartition(self, **kwargs):
+        self.repartition_calls.append(kwargs)
+        return self
+
+
 def success_envelope(data):
     return {
         "ok": True,
@@ -151,6 +161,7 @@ process:
         self.assertEqual(ops[0].poll_interval_seconds, 2.0)
         self.assertEqual(ops[0].max_poll_attempts, 300)
         self.assertEqual(ops[0].retry_attempts, 3)
+        self.assertIsNone(ops[0].repartition_num_blocks)
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_submits_prompt_from_template_polls_result_and_writes_output(self, mock_client_cls):
@@ -570,6 +581,7 @@ process:
                 "poll_interval_seconds": 3,
                 "max_poll_attempts": 10,
                 "retry_attempts": 3,
+                "repartition_num_blocks": None,
             }
         )
         self.mock_send_test_card_notification.assert_not_called()
@@ -598,6 +610,57 @@ process:
         self.mock_callback.start.assert_called_once()
         self.mock_callback.finalize.assert_called_once_with()
 
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_with_explicit_num_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            repartition_num_blocks=80,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 80,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_to_four_times_positive_num_proc_by_default(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            num_proc=10,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 40,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_does_not_repartition_for_auto_num_proc_without_explicit_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=self._ctx(),
+            num_proc=-1,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [])
+
     def test_rejects_invalid_constructor_arguments(self):
         with self.assertRaisesRegex(ValueError, "prompt"):
             LLMInferenceMapper(ctx=self._ctx())
@@ -607,6 +670,8 @@ process:
             LLMInferenceMapper(prompt="x", metadata_field="", ctx=self._ctx())
         with self.assertRaisesRegex(ValueError, "max_poll_attempts"):
             LLMInferenceMapper(prompt="x", max_poll_attempts=0, ctx=self._ctx())
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            LLMInferenceMapper(prompt="x", repartition_num_blocks=0, ctx=self._ctx())
 
 
 if __name__ == "__main__":

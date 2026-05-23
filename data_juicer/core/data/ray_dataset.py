@@ -544,6 +544,10 @@ class RayDataset(DJDataset):
         try:
             batch_size = getattr(op, "batch_size", 1) if op.is_batched_op() else 1
             if isinstance(op, Mapper):
+                prepare_ray_dataset = getattr(op, "prepare_ray_dataset", None)
+                if callable(prepare_ray_dataset):
+                    self.data = prepare_ray_dataset(self.data)
+
                 # Wrap process method with tracer for sample-level collection
                 original_process = None
                 if tracer and should_trace_op(tracer, op._name):
