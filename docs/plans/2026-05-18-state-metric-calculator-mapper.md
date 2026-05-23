@@ -1,5 +1,11 @@
 # State Metric Calculator Mapper Usage
 
+> Historical note: this document describes the first object-output version of
+> `state_metric_calculator`. The current contract is superseded by
+> `docs/plans/2026-05-23-state-metric-dataset-factory-parity-plan.md`, where
+> `output_key` stores a Dataset Factory summary JSON string and
+> `result_mode` is `summary`.
+
 ## Goal
 
 `state_metric_calculator` reads the State object from each sample, fetches the latest selected derived metric operator
