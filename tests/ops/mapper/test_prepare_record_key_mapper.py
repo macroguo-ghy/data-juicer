@@ -36,6 +36,16 @@ class FailingDeepCopyDict(dict):
         raise ValueError("deepcopy failed")
 
 
+class FakeRayDataset:
+
+    def __init__(self):
+        self.repartition_calls = []
+
+    def repartition(self, **kwargs):
+        self.repartition_calls.append(kwargs)
+        return self
+
+
 class PrepareRecordKeyMapperTest(unittest.TestCase):
 
     @classmethod
@@ -393,6 +403,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
                 "source_field": None,
                 "source_fields": ["query"],
                 "overwrite": False,
+                "repartition_num_blocks": None,
             }
         )
 
@@ -423,6 +434,57 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
             output_data=second_result,
             started_at=ANY,
         )
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_with_explicit_num_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = PrepareRecordKeyMapper(
+            source_fields=["query"],
+            ctx=self._ctx(),
+            repartition_num_blocks=8,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 8,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_repartitions_to_four_times_positive_num_proc_by_default(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = PrepareRecordKeyMapper(
+            source_fields=["query"],
+            ctx=self._ctx(),
+            num_proc=3,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [{
+            "num_blocks": 12,
+            "shuffle": False,
+        }])
+
+    @patch("data_juicer.ops.base_op.Mapper.run", autospec=True)
+    def test_run_does_not_repartition_for_auto_num_proc_without_explicit_blocks(self, mock_mapper_run):
+        dataset = FakeRayDataset()
+        mock_mapper_run.side_effect = lambda _, ds, **kwargs: ds
+        op = PrepareRecordKeyMapper(
+            source_fields=["query"],
+            ctx=self._ctx(),
+            num_proc=-1,
+        )
+
+        result = op.run(dataset)
+
+        self.assertIs(result, dataset)
+        self.assertEqual(dataset.repartition_calls, [])
 
     def test_config_loads_operator_name_without_record_key_field(self):
         config_path = Path("/private/tmp/prepare_record_key_mapper_config_test.yaml")
@@ -464,7 +526,15 @@ process:
         self.assertEqual(NEED_CTX, True)
         self.assertIsInstance(ops[0], PrepareRecordKeyMapper)
         self.assertEqual(ops[0].source_field, "questions_id")
+        self.assertIsNone(ops[0].repartition_num_blocks)
         self.assertEqual(ops[0].ctx["operatorName"], "prepare_record_key_mapper")
+
+        with self.assertRaisesRegex(ValueError, "repartition_num_blocks"):
+            PrepareRecordKeyMapper(
+                source_fields=["query"],
+                ctx=self._ctx(),
+                repartition_num_blocks=0,
+            )
 
 
 if __name__ == "__main__":

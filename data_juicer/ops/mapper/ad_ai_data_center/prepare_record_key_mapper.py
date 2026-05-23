@@ -40,6 +40,7 @@ class PrepareRecordKeyMapper(Mapper):
         overwrite: bool = False,
         ctx: dict | None = None,
         *args,
+        repartition_num_blocks: int | None = None,
         **kwargs,
     ):
         """
@@ -51,15 +52,52 @@ class PrepareRecordKeyMapper(Mapper):
             If empty, all non-internal sample fields are used.
         :param overwrite: whether to overwrite an existing record key.
         :param ctx: platform context injected by backend when NEED_CTX is True.
+        :param repartition_num_blocks: Ray Dataset block count before generating keys.
+            None means num_proc * 4 when num_proc is positive.
         :param args: extra args.
         :param kwargs: extra args.
         """
         super().__init__(*args, **kwargs)
+        if (
+            repartition_num_blocks is not None
+            and (not isinstance(repartition_num_blocks, int) or repartition_num_blocks <= 0)
+        ):
+            raise ValueError("repartition_num_blocks must be a positive integer")
+
         self.source_field = source_field
         self.source_fields = list(source_fields or [])
         self.overwrite = overwrite
         self.ctx = ctx
+        self.repartition_num_blocks = repartition_num_blocks
         self._operator_execution_callback_client = None
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        return super().run(
+            self.prepare_ray_dataset(dataset),
+            exporter=exporter,
+            tracer=tracer,
+        )
+
+    def prepare_ray_dataset(self, dataset):
+        repartition_num_blocks = self._effective_repartition_num_blocks()
+        if repartition_num_blocks is None:
+            return dataset
+        repartition = getattr(dataset, "repartition", None)
+        if not callable(repartition):
+            return dataset
+        logger.info(
+            "PrepareRecordKeyMapper repartition input to {} blocks before key generation",
+            repartition_num_blocks,
+        )
+        return repartition(num_blocks=repartition_num_blocks, shuffle=False)
+
+    def _effective_repartition_num_blocks(self) -> int | None:
+        if self.repartition_num_blocks is not None:
+            return self.repartition_num_blocks
+        num_proc = getattr(self, "num_proc", None)
+        if isinstance(num_proc, int) and num_proc > 0:
+            return num_proc * 4
+        return None
 
     def process_single(self, sample: dict[str, Any]):
         record_started_at = current_time_millis()
@@ -135,6 +173,7 @@ class PrepareRecordKeyMapper(Mapper):
                     "source_field": self.source_field,
                     "source_fields": self.source_fields,
                     "overwrite": self.overwrite,
+                    "repartition_num_blocks": self.repartition_num_blocks,
                 }
             )
             self._operator_execution_callback_client = callback_client
