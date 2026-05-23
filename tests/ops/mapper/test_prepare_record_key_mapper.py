@@ -201,6 +201,11 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         self.assertEqual(result, "company-log-id")
         self.log_id_patcher.start()
 
+    def test_does_not_request_bytedlogid_runtime_env_dependency(self):
+        op = PrepareRecordKeyMapper(ctx=self._ctx())
+
+        self.assertEqual(op.get_env_spec().pip_pkgs, [])
+
     def test_reuses_source_field_as_record_key(self):
         op = PrepareRecordKeyMapper(
             source_field="questions_id",
