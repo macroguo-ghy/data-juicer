@@ -58,7 +58,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param state_key: sample field containing the State object.
         :param id_source_key: optional common sample field containing metric item IDs.
         :param output_key: sample field used to store metric outputs.
-        :param result_mode: supports Dataset Factory summary string output only.
+        :param result_mode: ``summary`` for Dataset Factory summary string output,
+            or ``object`` for the intermediate object output.
         :param fail_policy: first version supports ``continue`` only.
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
@@ -78,8 +79,8 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("id_source_key must be a non-empty string")
         if not output_key:
             raise ValueError("output_key must be provided")
-        if result_mode != "summary":
-            raise ValueError("result_mode must be summary")
+        if result_mode not in ("summary", "object"):
+            raise ValueError("result_mode must be summary or object")
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
         if retry_attempts < 0:
@@ -141,9 +142,13 @@ class StateMetricCalculatorMapper(Mapper):
         try:
             self._get_ctx()
             output_sample = copy.deepcopy(sample)
-            output_sample[self.output_key] = self._build_summary_output(
-                self._calculate_metric_outputs(sample)
-            )
+            metric_outputs = self._calculate_metric_outputs(sample)
+            if self.result_mode == "summary":
+                output_sample[self.output_key] = self._build_summary_output(
+                    metric_outputs
+                )
+            else:
+                output_sample[self.output_key] = metric_outputs
         except Exception as exc:
             self._report_record_failure(
                 input_sample,

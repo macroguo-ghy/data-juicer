@@ -324,6 +324,42 @@ process:
         self.mock_callback.report_record_success.assert_called_once()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_object_result_mode_writes_intermediate_metric_object(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope(self._operator_details()))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[self._operators()[0]],
+            result_mode="object",
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "material_id": "1854168911595796",
+            "state": {
+                "101": 0.41,
+            },
+            "bench_roi": 0.5,
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"], {
+            "id": "1854168911595796",
+            "items": [
+                {
+                    "id": "1854168911595796",
+                    "metrics": [
+                        {
+                            "metricCode": "bench_roi_score",
+                            "metricName": "行业基准 ROI 得分",
+                            "output": "0.82",
+                            "error": "",
+                        },
+                    ],
+                },
+            ],
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_json_string_state_is_parsed_before_calculate(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
@@ -1291,7 +1327,7 @@ process:
         with self.assertRaisesRegex(ValueError, "result_mode"):
             StateMetricCalculatorMapper(
                 operators=self._operators(),
-                result_mode="object",
+                result_mode="invalid",
                 ctx=self._ctx(),
             )
         with self.assertRaisesRegex(ValueError, "fail_policy"):

@@ -40,7 +40,7 @@ process:
 | `state_key` | 否 | State 所在样本字段，默认 `state`。 |
 | `id_source_key` | 否 | 样本里的公共 ID 字段，支持逗号分隔多个 ID。 |
 | `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
-| `result_mode` | 否 | 当前只支持 `summary`，可省略；不要配置 `object`。 |
+| `result_mode` | 否 | 输出模式，支持 `summary` 和 `object`，默认 `summary`。 |
 | `start_date_key` | 否 | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 使用。 |
 | `end_date_key` | 否 | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 使用。 |
 | `operators` | 是 | 本次要执行的指标列表。 |
@@ -196,7 +196,7 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 ## 5. 输出格式
 
-`output_key` 字段写入的是 JSON 字符串，不是对象。下游需要先 `json.loads(...)`。
+`result_mode=summary` 时，`output_key` 字段写入的是 JSON 字符串。下游需要先 `json.loads(...)`。这是推荐模式，适合写 Lance/Magnus 表，schema 更稳定。
 
 示例输出：
 
@@ -265,14 +265,28 @@ Dataset Factory 里 metric 和 tool 是两条路径：metric 走指标注册和 
 7. 不把 `state`、`id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这些 runtime 注入参数写进 `inputParameter.params`，除非明确要覆盖注入行为。
 8. 如果指标依赖 `id_key`，确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
 9. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
-10. 下游读取 `query_metric_data_outputs` 时先 `json.loads`，不要按对象列读取。
+10. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`，不要按对象列读取。只有明确需要中间结构时才使用 `result_mode=object`。
 11. tool 不配置到 `state_metric_calculator.operators`。
 
 ## 8. 常见问题
 
-### 为什么我配置了 `result_mode: object` 会失败？
+### `result_mode` 应该配什么？
 
-当前算子只支持 Dataset Factory summary 字符串输出，所以 `result_mode` 必须是 `summary`。这个字段可以不配，默认就是 `summary`。
+默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`object` 也支持，会输出内部中间对象结构：
+
+```json
+{
+  "id": "123",
+  "items": [
+    {
+      "id": "123",
+      "metrics": []
+    }
+  ]
+}
+```
+
+`object` 模式的嵌套结构更复杂，写入 Lance/Magnus 时更容易遇到 schema 推断或跨 block 类型不稳定问题，因此生产写表场景优先用 `summary`。
 
 ### 为什么指标代码里拿不到 `start_date`？
 
