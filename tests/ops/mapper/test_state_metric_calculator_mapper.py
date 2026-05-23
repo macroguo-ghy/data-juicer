@@ -324,6 +324,226 @@ process:
         self.mock_callback.report_record_success.assert_called_once()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_object_result_mode_writes_summary_object(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope(self._operator_details()))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[self._operators()[0]],
+            result_mode="object",
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "material_id": "1854168911595796",
+            "state": {
+                "101": 0.41,
+            },
+            "bench_roi": 0.5,
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"], {
+            "1854168911595796": {
+                "metrics": [
+                    {
+                        "metricCode": "bench_roi_score",
+                        "metricName": "行业基准 ROI 得分",
+                        "output": "0.82",
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_summary_result_includes_tool_outputs(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "get_industry_creative_tips",
+                    "toolNameCn": "行业创意建议",
+                    "handlerType": "builtin",
+                    "handlerName": "get_industry_creative_tips",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(id_value):\n"
+                        "    return f'建议优化计划 {id_value} 的前三秒卖点'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            operators=[{"operator_id": 301, "parameter_mapping": {}}],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1234567890123456",
+            "state": {},
+        })
+
+        self.assertEqual(self._summary(result), {
+            "1234567890123456": {
+                "tools": [
+                    {
+                        "tool": "get_industry_creative_tips",
+                        "toolName": "行业创意建议",
+                        "output": "建议优化计划 1234567890123456 的前三秒卖点",
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_summary_success_only_outputs_df_success_fields(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 201,
+                    "operatorType": "metric",
+                    "operatorNameEn": "BidAdjustmentTimes",
+                    "operatorNameCn": "是否频繁调整出价",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(id_value):\n"
+                        "    return f'指标名称:是否频繁调整出价, 指标值：计划ID:{id_value}：否'\n"
+                    ),
+                },
+                {
+                    "id": 202,
+                    "operatorType": "metric",
+                    "operatorNameEn": "failed_metric",
+                    "operatorNameCn": "失败指标",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    raise ValueError('bad metric')\n",
+                },
+                {
+                    "id": 203,
+                    "operatorType": "metric",
+                    "operatorNameEn": "failed_output_metric",
+                    "operatorNameCn": "失败输出指标",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return '返回调用失败'\n",
+                },
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "customer_info_acquisition",
+                    "toolNameCn": "客户信息获取",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return \"{'adv_name':'焱焱香文化'}\"\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            summary_success_only=True,
+            operators=[
+                {"operator_id": 201, "parameter_mapping": {}},
+                {"operator_id": 202, "parameter_mapping": {}},
+                {"operator_id": 203, "parameter_mapping": {}},
+                {"operator_id": 301, "parameter_mapping": {}},
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1812218125331659",
+            "state": {},
+        })
+
+        self.assertEqual(self._summary(result), {
+            "1812218125331659": {
+                "metrics": [
+                    {
+                        "metricCode": "BidAdjustmentTimes",
+                        "metricName": "是否频繁调整出价",
+                        "output": (
+                            "指标名称:是否频繁调整出价, "
+                            "指标值：计划ID:1812218125331659：否"
+                        ),
+                    },
+                ],
+                "tools": [
+                    {
+                        "tool": "customer_info_acquisition",
+                        "output": "{'adv_name':'焱焱香文化'}",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_object_result_mode_includes_metrics_and_tools(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 201,
+                    "operatorType": "metric",
+                    "operatorNameEn": "AdOnlineMaterialsCount",
+                    "operatorNameCn": "在投素材数环比",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return f'metric:{id_value}'\n",
+                },
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "get_industry_creative_tips",
+                    "toolNameCn": "行业创意建议",
+                    "handlerType": "builtin",
+                    "handlerName": "get_industry_creative_tips",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return f'tool:{id_value}'\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            result_mode="object",
+            operators=[
+                {"operator_id": 201, "parameter_mapping": {}},
+                {"operator_id": 301, "parameter_mapping": {}},
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "123",
+            "state": {},
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"], {
+            "123": {
+                "metrics": [
+                    {
+                        "metricCode": "AdOnlineMaterialsCount",
+                        "metricName": "在投素材数环比",
+                        "output": "metric:123",
+                        "error": "",
+                    },
+                ],
+                "tools": [
+                    {
+                        "tool": "get_industry_creative_tips",
+                        "toolName": "行业创意建议",
+                        "output": "tool:123",
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_json_string_state_is_parsed_before_calculate(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
@@ -1291,7 +1511,7 @@ process:
         with self.assertRaisesRegex(ValueError, "result_mode"):
             StateMetricCalculatorMapper(
                 operators=self._operators(),
-                result_mode="object",
+                result_mode="invalid",
                 ctx=self._ctx(),
             )
         with self.assertRaisesRegex(ValueError, "fail_policy"):
@@ -1340,6 +1560,7 @@ process:
                 "end_date_key": None,
                 "output_format": "dataset_factory_summary",
                 "preserve_error": True,
+                "summary_success_only": False,
                 "runtime": "adc_operator_code",
                 "operators": self._operators(),
                 "repartition_num_blocks": None,

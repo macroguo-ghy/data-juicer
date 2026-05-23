@@ -22,6 +22,7 @@ process:
       id_source_key: issue_id
       output_key: query_metric_data_outputs
       result_mode: summary
+      summary_success_only: false
       start_date_key: "客户反馈的问题周期开始时间"
       end_date_key: "客户反馈的问题周期结束时间"
       operators:
@@ -40,7 +41,8 @@ process:
 | `state_key` | 否 | State 所在样本字段，默认 `state`。 |
 | `id_source_key` | 否 | 样本里的公共 ID 字段，支持逗号分隔多个 ID。 |
 | `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
-| `result_mode` | 否 | 当前只支持 `summary`，可省略；不要配置 `object`。 |
+| `result_mode` | 否 | 输出模式，支持 `summary` 和 `object`，默认 `summary`。 |
+| `summary_success_only` | 否 | 仅 `summary` 模式生效；默认 `false` 保留成功和失败结果，`true` 时只输出 DF 成功字段。 |
 | `start_date_key` | 否 | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 使用。 |
 | `end_date_key` | 否 | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 使用。 |
 | `operators` | 是 | 本次要执行的指标列表。 |
@@ -53,11 +55,12 @@ process:
 
 ## 3. 后端指标元数据
 
-接口返回的单个指标元数据建议保持下面的形态：
+接口返回的单个 metric 元数据建议保持下面的形态：
 
 ```json
 {
   "id": 201,
+  "operatorType": "metric",
   "operatorNameEn": "bench_roi_score",
   "operatorNameCn": "行业基准 ROI 得分",
   "inputParameter": "{\"params\":[{\"key_name_en\":\"bench_roi\",\"data_type\":\"placeholder\"},{\"key_name_en\":\"threshold\",\"data_type\":\"defaultValue\",\"default_or_placeholder_value\":0.8}]}",
@@ -65,15 +68,44 @@ process:
 }
 ```
 
-必需字段：
+接口返回的单个 tool 元数据建议保持下面的形态：
+
+```json
+{
+  "id": 301,
+  "operatorType": "tool",
+  "toolName": "get_industry_creative_tips",
+  "toolNameCn": "行业创意建议",
+  "inputParameter": "{\"params\":[]}",
+  "handlerType": "builtin",
+  "handlerName": "get_industry_creative_tips",
+  "operatorCode": "def calculate(state, id_value, helpers=None):\n    return f\"建议优化 {id_value} 的前三秒卖点\""
+}
+```
+
+通用必需字段：
 
 | 字段 | 用途 |
 | --- | --- |
 | `id` | 与 YAML 中的 `operator_id` 对应。 |
-| `operatorNameEn` | 输出里的 `metricCode`。缺失时会退化为 `operator_{operator_id}`。 |
-| `operatorNameCn` | 输出里的 `metricName`。 |
+| `operatorType` | `metric` 或 `tool`；缺失时按 `metric` 兼容。 |
 | `inputParameter` | JSON object 或 JSON 字符串，必须包含 `params` 数组。 |
 | `operatorCode` | 可信 Python 代码，必须提供入口函数 `calculate(...)`。 |
+
+metric 专用字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `operatorNameEn` | 输出里的 `metricCode`。缺失时会退化为 `operator_{operator_id}`。 |
+| `operatorNameCn` | 输出里的 `metricName`。 |
+
+tool 专用字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `toolName` | 输出里的 `tool`；缺失时依次退化为 `handlerName`、`operatorNameEn`、`operator_{operator_id}`。 |
+| `toolNameCn` | 输出里的 `toolName`。 |
+| `handlerType` / `handlerName` | 当前只作为元信息保留；执行仍以 `operatorCode.calculate(...)` 为准。 |
 
 `inputParameter.params` 中每一项至少要有：
 
@@ -196,7 +228,9 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 ## 5. 输出格式
 
-`output_key` 字段写入的是 JSON 字符串，不是对象。下游需要先 `json.loads(...)`。
+`result_mode=summary` 时，`output_key` 字段写入的是 JSON 字符串。下游需要先 `json.loads(...)`。这是推荐模式，适合写 Lance/Magnus 表，schema 更稳定。
+
+默认 `summary_success_only=false`，summary 会保留成功和失败结果，并保留 `error`、`toolName` 等扩展字段，方便排查。
 
 示例输出：
 
@@ -207,7 +241,7 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
       {
         "metricCode": "bench_roi_score",
         "metricName": "行业基准 ROI 得分",
-        "output": "\"0.82\"",
+        "output": "0.82",
         "error": ""
       },
       {
@@ -215,6 +249,14 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
         "metricName": "广告 CTR 得分",
         "output": "null",
         "error": "Unknown id: 1854751525764108"
+      }
+    ],
+    "tools": [
+      {
+        "tool": "get_industry_creative_tips",
+        "toolName": "行业创意建议",
+        "output": "建议优化计划前三秒卖点",
+        "error": ""
       }
     ]
   }
@@ -224,55 +266,108 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 输出约束：
 
 - 最外层 key 是当前 ID。
-- 每个 ID 下只有 `metrics` 数组。
+- 每个 ID 下可以有 `metrics` 和 `tools` 数组。
 - `metricCode`、`metricName`、`output`、`error` 都会稳定输出为字符串。
-- 单个指标失败不会中断整条样本，失败原因写入该指标的 `error`。
-- 如果没有可输出的指标结果，`output_key` 会是空字符串。
+- `tool`、`toolName`、`output`、`error` 也会稳定输出为字符串。
+- 单个 metric/tool 失败不会中断整条样本，失败原因写入对应结果的 `error`。
+- 如果没有可输出的 metric/tool 结果，`output_key` 会是空字符串。
+
+如果配置：
+
+```yaml
+summary_success_only: true
+```
+
+summary 会按 DF 最终输入格式只保留成功字段：
+
+- 过滤 `output` 为空的结果。
+- 过滤 `output` 包含 `返回调用失败` 的结果。
+- 过滤带 `error` 的结果。
+- metric 只输出 `metricCode`、`metricName`、`output`。
+- tool 只输出 `tool`、`output`。
+
+示例：
+
+```json
+{
+  "1812218125331659": {
+    "metrics": [
+      {
+        "metricCode": "BidAdjustmentTimes",
+        "metricName": "是否频繁调整出价",
+        "output": "指标名称:是否频繁调整出价, 指标值：计划ID:1834567890123456：否"
+      }
+    ],
+    "tools": [
+      {
+        "tool": "customer_info_acquisition",
+        "output": "{'adv_name':'焱焱香文化','account_type':80,'adv_id':'1812218125331659'}"
+      }
+    ]
+  }
+}
+```
 
 ## 6. metric 和 tool 怎么区分
 
-当前 `state_metric_calculator` 只支持 metric，不支持 tool。
+当前 `state_metric_calculator` 支持 `metric` 和 `tool` 两类元数据，通过 `operatorType` 区分：
 
-可以放进 `operators` 的，是满足下面条件的 metric：
+| `operatorType` | 执行方式 | 输出位置 |
+| --- | --- | --- |
+| `metric` 或缺失 | 执行 `operatorCode.calculate(...)` | `summary[id].metrics[]` |
+| `tool` | 执行 `operatorCode.calculate(...)` | `summary[id].tools[]` |
 
-- 后端能按 `operator_id` 返回指标元数据。
-- 元数据里有 `operatorCode`，并且能通过 `calculate(...)` 直接得到指标值。
+metric 和 tool 的共同要求：
+
+- 后端能按 `operator_id` 返回元数据。
+- 元数据里有 `operatorCode`，并且能通过 `calculate(...)` 直接得到输出。
 - 入参能通过公共上下文字段、`inputParameter.params`、`parameter_mapping`、State 或 runtime 注入参数解决。
-- 输出应该进入 Dataset Factory summary 风格的 `metrics` 数组。
 
-不要放进 `operators` 的，是 tool 或外部能力：
+注意：Data-Juicer 当前不会加载 Dataset Factory 的 `run_aux_tools` / `get_tool_handler` 注册表，也不会因为 `handlerType=builtin` 自动调用 DF builtin handler。`handlerType` 和 `handlerName` 只是元信息；真正执行逻辑必须写在 `operatorCode.calculate(...)` 里。
 
-- 需要走单独工具 handler，而不是 `calculate(...)`。
-- 需要构造自定义 HTTP 请求、RPC 请求或额外认证。
-- 有副作用，例如写外部系统、触发任务、生成文件。
-- 输出不应该进入 `metrics`，而应该进入类似 `tools` 或其他独立结构。
-- 依赖 Dataset Factory 中 `run_aux_tools` / `get_tool_handler` 这类 tool 路径。
-
-Dataset Factory 里 metric 和 tool 是两条路径：metric 走指标注册和 `query_metric_data`，tool 走 tool handler。Data-Juicer 当前只对齐 metric summary 输出和公共计算辅助能力，没有把 Dataset Factory 的 tool handler 迁移进来。
-
-如果后续要支持 tool，建议由后端元数据显式区分 `operatorType: metric|tool`，再新增独立 tool 算子或显式 opt-in 模式。不要在当前 `state_metric_calculator.operators` 中混配 tool。
+如果某个 tool 必须调用外部服务，也应该在 `operatorCode.calculate(...)` 中完成，或后续再新增明确的后端 tool 执行接口；不要依赖 DF 工程里的 import 路径。
 
 ## 7. 配置检查清单
 
 上线或联调前按下面顺序检查：
 
 1. 后端指标元数据存在，`id` 和 YAML 的 `operator_id` 一致。
-2. `operatorNameEn` 和 `operatorNameCn` 已配置，便于下游识别 `metricCode` 和 `metricName`。
-3. `inputParameter` 是合法 JSON object 或 JSON 字符串，且 `params` 是数组。
-4. 每个 `calculate(...)` 普通业务参数都能在 `inputParameter.params` 找到。
-5. YAML 配置了公共上下文字段：`state_key`、`id_source_key`、`start_date_key`、`end_date_key`。
-6. 每个业务 `placeholder` 参数都在 YAML `parameter_mapping` 中映射到了真实样本字段。
-7. 不把 `state`、`id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这些 runtime 注入参数写进 `inputParameter.params`，除非明确要覆盖注入行为。
-8. 如果指标依赖 `id_key`，确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
-9. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
-10. 下游读取 `query_metric_data_outputs` 时先 `json.loads`，不要按对象列读取。
-11. tool 不配置到 `state_metric_calculator.operators`。
+2. `operatorType` 配置为 `metric` 或 `tool`；老 metric 元数据可以暂时不填，缺失时按 `metric` 兼容。
+3. metric 配置 `operatorNameEn` 和 `operatorNameCn`，便于下游识别 `metricCode` 和 `metricName`。
+4. tool 配置 `toolName` 和 `toolNameCn`，便于下游识别工具结果。
+5. `inputParameter` 是合法 JSON object 或 JSON 字符串，且 `params` 是数组。
+6. 每个 `calculate(...)` 普通业务参数都能在 `inputParameter.params` 找到。
+7. YAML 配置了公共上下文字段：`state_key`、`id_source_key`、`start_date_key`、`end_date_key`。
+8. 每个业务 `placeholder` 参数都在 YAML `parameter_mapping` 中映射到了真实样本字段。
+9. 不把 `state`、`id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这些 runtime 注入参数写进 `inputParameter.params`，除非明确要覆盖注入行为。
+10. 如果 metric/tool 依赖 `id_key`，确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
+11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
+12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
 
 ## 8. 常见问题
 
-### 为什么我配置了 `result_mode: object` 会失败？
+### `result_mode` 应该配什么？
 
-当前算子只支持 Dataset Factory summary 字符串输出，所以 `result_mode` 必须是 `summary`。这个字段可以不配，默认就是 `summary`。
+默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`object` 也支持，会输出同一套 summary 的对象形态。两者结构一致，只差一次 JSON 序列化。
+
+`summary` 模式输出字符串：
+
+```json
+"{\"123\":{\"metrics\":[],\"tools\":[]}}"
+```
+
+`object` 模式输出对象：
+
+```json
+{
+  "123": {
+    "metrics": [],
+    "tools": []
+  }
+}
+```
+
+生产写表场景仍优先用 `summary`，因为字符串列的 schema 最稳定；`object` 更适合本地调试或不需要写复杂嵌套表结构的场景。
 
 ### 为什么指标代码里拿不到 `start_date`？
 

@@ -48,6 +48,7 @@ class StateMetricCalculatorMapper(Mapper):
         end_date_key: str | None = None,
         timeout: float = 30.0,
         retry_attempts: int = 3,
+        summary_success_only: bool = False,
         *args,
         repartition_num_blocks: int | None = None,
         **kwargs,
@@ -58,7 +59,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param state_key: sample field containing the State object.
         :param id_source_key: optional common sample field containing metric item IDs.
         :param output_key: sample field used to store metric outputs.
-        :param result_mode: supports Dataset Factory summary string output only.
+        :param result_mode: ``summary`` for Dataset Factory summary string output,
+            or ``object`` for the intermediate object output.
         :param fail_policy: first version supports ``continue`` only.
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
@@ -66,6 +68,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param end_date_key: optional sample field containing metric end date.
         :param timeout: HTTP timeout in seconds.
         :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
+        :param summary_success_only: when true, summary output keeps only
+            successful DF-compatible fields.
         :param repartition_num_blocks: Ray Dataset block count before metric calculation.
             None means num_proc * 4 when num_proc is positive.
         :param args: extra args.
@@ -78,8 +82,8 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("id_source_key must be a non-empty string")
         if not output_key:
             raise ValueError("output_key must be provided")
-        if result_mode != "summary":
-            raise ValueError("result_mode must be summary")
+        if result_mode not in ("summary", "object"):
+            raise ValueError("result_mode must be summary or object")
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
         if retry_attempts < 0:
@@ -101,6 +105,7 @@ class StateMetricCalculatorMapper(Mapper):
         self.end_date_key = end_date_key
         self.timeout = timeout
         self.retry_attempts = retry_attempts
+        self.summary_success_only = summary_success_only
         self.repartition_num_blocks = repartition_num_blocks
         self._operator_details: dict[int, dict[str, Any]] | None = None
         self._operator_details_error: str | None = None
@@ -141,9 +146,17 @@ class StateMetricCalculatorMapper(Mapper):
         try:
             self._get_ctx()
             output_sample = copy.deepcopy(sample)
-            output_sample[self.output_key] = self._build_summary_output(
-                self._calculate_metric_outputs(sample)
-            )
+            metric_outputs = self._calculate_metric_outputs(sample)
+            if self.result_mode == "summary":
+                output_sample[self.output_key] = self._build_summary_output(
+                    metric_outputs,
+                    success_only=self.summary_success_only,
+                )
+            else:
+                output_sample[self.output_key] = self._build_summary_object(
+                    metric_outputs,
+                    success_only=self.summary_success_only,
+                )
         except Exception as exc:
             self._report_record_failure(
                 input_sample,
@@ -189,6 +202,7 @@ class StateMetricCalculatorMapper(Mapper):
         items = []
         for item_id in item_ids:
             metrics = []
+            tools = []
             current_id_key = detect_id_key(state_data, item_id)
             for operator_config in self.operators:
                 operator_id = operator_config["operator_id"]
@@ -198,54 +212,129 @@ class StateMetricCalculatorMapper(Mapper):
                         raise ValueError(self._operator_details_error)
                     if detail is None:
                         raise ValueError(f"operator detail not found: {operator_id}")
-                    metrics.append(self._calculate_one_metric(
-                        sample,
-                        operator_config,
-                        detail,
-                        current_id=item_id,
-                        id_source_field=id_source_field,
-                        state_data=state_data,
-                        state_present=state_present,
-                        id_key=current_id_key,
-                        helpers=helpers,
-                    ))
+                    operator_type = self._operator_type(detail)
+                    if operator_type == "tool":
+                        tools.append(self._calculate_one_tool(
+                            sample,
+                            operator_config,
+                            detail,
+                            current_id=item_id,
+                            id_source_field=id_source_field,
+                            state_data=state_data,
+                            state_present=state_present,
+                            id_key=current_id_key,
+                            helpers=helpers,
+                        ))
+                    else:
+                        metrics.append(self._calculate_one_metric(
+                            sample,
+                            operator_config,
+                            detail,
+                            current_id=item_id,
+                            id_source_field=id_source_field,
+                            state_data=state_data,
+                            state_present=state_present,
+                            id_key=current_id_key,
+                            helpers=helpers,
+                        ))
                 except Exception as exc:
-                    metrics.append(self._metric_failure_result(
-                        operator_id,
-                        detail,
-                        str(exc),
-                    ))
-            items.append({
+                    if self._is_tool_detail(detail):
+                        tools.append(self._tool_failure_result(
+                            operator_id,
+                            detail,
+                            str(exc),
+                        ))
+                    else:
+                        metrics.append(self._metric_failure_result(
+                            operator_id,
+                            detail,
+                            str(exc),
+                        ))
+            item = {
                 "id": item_id,
-                "metrics": metrics,
-            })
+            }
+            if metrics:
+                item["metrics"] = metrics
+            if tools:
+                item["tools"] = tools
+            items.append(item)
         return {
             "id": output_id,
             "items": items,
         }
 
     @staticmethod
-    def _build_summary_output(metric_outputs: dict[str, Any]) -> str:
+    def _build_summary_output(
+        metric_outputs: dict[str, Any],
+        success_only: bool = False,
+    ) -> str:
+        summary = StateMetricCalculatorMapper._build_summary_object(
+            metric_outputs,
+            success_only=success_only,
+        )
+        return json.dumps(summary, ensure_ascii=False) if summary else ""
+
+    @staticmethod
+    def _build_summary_object(
+        metric_outputs: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, Any]:
         summary = {}
         for item in metric_outputs.get("items", []) or []:
             if not isinstance(item, dict):
                 continue
             item_id = str(item.get("id") or "")
             metrics = item.get("metrics")
-            if not item_id or not isinstance(metrics, list) or not metrics:
+            tools = item.get("tools")
+            has_metrics = isinstance(metrics, list) and bool(metrics)
+            has_tools = isinstance(tools, list) and bool(tools)
+            if not item_id or (not has_metrics and not has_tools):
                 continue
-            summary[item_id] = {
-                "metrics": [
-                    StateMetricCalculatorMapper._normalize_summary_metric(metric)
+            payload = {}
+            if has_metrics:
+                metrics_out = [
+                    StateMetricCalculatorMapper._normalize_summary_metric(
+                        metric,
+                        success_only=success_only,
+                    )
                     for metric in metrics
-                    if isinstance(metric, dict)
+                    if (
+                        isinstance(metric, dict)
+                        and (
+                            not success_only
+                            or StateMetricCalculatorMapper._is_success_summary_item(metric)
+                        )
+                    )
                 ]
-            }
-        return json.dumps(summary, ensure_ascii=False) if summary else ""
+                if metrics_out:
+                    payload["metrics"] = metrics_out
+            if has_tools:
+                tools_out = [
+                    StateMetricCalculatorMapper._normalize_summary_tool(
+                        tool,
+                        success_only=success_only,
+                    )
+                    for tool in tools
+                    if (
+                        isinstance(tool, dict)
+                        and (
+                            not success_only
+                            or StateMetricCalculatorMapper._is_success_summary_item(tool)
+                        )
+                    )
+                ]
+                if tools_out:
+                    payload["tools"] = tools_out
+            if payload:
+                summary[item_id] = payload
+        return summary
 
     @staticmethod
-    def _normalize_summary_metric(metric: dict[str, Any]) -> dict[str, str]:
-        return {
+    def _normalize_summary_metric(
+        metric: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, str]:
+        result = {
             "metricCode": str(metric.get("metricCode") or ""),
             "metricName": str(metric.get("metricName") or ""),
             "output": str(
@@ -253,8 +342,40 @@ class StateMetricCalculatorMapper(Mapper):
                 if metric.get("output") is not None
                 else "null"
             ),
-            "error": str(metric.get("error") or ""),
         }
+        if not success_only:
+            result["error"] = str(metric.get("error") or "")
+        return result
+
+    @staticmethod
+    def _normalize_summary_tool(
+        tool: dict[str, Any],
+        success_only: bool = False,
+    ) -> dict[str, str]:
+        result = {
+            "tool": str(tool.get("tool") or ""),
+            "output": str(
+                tool.get("output")
+                if tool.get("output") is not None
+                else "null"
+            ),
+        }
+        if not success_only:
+            result["toolName"] = str(tool.get("toolName") or "")
+            result["error"] = str(tool.get("error") or "")
+        return result
+
+    @staticmethod
+    def _is_success_summary_item(item: dict[str, Any]) -> bool:
+        output = item.get("output")
+        if output is None:
+            return False
+        output_text = str(output)
+        return (
+            bool(output_text.strip())
+            and "返回调用失败" not in output_text
+            and not item.get("error")
+        )
 
     def _validate_state_key_when_all_metrics_depend_on_state(
         self,
@@ -316,6 +437,41 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "metricCode": self._result_key(detail, operator_id),
             "metricName": detail.get("operatorNameCn") or "",
+            "output": self._stringify_metric_output(value),
+            "error": "",
+        }
+
+    def _calculate_one_tool(
+        self,
+        sample: dict[str, Any],
+        operator_config: dict[str, Any],
+        detail: dict[str, Any],
+        current_id: str | None = None,
+        id_source_field: str | None = None,
+        state_data: Any = None,
+        state_present: bool = False,
+        id_key: str | None = None,
+        helpers: MetricHelpers | None = None,
+    ) -> dict[str, Any]:
+        operator_id = int(detail["id"])
+        parameters = self._parse_input_parameters(detail)
+        runner = self._get_calculate_runner(operator_id, detail)
+        args = self._resolve_calculate_args(
+            sample,
+            operator_config,
+            parameters,
+            inspect.signature(runner.process_func),
+            current_id=current_id,
+            id_source_field=id_source_field,
+            state_data=state_data,
+            state_present=state_present,
+            id_key=id_key,
+            helpers=helpers,
+        )
+        value = runner.run_with_args(*args)
+        return {
+            "tool": self._tool_key(detail, operator_id),
+            "toolName": detail.get("toolNameCn") or "",
             "output": self._stringify_metric_output(value),
             "error": "",
         }
@@ -680,6 +836,7 @@ class StateMetricCalculatorMapper(Mapper):
             "end_date_key": self.end_date_key,
             "output_format": "dataset_factory_summary",
             "preserve_error": True,
+            "summary_success_only": self.summary_success_only,
             "runtime": "adc_operator_code",
             "operators": copy.deepcopy(self.operators),
             "repartition_num_blocks": self.repartition_num_blocks,
@@ -744,6 +901,30 @@ class StateMetricCalculatorMapper(Mapper):
         return f"operator_{operator_id}"
 
     @staticmethod
+    def _operator_type(detail: dict[str, Any] | None) -> str:
+        if not isinstance(detail, dict):
+            return "metric"
+        operator_type = str(detail.get("operatorType") or "metric").strip().lower()
+        if operator_type not in ("metric", "tool"):
+            raise ValueError(f"unsupported operatorType: {operator_type}")
+        return operator_type
+
+    @staticmethod
+    def _is_tool_detail(detail: dict[str, Any] | None) -> bool:
+        return (
+            isinstance(detail, dict)
+            and str(detail.get("operatorType") or "").strip().lower() == "tool"
+        )
+
+    @staticmethod
+    def _tool_key(detail: dict[str, Any] | None, operator_id: int) -> str:
+        if isinstance(detail, dict):
+            for key in ("toolName", "handlerName", "operatorNameEn"):
+                if detail.get(key):
+                    return str(detail[key])
+        return f"operator_{operator_id}"
+
+    @staticmethod
     def _metric_failure_result(
         operator_id: int,
         detail: dict[str, Any] | None,
@@ -752,6 +933,19 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "metricCode": StateMetricCalculatorMapper._result_key(detail, operator_id),
             "metricName": detail.get("operatorNameCn") if isinstance(detail, dict) else "",
+            "output": StateMetricCalculatorMapper._stringify_metric_output(None),
+            "error": error,
+        }
+
+    @staticmethod
+    def _tool_failure_result(
+        operator_id: int,
+        detail: dict[str, Any] | None,
+        error: str,
+    ) -> dict[str, Any]:
+        return {
+            "tool": StateMetricCalculatorMapper._tool_key(detail, operator_id),
+            "toolName": detail.get("toolNameCn") if isinstance(detail, dict) else "",
             "output": StateMetricCalculatorMapper._stringify_metric_output(None),
             "error": error,
         }
