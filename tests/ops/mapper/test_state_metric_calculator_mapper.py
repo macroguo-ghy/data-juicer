@@ -360,6 +360,117 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_summary_result_includes_tool_outputs(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "get_industry_creative_tips",
+                    "toolNameCn": "行业创意建议",
+                    "handlerType": "builtin",
+                    "handlerName": "get_industry_creative_tips",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(id_value):\n"
+                        "    return f'建议优化计划 {id_value} 的前三秒卖点'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            operators=[{"operator_id": 301, "parameter_mapping": {}}],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1234567890123456",
+            "state": {},
+        })
+
+        self.assertEqual(self._summary(result), {
+            "1234567890123456": {
+                "tools": [
+                    {
+                        "tool": "get_industry_creative_tips",
+                        "toolName": "行业创意建议",
+                        "output": "建议优化计划 1234567890123456 的前三秒卖点",
+                        "error": "",
+                    },
+                ],
+            },
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_object_result_mode_includes_metrics_and_tools(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 201,
+                    "operatorType": "metric",
+                    "operatorNameEn": "AdOnlineMaterialsCount",
+                    "operatorNameCn": "在投素材数环比",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return f'metric:{id_value}'\n",
+                },
+                {
+                    "id": 301,
+                    "operatorType": "tool",
+                    "toolName": "get_industry_creative_tips",
+                    "toolNameCn": "行业创意建议",
+                    "handlerType": "builtin",
+                    "handlerName": "get_industry_creative_tips",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": "def calculate(id_value):\n    return f'tool:{id_value}'\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            result_mode="object",
+            operators=[
+                {"operator_id": 201, "parameter_mapping": {}},
+                {"operator_id": 301, "parameter_mapping": {}},
+            ],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "123",
+            "state": {},
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"], {
+            "id": "123",
+            "items": [
+                {
+                    "id": "123",
+                    "metrics": [
+                        {
+                            "metricCode": "AdOnlineMaterialsCount",
+                            "metricName": "在投素材数环比",
+                            "output": "metric:123",
+                            "error": "",
+                        },
+                    ],
+                    "tools": [
+                        {
+                            "tool": "get_industry_creative_tips",
+                            "toolName": "行业创意建议",
+                            "output": "tool:123",
+                            "error": "",
+                        },
+                    ],
+                },
+            ],
+        })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_json_string_state_is_parsed_before_calculate(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
