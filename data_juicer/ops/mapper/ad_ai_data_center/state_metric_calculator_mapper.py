@@ -176,8 +176,6 @@ class StateMetricCalculatorMapper(Mapper):
         self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
         state_present = self._has_state_value(sample)
         state_data = self._resolve_state_value(sample) if state_present else {}
-        start_date = self._resolve_date_value(sample, self.start_date_key)
-        end_date = self._resolve_date_value(sample, self.end_date_key)
         helpers = MetricHelpers()
         output_id, item_ids, id_source_field = self._resolve_output_items(
             sample,
@@ -204,8 +202,6 @@ class StateMetricCalculatorMapper(Mapper):
                         state_data=state_data,
                         state_present=state_present,
                         id_key=current_id_key,
-                        start_date=start_date,
-                        end_date=end_date,
                         helpers=helpers,
                     ))
                 except Exception as exc:
@@ -294,8 +290,6 @@ class StateMetricCalculatorMapper(Mapper):
         state_data: Any = None,
         state_present: bool = False,
         id_key: str | None = None,
-        start_date: datetime.date | None = None,
-        end_date: datetime.date | None = None,
         helpers: MetricHelpers | None = None,
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
@@ -311,8 +305,6 @@ class StateMetricCalculatorMapper(Mapper):
             state_data=state_data,
             state_present=state_present,
             id_key=id_key,
-            start_date=start_date,
-            end_date=end_date,
             helpers=helpers,
         )
         value = runner.run_with_args(*args)
@@ -334,8 +326,6 @@ class StateMetricCalculatorMapper(Mapper):
         state_data: Any = None,
         state_present: bool = False,
         id_key: str | None = None,
-        start_date: datetime.date | None = None,
-        end_date: datetime.date | None = None,
         helpers: MetricHelpers | None = None,
     ) -> list[Any]:
         parameters_by_name = {
@@ -359,16 +349,6 @@ class StateMetricCalculatorMapper(Mapper):
                     if state_present
                     else self._resolve_state_value(sample)
                 )
-            elif name == "id_key":
-                args.append(id_key)
-            elif name == "id_value":
-                args.append(current_id)
-            elif name == "start_date":
-                args.append(start_date)
-            elif name == "end_date":
-                args.append(end_date)
-            elif name == "helpers":
-                args.append(helpers or MetricHelpers())
             elif name in parameters_by_name:
                 args.append(
                     self._resolve_parameter_value(
@@ -379,6 +359,22 @@ class StateMetricCalculatorMapper(Mapper):
                         id_source_field=id_source_field,
                     )
                 )
+            elif name == "id_key":
+                if id_key is None:
+                    raise ValueError(f"Unknown id: {current_id}")
+                args.append(id_key)
+            elif name == "id_value":
+                args.append(current_id)
+            elif name == "start_date":
+                args.append(
+                    self._resolve_date_value(sample, self.start_date_key)
+                )
+            elif name == "end_date":
+                args.append(
+                    self._resolve_date_value(sample, self.end_date_key)
+                )
+            elif name == "helpers":
+                args.append(helpers or MetricHelpers())
             elif func_parameter.default is not inspect.Parameter.empty:
                 args.append(func_parameter.default)
             else:
