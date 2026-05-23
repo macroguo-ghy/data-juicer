@@ -4,7 +4,7 @@
 
 **目标:** 扩展 `StateMetricCalculatorMapper`，让 Data-Juicer 的指标计算算子具备 Dataset Factory 阶段 4 指标计算流程里的关键能力，同时保留当前“从 ADC 接口获取指标元信息和计算口径”的架构。
 
-**架构:** `StateMetricCalculatorMapper` 仍然是唯一算子入口，指标元信息仍然从 `/openapi/state-meta/operators/batch-get` 获取，不迁移 Dataset Factory 的本地 registry。新增一层本地共享 runtime/helper，负责 id 提取、`id_key` 识别、公共数学函数、计算上下文注入和可选 summary 输出；具体指标计算口径仍由接口返回的 `operatorCode` 中的 `calculate(...)` 执行。
+**架构:** `StateMetricCalculatorMapper` 仍然是唯一算子入口，指标元信息仍然从 `/openapi/state-meta/operators/batch-get` 获取，不迁移 Dataset Factory 的本地 registry。新增一层本地共享 runtime/helper，负责 id 提取、`id_key` 识别、公共数学函数、计算上下文注入和 Dataset Factory summary 风格输出；具体指标计算口径仍由接口返回的 `operatorCode` 中的 `calculate(...)` 执行。公共方法抽取必须以 Dataset Factory 真实代码为依据，文档只作为导航。
 
 **关键假设与前置确认:** 后端 operator detail payload 必须继续提供 `id`、`operatorNameEn`、`operatorNameCn`、`operatorCode`、`inputParameter.params` 等字段；实现前先用现有 mock 或真实接口样例确认字段含义。所有新增输出必须保持 Ray/PyArrow schema 稳定，尤其是嵌套 `metrics.output` 和 `metrics.error` 必须始终是字符串。不能把 Dataset Factory 的指标实现硬复制进 Data-Juicer，Data-Juicer 只维护公共运行时能力和公共数学方法。
 
@@ -41,8 +41,41 @@ Dataset Factory 阶段 4 的完整流程是：
 - 没有公共 `id_key` 识别层，指标代码无法统一知道当前 id 是 `ad_id` 还是 `adv_id`。
 - 没有一套 Data-Juicer 内部维护的公共数学函数和公共工具函数。
 - `calculate(...)` 只能靠普通参数映射拿数据，缺少 `id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这类公共上下文。
-- 没有 Dataset Factory 风格的 summary JSON 字符串输出。
+- 输出结构还没有对齐 Dataset Factory 的按 id 分组 summary；同时我们还需要在失败项中保留 `error` 字段，不能像 Dataset Factory summary 那样只收集成功输出。
 - Dataset Factory 的其他工具执行链路和指标计算不同，本计划暂不纳入。
+
+## 真实源码参考边界
+
+本计划抽取公共方法时必须参考 Dataset Factory summary 工程里的真实代码，而不是只按说明文档重写。实施前先打开并核对这些路径：
+
+- `/Users/bytedance/develop/dataset_factory/core/metric_runner.py`
+  - 参考 `extract_numeric_ids(...)`、`run_metrics(...)`、`run_aux_tools(...)` 和 `serialize_run_results(...)`。
+  - 这里体现了 sample 级入口、数字 id 抽取、metric/tool 两条执行路径，以及 summary 序列化方式。
+- `/Users/bytedance/develop/dataset_factory/app.py`
+  - 参考阶段 4 中 `metrics_by_id`、`tools_by_id`、`summary_map` 的构造逻辑。
+  - 这里体现了最终写入 Dataset Factory summary 字段的是按 id 聚合后的 JSON 字符串；Dataset Factory 默认只收集成功结果，而 Data-Juicer 本次需要保留失败 metric 的 `error`。
+- `/Users/bytedance/develop/dataset_factory/tool_handlers/query_metric_data.py`
+  - 参考 `parse_id_list(...)`、`detect_id_keys(...)`、`query_metric_data(...)`。
+  - 这里体现了 metric 入口如何识别 `id_key`、校验日期、按 `metricCode` 路由具体 handler。
+- `/Users/bytedance/develop/dataset_factory/tool_handlers/query_metrics/`
+  - 只参考具体指标 handler 的函数签名、返回值风格、公共 helper 使用方式。
+  - 不复制 `registry.py` 的指标清单，也不把 Dataset Factory 的具体业务指标实现迁移到 Data-Juicer。
+- `/Users/bytedance/develop/dataset_factory/utils/math.py`
+  - 参考公共数学函数的语义和边界条件，迁移为 Data-Juicer 自己维护的 helper。
+
+Dataset Factory 里 metric 和 tool 是两条路径：
+
+- metric 路径：`run_metrics -> query_metric_data -> detect_id_keys -> metric registry -> metric handler`。
+- tool 路径：`run_aux_tools -> get_tool_handler(tool_name) -> _build_aux_tool_input -> tool handler`。
+
+Data-Juicer 本次只参考这两条路径的职责拆分，不照搬 Dataset Factory 的 registry/tool handler 机制。我们的指标计算仍以 ADC 元数据为准：
+
+- 指标列表来自 `operators` / `operator_id`。
+- 指标名称来自 `operatorNameEn` / `operatorNameCn`。
+- 指标计算口径来自 `operatorCode` 中的 `calculate(...)`。
+- 参数声明来自 `inputParameter.params`，并结合 `parameter_mapping` 取样本字段。
+
+辅助 tool 不要混进本次 metric 执行链路。后续如果要支持 tool，需要后端元数据显式区分 metric/tool，或新建独立 tool 算子；不能仅因为 Dataset Factory 有 `run_aux_tools(...)` 就把 tool 逻辑塞进 `StateMetricCalculatorMapper`。
 
 ## 目标行为
 
@@ -67,15 +100,16 @@ def calculate(state, ids, id_key, start_date=None, end_date=None, helpers=None):
 - 函数名仍然只能是 `calculate`。
 - 现有 `state`、`inputParameter.params`、`parameter_mapping` 行为不变。
 - 新能力通过“保留参数名”按需注入，不要求所有指标都改代码。
-- 默认输出结构不变；Dataset Factory summary 作为可选输出字段。
+- 输出要对齐 Dataset Factory summary：`output_key` 写入按 id 分组的 summary JSON 字符串。
+- 与 Dataset Factory 的差异是：失败指标也要进入对应 id 的 `metrics` 列表，并保留 `error` 字段，便于下游排查。
 
 ## 不做的事情
 
-- 不复制 Dataset Factory 的 `query_metrics` registry 到 Data-Juicer。
+- 不复制 Dataset Factory 的 `query_metrics` registry 或 tool handler 机制到 Data-Juicer。
 - 不在 Data-Juicer 中维护具体业务指标列表。
-- 不实现 `get_industry_creative_tips` 等辅助工具。
+- 不实现 `get_industry_creative_tips` 等辅助工具；tool 支持需要单独元数据模型或单独算子设计。
 - 不改变指标元信息从 ADC 接口获取的事实。
-- 不默认替换当前 `query_metric_data_outputs` 的对象结构。
+- 不保留当前 `{"id": "...", "items": [...]}` 作为最终默认输出结构；如需调试，可在内部 helper 或临时变量中保留中间结构。
 
 ---
 
@@ -87,7 +121,7 @@ def calculate(state, ids, id_key, start_date=None, end_date=None, helpers=None):
 
 **Step 1: 写失败测试**
 
-覆盖 Dataset Factory 中 id 提取和 `id_key` 判断的核心行为：
+覆盖 Dataset Factory 中 id 提取和 `id_key` 判断的核心行为。测试预期要先对照 `/Users/bytedance/develop/dataset_factory/core/metric_runner.py` 的 `extract_numeric_ids(...)` 和 `/Users/bytedance/develop/dataset_factory/tool_handlers/query_metric_data.py` 的 `detect_id_keys(...)`：
 
 ```python
 def test_extract_metric_ids_deduplicates_numeric_fragments():
@@ -120,6 +154,13 @@ def test_detect_id_key_supports_adv_meta_data_fallback():
 预期：模块或函数不存在，测试失败。
 
 **Step 3: 实现最小 helper**
+
+实现前先在本地打开并核对：
+
+```bash
+sed -n '1,140p' /Users/bytedance/develop/dataset_factory/core/metric_runner.py
+sed -n '1,180p' /Users/bytedance/develop/dataset_factory/tool_handlers/query_metric_data.py
+```
 
 在 `state_metric_runtime.py` 中实现：
 
@@ -195,7 +236,7 @@ def test_helpers_calc_sequential_stats_integer():
 
 **Step 3: 实现 `MetricHelpers`**
 
-从 Dataset Factory `utils/math.py` 迁移纯函数语义，作为 Data-Juicer 自己维护的 helper，不运行时 import Dataset Factory。
+从 Dataset Factory `/Users/bytedance/develop/dataset_factory/utils/math.py` 迁移纯函数语义，作为 Data-Juicer 自己维护的 helper，不运行时 import Dataset Factory。
 
 首批方法：
 
@@ -219,6 +260,7 @@ def test_helpers_calc_sequential_stats_integer():
 - 纯 Python 标准库实现。
 - 不依赖外部服务。
 - 不改变 Dataset Factory 的口径，除非发现明确 bug 并单独记录。
+- 每个 helper 的边界行为至少要有一条测试能对应到 Dataset Factory 真实函数语义，不能只覆盖 happy path。
 
 **Step 4: 跑测试确认通过**
 
@@ -300,6 +342,12 @@ def calculate(state, ids, id_key, id_value, start_date=None, end_date=None, help
   - `helpers`
 - `helpers` 注入 `MetricHelpers()` 实例。
 
+设计约束：
+
+- `id_key`、`id_value`、`start_date`、`end_date`、`helpers` 是 Data-Juicer runtime 注入的保留参数，不要求后端 `inputParameter.params` 显式声明。
+- 其他业务参数仍由后端 `inputParameter.params` 和 `parameter_mapping` 驱动。
+- 不引入 Dataset Factory 的 metric registry。路由关系仍然是 ADC 返回的 `operators` 顺序和每个 operator detail 自带的 `operatorCode`。
+
 保持现有规则：
 
 - `state` 参数仍从 `state_key` 取。
@@ -336,7 +384,7 @@ git commit -m "add state metric calculation context"
 
 **Step 1: 写失败测试**
 
-当前算子主要按逗号拆分字符串。新增 mixed string 用例：
+当前算子主要按逗号拆分字符串。新增 mixed string 用例；预期行为以 `/Users/bytedance/develop/dataset_factory/core/metric_runner.py` 的 `extract_numeric_ids(...)` 为准：
 
 ```python
 def test_output_items_extract_numeric_ids_from_mixed_issue_id(...):
@@ -392,7 +440,7 @@ git commit -m "align state metric id extraction"
 
 ---
 
-### Task 5: 增加可选 Dataset Factory summary 输出
+### Task 5: 将默认输出对齐 Dataset Factory summary 并保留 error
 
 **文件:**
 - 修改: `data_juicer/ops/mapper/ad_ai_data_center/state_metric_calculator_mapper.py`
@@ -400,42 +448,47 @@ git commit -m "align state metric id extraction"
 
 **Step 1: 写失败测试**
 
-新增配置：
+`output_key` 对应字段应直接写入 Dataset Factory summary 风格的 JSON 字符串。成功和失败指标都要保留，其中失败指标保留 `error` 字段：
 
 ```python
-summary_output_key: str | None = None
-```
-
-当配置该字段时，算子同时写：
-
-- 现有 `output_key` 对象输出。
-- 新的 `summary_output_key` 字符串输出。
-
-测试预期：
-
-```python
-json.loads(result["metric_summary"]) == {
+json.loads(result["query_metric_data_outputs"]) == {
     "123": {
         "metrics": [
-            {"metricCode": "...", "metricName": "...", "output": "..."}
+            {
+                "metricCode": "metric_ok",
+                "metricName": "成功指标",
+                "output": "成功输出",
+                "error": "",
+            },
+            {
+                "metricCode": "metric_failed",
+                "metricName": "失败指标",
+                "output": "null",
+                "error": "missing required parameter: bench_roi",
+            },
         ]
     }
 }
 ```
 
-失败指标不进入 summary：
+对齐规则：
 
-- `error` 非空的 metric 跳过。
-- `output` 为空的 metric 跳过。
-- `output` 包含 `返回调用失败` 的 metric 跳过。
+- 顶层 key 是每个 item id。
+- 每个 id 下保留 `metrics` 列表。
+- 每个 metric 至少保留 `metricCode`、`metricName`、`output`、`error`。
+- 成功 metric 的 `error` 是空字符串。
+- 失败 metric 的 `output` 是 `"null"`，`error` 是具体错误信息。
+- 没有任何 metric 时返回空字符串 `""`。
+- 当前不写 `tools`，因为辅助工具不在本次范围内。
+- 如果后端未来返回 tool 类型元数据，需要先新增显式 `operator_type` / `tool_type` 这类区分字段，不能复用当前 metric summary 的隐式结构。
 
 **Step 2: 跑测试确认失败**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_summary_output_key_writes_dataset_factory_summary
+./.venv/bin/python -m unittest tests.ops.mapper.test_state_metric_calculator_mapper.StateMetricCalculatorMapperTest.test_output_key_writes_dataset_factory_summary_with_errors
 ```
 
-预期：构造函数不接受 `summary_output_key` 或输出字段缺失。
+预期：当前 `output_key` 仍然写对象结构，不是 summary JSON 字符串。
 
 **Step 3: 实现 summary builder**
 
@@ -450,10 +503,12 @@ def _build_summary_output(metric_outputs: dict[str, Any]) -> str:
 
 - 遍历 `metric_outputs["items"]`。
 - 每个 item 的 `id` 作为 summary map key。
-- 只保留成功 metric。
+- 成功和失败 metric 都保留。
+- 失败 metric 必须保留 `error`。
 - 当前不写 `tools`。
-- 没有任何有效输出时返回空字符串 `""`。
-- 默认不启用，避免改变现有输出。
+- 没有任何 metric 时返回空字符串 `""`。
+- `process_single` 最终写入 `output_sample[self.output_key] = summary_string`。
+- 中间对象结构可以保留在局部变量中，但不要作为默认输出写出。
 
 **Step 4: 跑测试确认通过**
 
@@ -469,7 +524,7 @@ def _build_summary_output(metric_outputs: dict[str, Any]) -> str:
 
 ```bash
 git add data_juicer/ops/mapper/ad_ai_data_center/state_metric_calculator_mapper.py tests/ops/mapper/test_state_metric_calculator_mapper.py
-git commit -m "add state metric summary output"
+git commit -m "align state metric summary output"
 ```
 
 ---
@@ -488,7 +543,8 @@ git commit -m "add state metric summary output"
 {
     "start_date_key": None,
     "end_date_key": None,
-    "summary_output_key": None,
+    "output_format": "dataset_factory_summary",
+    "preserve_error": True,
     "runtime": "adc_operator_code",
 }
 ```
@@ -509,6 +565,9 @@ git commit -m "add state metric summary output"
 
 - 不要把接口拉到的完整 operator detail 放进 callback。
 - 不要把 `operatorCode` 放进 callback，避免泄露代码和增大 payload。
+- `output_format` 明确标记默认输出已经是 Dataset Factory summary 风格。
+- `preserve_error` 明确标记失败 metric 会保留 `error` 字段。
+- callback 只记录 Data-Juicer 当前采用的 metric runtime 行为，不声明 tool 支持。
 
 **Step 4: 跑测试确认通过**
 
@@ -536,12 +595,13 @@ git commit -m "report state metric runtime config"
 - 一个 sample 有两个 id。
 - 一个 metric 成功，`output` 是字符串。
 - 一个 metric 失败，`output` 是 `"null"`。
-- 一个 sample 的 summary 是空字符串。
+- 一个 sample 没有任何 metric 时，`output_key` 是空字符串。
 
 断言：
 
-- `query_metric_data_outputs.items.metrics.output` 仍然是 `string`。
-- `summary_output_key` 对应字段始终是字符串。
+- `query_metric_data_outputs` 始终是字符串。
+- `json.loads(query_metric_data_outputs)` 后，每个 metric 的 `output` 和 `error` 都是字符串。
+- 失败 metric 保留非空 `error`，不会被 summary builder 丢弃。
 
 **Step 2: 跑 focused schema test**
 
@@ -577,10 +637,12 @@ git commit -m "verify state metric summary schema"
 ## 兼容性说明
 
 - 现有 `calculate(...)` 函数继续有效。
-- 当前 `output_key` 对象结构继续作为默认输出。
+- `output_key` 默认输出 Dataset Factory summary 风格 JSON 字符串。
+- 与 Dataset Factory 不同，失败 metric 也会保留在 summary 中，并带 `error` 字段。
 - ADC 接口仍然是指标元信息来源。
 - 公共 helper 通过可选保留参数注入，指标代码不声明就不会收到。
-- 辅助工具不纳入本次改造；后续如果需要，建议作为单独算子或单独 opt-in 模式设计。
+- Dataset Factory 的 metric/tool 双路径只作为职责拆分参考；Data-Juicer 当前算子保持 metric-only。
+- 辅助工具不纳入本次改造；后续如果需要，建议作为单独算子或基于后端显式 tool 元数据的 opt-in 模式设计。
 
 ## 最终验证矩阵
 
