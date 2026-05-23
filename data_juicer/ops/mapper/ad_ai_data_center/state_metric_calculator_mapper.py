@@ -38,6 +38,7 @@ class StateMetricCalculatorMapper(Mapper):
     def __init__(
         self,
         state_key: str = "state",
+        id_source_key: str | None = None,
         output_key: str = "query_metric_data_outputs",
         result_mode: str = "summary",
         fail_policy: str = "continue",
@@ -55,6 +56,7 @@ class StateMetricCalculatorMapper(Mapper):
         Initialization method.
 
         :param state_key: sample field containing the State object.
+        :param id_source_key: optional common sample field containing metric item IDs.
         :param output_key: sample field used to store metric outputs.
         :param result_mode: supports Dataset Factory summary string output only.
         :param fail_policy: first version supports ``continue`` only.
@@ -72,6 +74,8 @@ class StateMetricCalculatorMapper(Mapper):
         super().__init__(*args, **kwargs)
         if not state_key:
             raise ValueError("state_key must be provided")
+        if id_source_key is not None and not id_source_key:
+            raise ValueError("id_source_key must be a non-empty string")
         if not output_key:
             raise ValueError("output_key must be provided")
         if result_mode != "summary":
@@ -88,6 +92,7 @@ class StateMetricCalculatorMapper(Mapper):
         self.operators = self._normalize_operators(operators)
 
         self.state_key = state_key
+        self.id_source_key = id_source_key
         self.output_key = output_key
         self.result_mode = result_mode
         self.fail_policy = fail_policy
@@ -502,6 +507,10 @@ class StateMetricCalculatorMapper(Mapper):
                     value,
                 ))
         if not candidates:
+            if self.id_source_key:
+                value = sample.get(self.id_source_key)
+                if value is not None and value != "":
+                    return 3, -1, -1, None, self.id_source_key, value
             return None
         candidates.sort(key=lambda item: (item[0], item[1], item[2]))
         return candidates[0]
@@ -530,7 +539,11 @@ class StateMetricCalculatorMapper(Mapper):
         if StateMetricCalculatorMapper._id_parameter_priority(parameter_name) is None:
             return False
         mapping = operator_config.get("parameter_mapping") or {}
-        return mapping.get(parameter_name) == id_source_field
+        mapped_field = mapping.get(parameter_name)
+        return mapped_field == id_source_field or (
+            mapped_field is None
+            and id_source_field is not None
+        )
 
     @staticmethod
     def _stringify_output_id(value) -> str:
@@ -552,6 +565,8 @@ class StateMetricCalculatorMapper(Mapper):
 
     @staticmethod
     def _stringify_metric_output(value) -> str:
+        if isinstance(value, str):
+            return value
         return json.dumps(value, ensure_ascii=False)
 
     @staticmethod
@@ -657,6 +672,7 @@ class StateMetricCalculatorMapper(Mapper):
     def _operator_config(self):
         return {
             "state_key": self.state_key,
+            "id_source_key": self.id_source_key,
             "output_key": self.output_key,
             "result_mode": self.result_mode,
             "fail_policy": self.fail_policy,
