@@ -824,7 +824,7 @@ process:
                     {
                         "metricCode": "id_context",
                         "metricName": "ID 上下文",
-                        "output": '"adv_id:1854751525764108"',
+                        "output": "adv_id:1854751525764108",
                         "error": "",
                     },
                 ],
@@ -834,7 +834,7 @@ process:
                     {
                         "metricCode": "id_context",
                         "metricName": "ID 上下文",
-                        "output": '"adv_id:1853671159428096"',
+                        "output": "adv_id:1853671159428096",
                         "error": "",
                     },
                 ],
@@ -1061,13 +1061,13 @@ process:
                     {
                         "metricCode": "metric_with_ids",
                         "metricName": "IDS 指标",
-                        "output": '"1854751525764108"',
+                        "output": "1854751525764108",
                         "error": "",
                     },
                     {
                         "metricCode": "metric_with_adv_id",
                         "metricName": "广告 ID 指标",
-                        "output": '"1854751525764108"',
+                        "output": "1854751525764108",
                         "error": "",
                     },
                 ],
@@ -1077,13 +1077,13 @@ process:
                     {
                         "metricCode": "metric_with_ids",
                         "metricName": "IDS 指标",
-                        "output": '"1853671159428096"',
+                        "output": "1853671159428096",
                         "error": "",
                     },
                     {
                         "metricCode": "metric_with_adv_id",
                         "metricName": "广告 ID 指标",
-                        "output": '"1853671159428096"',
+                        "output": "1853671159428096",
                         "error": "",
                     },
                 ],
@@ -1167,8 +1167,48 @@ process:
         self.assertEqual(metrics[0]["output"], "null")
         self.assertIn("sample.state must be provided", metrics[0]["error"])
         self.assertEqual(metrics[1]["metricCode"], "no_state")
-        self.assertEqual(metrics[1]["output"], '"ok"')
+        self.assertEqual(metrics[1]["output"], "ok")
         self.assertEqual(metrics[1]["error"], "")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_string_metric_output_is_not_json_quoted(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 223,
+                    "operatorNameEn": "ad_online_materials_count",
+                    "operatorNameCn": "在投素材数环比",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(id_value):\n"
+                        "    return f'指标名称:在投素材数（环比）, "
+                        "指标值：计划ID:{id_value}：12.0000 "
+                        "环比下降25.00%（上周期16.0000）'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
+            operators=[{"operator_id": 223, "parameter_mapping": {}}],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "issue_id": "1234567890123456",
+        })
+
+        metric_output = (
+            self._summary(result)["1234567890123456"]["metrics"][0]["output"]
+        )
+        self.assertEqual(
+            metric_output,
+            "指标名称:在投素材数（环比）, "
+            "指标值：计划ID:1234567890123456：12.0000 "
+            "环比下降25.00%（上周期16.0000）",
+        )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_dataset_factory_summary_serializes_outputs_as_strings(self, mock_client_cls):

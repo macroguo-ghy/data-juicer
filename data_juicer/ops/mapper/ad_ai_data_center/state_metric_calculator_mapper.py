@@ -565,6 +565,8 @@ class StateMetricCalculatorMapper(Mapper):
 
     @staticmethod
     def _stringify_metric_output(value) -> str:
+        if isinstance(value, str):
+            return value
         return json.dumps(value, ensure_ascii=False)
 
     @staticmethod
