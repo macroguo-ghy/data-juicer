@@ -214,6 +214,16 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 如果找到了指标级 ID 映射，它优先于算子级 `id_source_key`。如果没有找到指标级 ID 映射，才会使用 `id_source_key`。
 
+注意：外部传入的 ID 是当前样本的主输入来源。也就是说，题目或样本字段里的 `adv_id` / `ad_id` 应通过 `id_source_key` 或指标级 `parameter_mapping` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。State 里的 ID 只用于识别当前 ID 类型，也就是给 `calculate(..., id_key, ...)` 注入 `ad_id` 或 `adv_id`。
+
+当前 `id_key` 识别只检查：
+
+- `state.ad_state[].ad_id`
+- `state.adv_state[].adv_id`
+- `state.adv_state[].meta_data.adv_id`
+
+当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，声明了 `id_key` 的指标会因为无法识别 ID 类型而失败，错误类似 `Unknown id: ...`。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` 与外部样本 ID 对齐。
+
 如果样本字段是字符串：
 
 - `"1854751525764108"` 会按一个 ID 计算一次。
