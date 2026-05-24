@@ -152,6 +152,8 @@ class MetricHelpers:
 
     @classmethod
     def calc_sequential_stats(cls, series_map, start_date, end_date):
+        if isinstance(series_map, (list, tuple)):
+            return cls._calc_sequential_stats_from_list(series_map, integer=False)
         ranges = cls._sequential_ranges(series_map, start_date, end_date)
         if ranges is None:
             return None, None, None
@@ -170,6 +172,8 @@ class MetricHelpers:
 
     @classmethod
     def calc_sequential_stats_integer(cls, series_map, start_date, end_date):
+        if isinstance(series_map, (list, tuple)):
+            return cls._calc_sequential_stats_from_list(series_map, integer=True)
         ranges = cls._sequential_ranges(series_map, start_date, end_date)
         if ranges is None:
             return None, None, None
@@ -190,6 +194,13 @@ class MetricHelpers:
     def calc_sequential_stats_for_fraction(
         cls, numerator_series, denominator_series, start_date, end_date
     ):
+        if isinstance(numerator_series, (list, tuple)) and isinstance(
+            denominator_series, (list, tuple)
+        ):
+            return cls._calc_sequential_stats_for_fraction_from_lists(
+                numerator_series,
+                denominator_series,
+            )
         ranges = cls._sequential_ranges_for_series_maps(
             [numerator_series or {}, denominator_series or {}],
             start_date,
@@ -229,6 +240,14 @@ class MetricHelpers:
 
     @classmethod
     def calc_sequential_ratio(cls, series_map, start_date, end_date):
+        if isinstance(series_map, (list, tuple)):
+            cur_avg, prev_avg, ratio = cls._calc_sequential_stats_from_list(
+                series_map,
+                integer=False,
+            )
+            if cur_avg is None or prev_avg is None:
+                return 0.0
+            return [prev_avg, cur_avg, ratio]
         ranges = cls._sequential_ranges(series_map, start_date, end_date)
         if ranges is None:
             return None
@@ -332,3 +351,52 @@ class MetricHelpers:
         prev_end = current_start - datetime.timedelta(days=1)
         prev_start = current_start - datetime.timedelta(days=days)
         return current_start, current_end, prev_start, prev_end
+
+    @classmethod
+    def _calc_sequential_stats_from_list(cls, series, integer=False):
+        values = [float(value) for value in series if isinstance(value, (int, float))]
+        if len(values) < 2:
+            return None, None, None
+        split_index = len(values) // 2
+        prev_values = values[:split_index]
+        cur_values = values[split_index:]
+        cur_avg = cls.average(cur_values)
+        prev_avg = cls.average(prev_values)
+        if integer:
+            cur_avg = int(cur_avg) if cur_avg is not None else None
+            prev_avg = int(prev_avg) if prev_avg is not None else None
+        else:
+            cur_avg = round(cur_avg, 4) if cur_avg is not None else None
+            prev_avg = round(prev_avg, 4) if prev_avg is not None else None
+        if cur_avg is None or prev_avg is None or prev_avg == 0:
+            return cur_avg, prev_avg, 0.0
+        return cur_avg, prev_avg, round((cur_avg - prev_avg) / prev_avg, 6)
+
+    @classmethod
+    def _calc_sequential_stats_for_fraction_from_lists(
+        cls,
+        numerator_series,
+        denominator_series,
+    ):
+        pairs = [
+            (float(n), float(dn))
+            for n, dn in zip(numerator_series, denominator_series)
+            if isinstance(n, (int, float))
+            and isinstance(dn, (int, float))
+            and dn != 0
+        ]
+        if len(pairs) < 2:
+            return None, None, None
+        split_index = len(pairs) // 2
+
+        def ratio_for(items):
+            if not items:
+                return None
+            ratios = [round(n / dn, 6) for n, dn in items]
+            return round(sum(ratios) / len(ratios), 6)
+
+        prev_rate = ratio_for(pairs[:split_index])
+        cur_rate = ratio_for(pairs[split_index:])
+        if cur_rate is None or prev_rate is None or prev_rate == 0:
+            return cur_rate, prev_rate, 0.0
+        return cur_rate, prev_rate, round((cur_rate - prev_rate) / prev_rate, 6)
