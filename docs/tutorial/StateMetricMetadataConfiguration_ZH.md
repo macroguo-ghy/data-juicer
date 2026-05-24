@@ -200,6 +200,8 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 | `average` | 求均值。 |
 | `fmt4` | 小数格式化，最多保留 4 位并去掉尾随 0。 |
 
+对于模板中“生成含问题发生时间及之前的 14 天数据”的数组字段，例如 `ad_active_materials_count: [5,5,6,6,6,7,7,7,6,6,5,5,6,6]`，`calc_sequential_stats`、`calc_sequential_stats_integer`、`calc_sequential_stats_for_fraction` 和 `calc_sequential_ratio` 会按数组前半段作为上周期、后半段作为本周期计算环比。若字段是 `{YYYY-MM-DD: value}` 字典，则仍按日期范围计算。
+
 如果从 DF 迁移某个指标时缺少公共方法，优先把该方法补到 `MetricHelpers`，再在 `operatorCode` 中通过 `helpers.xxx(...)` 调用。不要在每个指标代码里重复粘贴公共函数，也不要依赖 DF 的 import 路径。
 
 ### 4.3 ID 识别和多 ID 计算

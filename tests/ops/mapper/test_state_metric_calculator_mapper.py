@@ -1484,6 +1484,60 @@ process:
         self.assertIn("广告主ID:9283746510928374：0.3400", metric["output"])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_ad_online_materials_count_calculates_sequential_stats_from_list_series(
+        self,
+        mock_client_cls,
+    ):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 225,
+                    "operatorNameEn": "AdOnlineMaterialsCount",
+                    "operatorNameCn": "在投素材数环比",
+                    "inputParameter": '{"params": []}',
+                    "operatorCode": (
+                        "def calculate(state, id_value, id_key, helpers=None):\n"
+                        "    for adv in state.get('adv_state', []):\n"
+                        "        if str(adv.get('adv_id')) == str(id_value):\n"
+                        "            cur, prev, ratio = helpers.calc_sequential_stats_integer(\n"
+                        "                adv.get('adv_active_materials_count'), None, None)\n"
+                        "            return f'指标名称:在投素材数（环比）, 指标值：账户ID:{id_value}：{cur:.4f} 环比下降{abs(ratio) * 100:.2f}%（上周期{prev:.4f}）'\n"
+                        "    return 'missing'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="adv_id",
+            operators=[{"operator_id": 225, "parameter_mapping": {}}],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "adv_id": "1845584710106307",
+            "state": {
+                "adv_state": [
+                    {
+                        "adv_id": "1845584710106307",
+                        "adv_active_materials_count": [
+                            10, 10, 10, 10, 10, 10, 10,
+                            5, 5, 5, 5, 5, 5, 5,
+                        ],
+                    },
+                ],
+            },
+        })
+
+        metric = self._summary(result)["1845584710106307"]["metrics"][0]
+        self.assertEqual(metric["metricCode"], "AdOnlineMaterialsCount")
+        self.assertEqual(metric["error"], "")
+        self.assertIn("账户ID:1845584710106307：5.0000", metric["output"])
+        self.assertIn("环比下降50.00%", metric["output"])
+        self.assertIn("上周期10.0000", metric["output"])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_dataset_factory_summary_serializes_outputs_as_strings(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
