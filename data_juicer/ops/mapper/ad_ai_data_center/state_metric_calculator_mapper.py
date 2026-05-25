@@ -195,10 +195,7 @@ class StateMetricCalculatorMapper(Mapper):
         state_present = self._has_state_value(sample)
         state_data = self._resolve_state_value(sample) if state_present else {}
         helpers = MetricHelpers()
-        output_id, item_ids, id_source_field = self._resolve_output_items(
-            sample,
-            details,
-        )
+        output_id, item_ids = self._resolve_output_items(sample)
         items = []
         for item_id in item_ids:
             metrics = []
@@ -219,7 +216,6 @@ class StateMetricCalculatorMapper(Mapper):
                             operator_config,
                             detail,
                             current_id=item_id,
-                            id_source_field=id_source_field,
                             state_data=state_data,
                             state_present=state_present,
                             id_key=current_id_key,
@@ -231,7 +227,6 @@ class StateMetricCalculatorMapper(Mapper):
                             operator_config,
                             detail,
                             current_id=item_id,
-                            id_source_field=id_source_field,
                             state_data=state_data,
                             state_present=state_present,
                             id_key=current_id_key,
@@ -412,7 +407,6 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         detail: dict[str, Any],
         current_id: str | None = None,
-        id_source_field: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
         id_key: str | None = None,
@@ -427,7 +421,6 @@ class StateMetricCalculatorMapper(Mapper):
             parameters,
             inspect.signature(runner.process_func),
             current_id=current_id,
-            id_source_field=id_source_field,
             state_data=state_data,
             state_present=state_present,
             id_key=id_key,
@@ -447,7 +440,6 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         detail: dict[str, Any],
         current_id: str | None = None,
-        id_source_field: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
         id_key: str | None = None,
@@ -462,7 +454,6 @@ class StateMetricCalculatorMapper(Mapper):
             parameters,
             inspect.signature(runner.process_func),
             current_id=current_id,
-            id_source_field=id_source_field,
             state_data=state_data,
             state_present=state_present,
             id_key=id_key,
@@ -483,7 +474,6 @@ class StateMetricCalculatorMapper(Mapper):
         parameters: list[dict[str, Any]],
         signature: inspect.Signature,
         current_id: str | None = None,
-        id_source_field: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
         id_key: str | None = None,
@@ -516,8 +506,6 @@ class StateMetricCalculatorMapper(Mapper):
                         sample,
                         operator_config,
                         parameters_by_name[name],
-                        current_id=current_id,
-                        id_source_field=id_source_field,
                     )
                 )
             elif name == "id_key":
@@ -547,24 +535,12 @@ class StateMetricCalculatorMapper(Mapper):
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         parameter: dict[str, Any],
-        current_id: str | None = None,
-        id_source_field: str | None = None,
     ):
         name = parameter.get("key_name_en")
         data_type = parameter.get("data_type")
         missing = object()
 
-        if (
-            current_id is not None
-            and data_type == "placeholder"
-            and self._is_current_id_parameter(
-                operator_config,
-                name,
-                id_source_field,
-            )
-        ):
-            value = current_id
-        elif data_type == "placeholder":
+        if data_type == "placeholder":
             mapping = operator_config.get("parameter_mapping") or {}
             field_name = mapping.get(name)
             value = sample.get(field_name, missing) if field_name else missing
@@ -606,100 +582,25 @@ class StateMetricCalculatorMapper(Mapper):
     def _resolve_output_items(
         self,
         sample: dict[str, Any],
-        details: dict[int, dict[str, Any]],
-    ) -> tuple[str, list[str], str | None]:
-        candidate = self._resolve_output_id_candidate(sample, details)
+    ) -> tuple[str, list[str]]:
+        candidate = self._resolve_output_id_candidate(sample)
         if candidate is None:
-            return "unknown", ["unknown"], None
+            return "unknown", ["unknown"]
 
-        _, _, _, _, source_field, value = candidate
+        value = candidate
         output_id = self._stringify_output_id(value)
         item_ids = self._split_output_id_value(value)
-        return output_id, item_ids, source_field
-
-    def _resolve_output_id(
-        self,
-        sample: dict[str, Any],
-        details: dict[int, dict[str, Any]],
-    ) -> str:
-        candidate = self._resolve_output_id_candidate(sample, details)
-        if candidate is None:
-            return "unknown"
-        return self._stringify_output_id(candidate[5])
+        return output_id, item_ids
 
     def _resolve_output_id_candidate(
         self,
         sample: dict[str, Any],
-        details: dict[int, dict[str, Any]],
     ):
-        candidates = []
-        for operator_index, operator_config in enumerate(self.operators):
-            operator_id = operator_config["operator_id"]
-            detail = details.get(operator_id)
-            if not isinstance(detail, dict):
-                continue
-            try:
-                parameters = self._parse_input_parameters(detail)
-            except Exception:
-                continue
-            for parameter_index, parameter in enumerate(parameters):
-                priority = self._id_parameter_priority(parameter.get("key_name_en"))
-                if priority is None:
-                    continue
-                try:
-                    value = self._resolve_parameter_value(sample, operator_config, parameter)
-                except Exception:
-                    continue
-                if value is None or value == "":
-                    continue
-                candidates.append((
-                    priority,
-                    operator_index,
-                    parameter_index,
-                    parameter.get("key_name_en"),
-                    (operator_config.get("parameter_mapping") or {}).get(
-                        parameter.get("key_name_en")
-                    ),
-                    value,
-                ))
-        if not candidates:
-            if self.id_source_key:
-                value = sample.get(self.id_source_key)
-                if value is not None and value != "":
-                    return 3, -1, -1, None, self.id_source_key, value
-            return None
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-        return candidates[0]
-
-    @staticmethod
-    def _id_parameter_priority(name: str | None):
-        if not name:
-            return None
-        normalized = name.lower().replace("_", "")
-        if normalized == "ids":
-            return 0
-        if normalized == "id":
-            return 1
-        if normalized.endswith("id"):
-            return 2
+        if self.id_source_key:
+            value = sample.get(self.id_source_key)
+            if value is not None and value != "":
+                return value
         return None
-
-    @staticmethod
-    def _is_current_id_parameter(
-        operator_config: dict[str, Any],
-        parameter_name: str | None,
-        id_source_field: str | None,
-    ) -> bool:
-        if id_source_field is None:
-            return False
-        if StateMetricCalculatorMapper._id_parameter_priority(parameter_name) is None:
-            return False
-        mapping = operator_config.get("parameter_mapping") or {}
-        mapped_field = mapping.get(parameter_name)
-        return mapped_field == id_source_field or (
-            mapped_field is None
-            and id_source_field is not None
-        )
 
     @staticmethod
     def _stringify_output_id(value) -> str:

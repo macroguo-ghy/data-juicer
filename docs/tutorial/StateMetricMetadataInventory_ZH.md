@@ -11,7 +11,7 @@
 | 字段 | 说明 |
 | --- | --- |
 | `state_key` | State 所在样本字段，默认 `state`。 |
-| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；没有指标级 ID 映射时使用。 |
+| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；summary 顶层 key 和 runtime 注入的 `id_value` 都来自该字段。 |
 | `start_date_key` | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 注入。 |
 | `end_date_key` | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 注入。 |
 | `output_key` | 输出字段，默认 `query_metric_data_outputs`。 |

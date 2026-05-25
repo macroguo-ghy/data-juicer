@@ -208,15 +208,11 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 推荐通过算子级 `id_source_key` 配置公共 ID 字段。这样所有指标默认共用同一个 ID 来源，不需要在每个指标的 `parameter_mapping` 里重复配置 `ids`。
 
-兼容老配置时，算子仍会从所选指标的参数中找 ID 候选字段。优先级如下：
+如果配置了 `id_source_key` 且样本中该字段有值，算子会使用它作为当前样本的 ID 来源。算子不会再从 `inputParameter.params` 或 `parameter_mapping` 中按参数名推断 ID 来源；`ids`、`id`、`adv_id` 这类参数名都只是普通业务参数。
 
-1. `ids`
-2. `id`
-3. 其他以 `id` 结尾的参数，例如 `adv_id`
+因此，推荐配置是：公共 ID 统一放在算子级 `id_source_key`；指标级 `parameter_mapping` 只维护该指标自己的业务参数。需要当前计算 ID 时，在 `operatorCode` 中声明 runtime 注入参数 `id_value`，不要声明并映射 `ids`、`id`、`adv_id` 来承载当前 ID。
 
-如果找到了指标级 ID 映射，它优先于算子级 `id_source_key`。如果没有找到指标级 ID 映射，才会使用 `id_source_key`。
-
-注意：外部传入的 ID 是当前样本的主输入来源。也就是说，题目或样本字段里的 `adv_id` / `ad_id` 应通过 `id_source_key` 或指标级 `parameter_mapping` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。State 里的 ID 只用于识别当前 ID 类型，也就是给 `calculate(..., id_key, ...)` 注入 `ad_id` 或 `adv_id`。
+注意：外部传入的 ID 是当前样本的主输入来源。也就是说，题目或样本字段里的 `adv_id` / `ad_id` 应优先通过 `id_source_key` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。State 里的 ID 只用于识别当前 ID 类型，也就是给 `calculate(..., id_key, ...)` 注入 `ad_id` 或 `adv_id`。
 
 当前 `id_key` 识别只检查：
 
@@ -236,7 +232,7 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 每个 ID 都会执行一遍 `operators` 中的所有指标。若指标函数声明了 `id_key`，但当前 ID 无法在 `state.ad_state[].ad_id` 或 `state.adv_state[].adv_id` 中命中，该指标会失败并输出 `Unknown id: ...`。
 
-如果某个老指标仍声明了 `ids`、`id`、`adv_id` 这类 ID 形参，但没有在 `parameter_mapping` 里配置对应字段，且算子配置了 `id_source_key`，算子会把当前拆分后的 ID 注入给该形参。
+如果某个指标声明了 `ids`、`id`、`adv_id` 这类形参，它们会按普通 placeholder 处理：必须在 `parameter_mapping` 中映射到样本字段，且传入值是该字段原始值，不会被替换成当前拆分后的 ID。
 
 ## 5. 输出格式
 
