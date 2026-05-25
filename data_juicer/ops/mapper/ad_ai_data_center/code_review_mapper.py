@@ -9,9 +9,11 @@ from loguru import logger
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.notification_utils import send_test_card_notification
 from data_juicer.utils.operator_execution_callback_utils import (
+    NoOpOperatorExecutionCallbackClient,
     OperatorExecutionCallbackClient,
     RECORD_KEY_FIELD,
     current_time_millis,
+    has_operator_execution_callback_ctx,
 )
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 
@@ -130,7 +132,10 @@ class CodeReviewMapper(Mapper):
 
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
-            callback_client = OperatorExecutionCallbackClient(self.ctx)
+            if not has_operator_execution_callback_ctx(self.ctx):
+                callback_client = NoOpOperatorExecutionCallbackClient()
+            else:
+                callback_client = OperatorExecutionCallbackClient(self.ctx)
             callback_client.start(
                 operator_config=self._operator_config()
             )
@@ -202,9 +207,7 @@ class CodeReviewMapper(Mapper):
             logger.warning("Failed to report record failure callback: {}", exc)
 
     def _get_ctx(self):
-        if not isinstance(self.ctx, dict):
-            raise ValueError("ctx must be provided")
-        return self.ctx
+        return self.ctx if isinstance(self.ctx, dict) else None
 
     @staticmethod
     def _stringify_result_value(value):

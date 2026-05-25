@@ -33,6 +33,38 @@ class OperatorExecutionStatus(IntEnum):
     FAILED = 3
 
 
+def has_operator_execution_callback_ctx(ctx: dict[str, Any] | None) -> bool:
+    return (
+        isinstance(ctx, dict)
+        and ctx.get("apiBase") not in (None, "")
+        and ctx.get("userAccount") not in (None, "")
+    )
+
+
+class NoOpOperatorExecutionCallbackClient:
+    """No-op callback client used when platform callback context is absent."""
+
+    operator_execution_id = None
+
+    def start(self, **kwargs) -> None:
+        return None
+
+    def report_record_success(self, **kwargs) -> dict[str, Any]:
+        return {}
+
+    def report_record_failure(self, **kwargs) -> dict[str, Any]:
+        return {}
+
+    def report_record(self, **kwargs) -> dict[str, Any]:
+        return {}
+
+    def failed(self, **kwargs) -> dict[str, Any]:
+        return {}
+
+    def finalize(self, **kwargs) -> dict[str, Any]:
+        return {}
+
+
 class OperatorExecutionCallbackClient:
     """Client for data synthesis operator execution callback APIs.
 
@@ -61,8 +93,11 @@ class OperatorExecutionCallbackClient:
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self.operator_execution_id = operator_execution_id
-        self.api_base = self._get_api_base()
-        self.user_account = self._get_ctx_required_value("userAccount")
+        self.enabled = self._has_callback_ctx()
+        self.api_base = self._get_api_base() if self.enabled else ""
+        self.user_account = (
+            self._get_ctx_required_value("userAccount") if self.enabled else ""
+        )
 
     def start(
         self,
@@ -70,12 +105,14 @@ class OperatorExecutionCallbackClient:
         operator_config: dict[str, Any] | None = None,
         started_at: int | None = None,
         properties: dict[str, Any] | None = None,
-    ) -> int:
+    ) -> int | None:
         """Start the operator execution row and cache its ID.
 
         The backend makes this API idempotent for the same operator execution
         context, so retrying start does not create duplicate execution rows.
         """
+        if not self.enabled:
+            return None
         if started_at is None:
             started_at = current_time_millis()
         payload = {
@@ -107,6 +144,8 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
+        if not self.enabled:
+            return {}
         if started_at is not None and finished_at is None:
             finished_at = current_finished_time_millis(started_at)
         return self.report_record(
@@ -130,6 +169,8 @@ class OperatorExecutionCallbackClient:
         started_at: int | None = None,
         finished_at: int | None = None,
     ) -> dict[str, Any]:
+        if not self.enabled:
+            return {}
         if started_at is not None and finished_at is None:
             finished_at = current_finished_time_millis(started_at)
         return self.report_record(
@@ -160,6 +201,8 @@ class OperatorExecutionCallbackClient:
         This method upserts by ``recordKey`` on the server side, so reruns can
         safely update the same record result.
         """
+        if not self.enabled:
+            return {}
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
             "recordKey": self._get_required_value(record_key, "record_key"),
@@ -185,6 +228,8 @@ class OperatorExecutionCallbackClient:
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Finalize operator failure after the execution engine observes it."""
+        if not self.enabled:
+            return {}
 
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
@@ -201,6 +246,8 @@ class OperatorExecutionCallbackClient:
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Finalize operator success after the execution engine consumes output."""
+        if not self.enabled:
+            return {}
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
         }
@@ -262,6 +309,9 @@ class OperatorExecutionCallbackClient:
         if not api_base:
             raise ValueError("ctx.apiBase must be provided")
         return str(api_base)
+
+    def _has_callback_ctx(self) -> bool:
+        return has_operator_execution_callback_ctx(self.ctx)
 
     def _add_optional_ctx_value(self, payload: dict[str, Any], key: str) -> None:
         self._add_optional_value(payload, key, self.ctx.get(key))

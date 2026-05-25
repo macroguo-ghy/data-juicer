@@ -140,6 +140,24 @@ class PythonScriptMapperTest(unittest.TestCase):
 
         self.assertEqual(result["value"], 2)
 
+    def test_missing_ctx_does_not_block_script_or_report_callbacks(self):
+        op = PythonScriptMapper(
+            python_code=(
+                "def process(sample, context):\n"
+                "    sample['ctx_is_none'] = context['ctx'] is None\n"
+                "    return sample\n"
+            ),
+            ctx=None,
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "value": 1,
+        })
+
+        self.assertEqual(result["ctx_is_none"], True)
+        self.mock_callback_cls.assert_not_called()
+
     def test_before_operator_started_starts_running_once(self):
         op = PythonScriptMapper(
             python_code="def process(sample, context):\n    return sample",
