@@ -3,7 +3,7 @@ from multiprocessing import Pool
 
 from loguru import logger
 
-from data_juicer.utils.constant import Fields, HashKeys
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 from data_juicer.utils.file_utils import Sizes, byte_size_to_size_str
 
 
@@ -169,9 +169,8 @@ class Exporter:
         if self.export_ds:
             # fetch the corresponding export method according to the suffix
             if not self.keep_stats_in_res_ds:
-                extra_fields = {Fields.stats, Fields.meta}
                 feature_fields = set(dataset.features.keys())
-                removed_fields = extra_fields.intersection(feature_fields)
+                removed_fields = [field for field in DATA_JUICER_INTERNAL_FIELDS if field in feature_fields]
                 dataset = dataset.remove_columns(removed_fields)
             if not self.keep_hashes_in_res_ds:
                 extra_fields = {

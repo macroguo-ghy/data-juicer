@@ -22,7 +22,7 @@ pa.register_extension_type = _register_extension_type_once
 
 from data_juicer.core.export_manager import ExportManager, _quota_reserve_batch
 from data_juicer.core.io_utils import _flatten_dotted_options
-from data_juicer.utils.constant import Fields, HashKeys
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 
 
 class RayLikeDataset:
@@ -758,15 +758,15 @@ class ExportManagerTest(unittest.TestCase):
 
     def test_ray_hive_export_removes_stats_and_hash_columns(self):
         cleaned_dataset = RayLikeDataset(["id"])
-        ray_dataset = RayLikeDataset(["id", Fields.stats, Fields.meta, HashKeys.hash])
+        ray_dataset = RayLikeDataset(["id", *DATA_JUICER_INTERNAL_FIELDS, HashKeys.hash])
         ray_dataset.drop_columns.return_value = cleaned_dataset
         cleaned_dataset.select_columns.return_value = cleaned_dataset
         cfg = self._make_cfg({"target": "hive", "table_name": "db.table_name"})
         manager = ExportManager(cfg, executor_type="ray")
 
-        manager._export_to_hive(dataset=ray_dataset, columns=["id", Fields.stats, HashKeys.hash])
+        manager._export_to_hive(dataset=ray_dataset, columns=["id", Fields.stats, Fields.source_file, HashKeys.hash])
 
-        ray_dataset.drop_columns.assert_called_once_with([Fields.stats, Fields.meta, HashKeys.hash])
+        ray_dataset.drop_columns.assert_called_once_with([*DATA_JUICER_INTERNAL_FIELDS, HashKeys.hash])
         cleaned_dataset.select_columns.assert_called_once_with(["id"])
         cleaned_dataset.write_hive_table.assert_called_once_with(table_name="db.table_name")
 
@@ -786,6 +786,7 @@ class ExportManagerTest(unittest.TestCase):
                     "fields": [
                         {"name": "id", "type": "string"},
                         {"name": Fields.stats, "type": "struct<>"},
+                        {"name": Fields.source_file, "type": "string"},
                     ]
                 },
                 "magnus_conf": {},
@@ -798,7 +799,7 @@ class ExportManagerTest(unittest.TestCase):
 
         self.assertIs(prepared, dataset)
         self.assertIsNone(columns)
-        dataset.drop_columns.assert_called_once_with([Fields.stats])
+        dataset.drop_columns.assert_called_once_with([Fields.stats, Fields.source_file])
 
     def test_prepare_ray_export_without_known_columns_does_not_fetch_eagerly(self):
         class LazyRayDataset:
@@ -853,9 +854,9 @@ class ExportManagerTest(unittest.TestCase):
         manager = ExportManager(cfg, executor_type="ray")
         dataset = StrictRayDataset()
 
-        manager.export(dataset, columns=["id", Fields.stats])
+        manager.export(dataset, columns=["id", Fields.stats, Fields.source_file])
 
-        dataset.drop_columns.assert_called_once_with([Fields.stats])
+        dataset.drop_columns.assert_called_once_with([Fields.stats, Fields.source_file])
         mock_write_ray_dataset_to_magnus.assert_called_once_with(
             dataset,
             "catalog.db.table",

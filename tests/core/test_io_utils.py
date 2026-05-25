@@ -36,6 +36,7 @@ from data_juicer.core.io_utils import (
     write_hf_dataset_to_magnus,
     write_ray_dataset_to_magnus,
 )
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields
 
 pa.register_extension_type = _register_extension_type
 
@@ -1134,14 +1135,16 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
         )
 
     def test_write_ray_dataset_to_magnus_inferred_schema_drops_internal_fields(self):
+        expected_internal_fields = tuple(field for field in vars(Fields).values() if isinstance(field, str))
+        self.assertEqual(DATA_JUICER_INTERNAL_FIELDS, expected_internal_fields)
+        self.assertEqual(len(DATA_JUICER_INTERNAL_FIELDS), len(set(DATA_JUICER_INTERNAL_FIELDS)))
+        self.assertIn(Fields.source_file, DATA_JUICER_INTERNAL_FIELDS)
+        internal_rows = {field: None for field in DATA_JUICER_INTERNAL_FIELDS}
         dataset = FakeRayDataset(
-            [{"id": "1", "__dj__stats__": None, "__dj__meta__": None}],
+            [{"id": "1", **internal_rows}],
             pa.schema(
-                [
-                    pa.field("id", pa.string()),
-                    pa.field("__dj__stats__", pa.null()),
-                    pa.field("__dj__meta__", pa.null()),
-                ]
+                [pa.field("id", pa.string())]
+                + [pa.field(field, pa.null()) for field in DATA_JUICER_INTERNAL_FIELDS]
             ),
         )
         pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
