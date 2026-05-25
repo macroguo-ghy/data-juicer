@@ -468,6 +468,9 @@ process:
   - python_lambda_mapper:                                   # executing Python lambda function on data samples.
       lambda_str: ''                                          # A string representation of the lambda function to be executed on data samples. If empty, the identity function is used.
       batched: False                                          # A boolean indicating whether to process input data in batches.
+  - repartition_mapper:                                     # repartition a Ray Dataset into a target number of blocks.
+      num_blocks: 1                                           # Target number of Ray Dataset blocks.
+      shuffle: False                                          # Whether to shuffle records during repartition.
   - query_intent_detection_mapper:                          # Mapper to predict user's Intent label in query.
       hf_model: 'bespin-global/klue-roberta-small-3i4k-intent-classification'     # Huggingface model ID to predict intent label.
       zh_to_en_hf_model: 'Helsinki-NLP/opus-mt-zh-en'         # Translation model from Chinese to English. If not None, translate the query from Chinese to English.
