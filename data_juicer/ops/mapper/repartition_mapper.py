@@ -1,4 +1,3 @@
-from data_juicer.core.data import NestedDataset
 from data_juicer.ops.base_op import OPERATORS, Pipeline
 
 OP_NAME = "repartition_mapper"
@@ -28,6 +27,8 @@ class RepartitionMapper(Pipeline):
         self.shuffle = bool(shuffle)
 
     def run(self, dataset, *, exporter=None, tracer=None):
+        from data_juicer.core.data import NestedDataset
+
         if isinstance(dataset, NestedDataset):
             raise RuntimeError("repartition_mapper requires Ray executor because local datasets do not have blocks")
         return dataset.repartition(num_blocks=self.num_blocks, shuffle=self.shuffle)

@@ -18,14 +18,14 @@ from urllib.parse import parse_qs, quote, urlparse
 from jsonargparse import Namespace, namespace_to_dict
 from loguru import logger
 
-from data_juicer.utils.constant import Fields
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS
 
 _MAGNUS_RAY_DISABLE_REPARTITION = "magnus.ray.write.disable_repartition"
 _MAGNUS_RAY_DISABLE_SORT = "magnus.ray.write.disable_sort"
 MAGNUS_FAILURE_POLICY_ABORT = "abort"
 MAGNUS_FAILURE_POLICY_COMMIT_COMPLETED_UNSAFE = "commit_completed_unsafe"
 _MAGNUS_FAILURE_POLICY_SNAPSHOT_SUMMARY_KEY = "data_juicer.magnus.failure_policy"
-_MAGNUS_INTERNAL_FIELDS = {Fields.stats, Fields.meta}
+_MAGNUS_INTERNAL_FIELDS = set(DATA_JUICER_INTERNAL_FIELDS)
 
 
 def namespace_to_plain_dict(value: Any) -> Any:

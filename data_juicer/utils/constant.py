@@ -34,6 +34,15 @@ class Fields(object):
     multimodal_data_output_dir = DEFAULT_PREFIX + "produced_data__"
 
 
+DATA_JUICER_INTERNAL_FIELDS = tuple(
+    dict.fromkeys(
+        field
+        for field in vars(Fields).values()
+        if isinstance(field, str)
+    )
+)
+
+
 class BatchMetaKeys(object):
     entity_attribute = "entity_attribute"
     most_relevant_entities = "most_relevant_entities"

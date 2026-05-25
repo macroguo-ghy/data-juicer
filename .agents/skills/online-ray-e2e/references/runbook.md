@@ -97,7 +97,7 @@ Methods:
 
 ## Ray History And Driver Logs
 
-If the History Server API returns `Select a logfile first`, open the Ray UI URL once. It may redirect from:
+If the History Server API returns `Select a logfile first`, or if `/history/<cluster>/api/jobs` returns an empty list while Federal/Ray UI suggests the job is running or finished, open the Ray UI URL once and capture the selected History key. The page may redirect from:
 
 ```text
 https://ray-history-server.byted.org/#/new/history/<cluster>/overview
@@ -112,9 +112,17 @@ https://ray-history-server.byted.org/#/new/history/<cluster>:<log_suffix>/overvi
 Use the suffixed key for API calls:
 
 ```bash
+curl -s 'https://ray-history-server.byted.org/history/<cluster>:<log_suffix>/api/jobs' | jq
 curl -s 'https://ray-history-server.byted.org/history/<cluster>:<log_suffix>/api/jobs/<ray_job_id>' | jq
 curl -s 'https://ray-history-server.byted.org/history/<cluster>:<log_suffix>/api/data/datasets' | jq
 curl -s 'https://ray-history-server.byted.org/history/<cluster>:<log_suffix>/logical/actors' | jq
+```
+
+Do not treat an empty unsuffixed Jobs response as proof that the driver has not started. The unsuffixed key can return `[]` even when the suffixed key has a completed job, for example:
+
+```text
+unsuffixed API: /history/j-...-hl-rabbit/api/jobs -> []
+suffixed API:   /history/j-...-hl-rabbit:20260525120725-.../api/jobs -> [{status: "SUCCEEDED", ...}]
 ```
 
 Driver log priority:
