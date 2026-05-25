@@ -460,6 +460,7 @@ class LLMInferenceMapper(Mapper):
             "Accept": "application/json",
             "user-account": LLMInferenceMapper._get_ctx_required_value(ctx, "userAccount"),
         }
+        headers["space-id"] = LLMInferenceMapper._get_ctx_required_value(ctx, "spaceId")
         for key in ("x-tt-env", "x-use-ppe"):
             value = ctx.get(key)
             if value:
