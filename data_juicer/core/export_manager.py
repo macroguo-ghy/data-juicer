@@ -25,7 +25,7 @@ from data_juicer.core.io_utils import (
 )
 from data_juicer.core.ray_exporter import RayExporter
 from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE
-from data_juicer.utils.constant import Fields, HashKeys
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, HashKeys
 
 
 def _quota_reserve_batch(table: pa.Table, *, quota_actor):
@@ -541,7 +541,7 @@ class ExportManager:
     def _prepare_dataset_for_export(self, dataset, columns=None):
         removed_fields = []
         if not getattr(self.cfg, "keep_stats_in_res_ds", False):
-            removed_fields.extend([Fields.stats, Fields.meta])
+            removed_fields.extend(DATA_JUICER_INTERNAL_FIELDS)
         if not getattr(self.cfg, "keep_hashes_in_res_ds", False):
             removed_fields.extend(
                 [

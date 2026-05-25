@@ -8,7 +8,7 @@ from functools import partial
 from loguru import logger
 
 from data_juicer.core.io_utils import _is_ray_data_checkpoint_enabled, get_pyarrow_filesystem
-from data_juicer.utils.constant import Fields, HashKeys
+from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 from data_juicer.utils.file_utils import Sizes, byte_size_to_size_str
 from data_juicer.utils.model_utils import filter_arguments
 from data_juicer.utils.webdataset_utils import reconstruct_custom_webdataset_format
@@ -292,8 +292,8 @@ class RayExporter:
         feature_fields = columns if columns is not None else cols
         removed_fields = []
         if not self.keep_stats_in_res_ds:
-            extra_fields = {Fields.stats, Fields.meta}
-            removed_fields.extend(list(extra_fields.intersection(feature_fields)))
+            feature_field_set = set(feature_fields)
+            removed_fields.extend([field for field in DATA_JUICER_INTERNAL_FIELDS if field in feature_field_set])
         if not self.keep_hashes_in_res_ds:
             extra_fields = {
                 HashKeys.hash,
