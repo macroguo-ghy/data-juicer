@@ -1124,11 +1124,55 @@ class WriteRayDatasetToMagnusTest(unittest.TestCase):
             partition_columns=["p_date"],
             load_table=False,
         )
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset.columns(), ["id", "p_date"])
+        self.assertEqual(written_dataset.rows, [{"id": "1", "p_date": "20260421"}])
         pyiceberg_ray.write_magnus.assert_called_once_with(
-            dataset,
+            written_dataset,
             identifier="catalog.db.table",
             operation="APPEND",
         )
+
+    def test_write_ray_dataset_to_magnus_inferred_schema_drops_internal_fields(self):
+        dataset = FakeRayDataset(
+            [{"id": "1", "__dj__stats__": None, "__dj__meta__": None}],
+            pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("__dj__stats__", pa.null()),
+                    pa.field("__dj__meta__", pa.null()),
+                ]
+            ),
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=True,
+                infer_schema_on_create=True,
+            )
+
+        expected_schema = pa.schema([pa.field("id", pa.string())])
+        client.create_table.assert_called_once_with(
+            "catalog",
+            "db",
+            "table",
+            expected_schema,
+            properties={},
+            partition_columns=None,
+            load_table=False,
+        )
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset.columns(), ["id"])
+        self.assertEqual(written_dataset.rows, [{"id": "1"}])
 
     def test_write_ray_dataset_to_magnus_reuses_materialized_dataset_after_batch_schema_inference(self):
         class MaterializedRayDataset:

@@ -18,11 +18,14 @@ from urllib.parse import parse_qs, quote, urlparse
 from jsonargparse import Namespace, namespace_to_dict
 from loguru import logger
 
+from data_juicer.utils.constant import Fields
+
 _MAGNUS_RAY_DISABLE_REPARTITION = "magnus.ray.write.disable_repartition"
 _MAGNUS_RAY_DISABLE_SORT = "magnus.ray.write.disable_sort"
 MAGNUS_FAILURE_POLICY_ABORT = "abort"
 MAGNUS_FAILURE_POLICY_COMMIT_COMPLETED_UNSAFE = "commit_completed_unsafe"
 _MAGNUS_FAILURE_POLICY_SNAPSHOT_SUMMARY_KEY = "data_juicer.magnus.failure_policy"
+_MAGNUS_INTERNAL_FIELDS = {Fields.stats, Fields.meta}
 
 
 def namespace_to_plain_dict(value: Any) -> Any:
@@ -1266,6 +1269,14 @@ def _strip_arrow_metadata_from_schema(schema):
     return pa.schema([_strip_arrow_metadata_from_field(field) for field in schema])
 
 
+def _drop_magnus_internal_fields_from_schema(schema):
+    import pyarrow as pa
+
+    if not isinstance(schema, pa.Schema):
+        return schema
+    return pa.schema([field for field in schema if field.name not in _MAGNUS_INTERNAL_FIELDS])
+
+
 def _infer_magnus_schema_from_arrow_batches(dataset):
     import pyarrow as pa
 
@@ -1281,7 +1292,7 @@ def _infer_magnus_schema_from_arrow_batches(dataset):
     if not schemas:
         raise ValueError("Magnus `infer_schema_on_create` could not infer a PyArrow schema from empty Ray Dataset")
     try:
-        return pa.unify_schemas(schemas)
+        return _drop_magnus_internal_fields_from_schema(pa.unify_schemas(schemas))
     except Exception as exc:
         raise ValueError("Magnus `infer_schema_on_create` found incompatible Ray Dataset pyarrow batch schemas") from exc
 
@@ -1294,7 +1305,7 @@ def _infer_magnus_schema_and_dataset_from_ray_dataset(dataset):
     except Exception as exc:
         raise ValueError("Magnus `infer_schema_on_create` failed to fetch Ray Dataset schema") from exc
     try:
-        return _as_arrow_schema(schema, source="Ray Dataset"), dataset
+        return _drop_magnus_internal_fields_from_schema(_as_arrow_schema(schema, source="Ray Dataset")), dataset
     except ValueError:
         inferred_dataset = dataset
         if hasattr(dataset, "materialize"):
@@ -1311,7 +1322,12 @@ def _infer_magnus_schema_and_dataset_from_ray_dataset(dataset):
             except Exception:
                 schema = None
             try:
-                return _as_arrow_schema(schema, source="materialized Ray Dataset"), inferred_dataset
+                return (
+                    _drop_magnus_internal_fields_from_schema(
+                        _as_arrow_schema(schema, source="materialized Ray Dataset")
+                    ),
+                    inferred_dataset,
+                )
             except ValueError:
                 pass
         return _infer_magnus_schema_from_arrow_batches(inferred_dataset), inferred_dataset
@@ -2051,8 +2067,9 @@ def write_ray_dataset_to_magnus(dataset, table_name: str, **kwargs):
         create_table_kwargs = {"partition_columns": partition_columns}
         if infer_schema_on_create and explicit_schema is None:
             def schema_provider():
-                nonlocal dataset
+                nonlocal dataset, explicit_schema
                 inferred_schema, dataset = _infer_magnus_schema_and_dataset_from_ray_dataset(dataset)
+                explicit_schema = inferred_schema
                 return inferred_schema
 
             create_table_kwargs["schema_provider"] = schema_provider
