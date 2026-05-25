@@ -14,6 +14,8 @@ RESULT_SYNC_NOTIFICATION_TEMPLATE_ID = "AAqtBYKVfi75b"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_FAILED = "FAILED"
 STATUS_SKIPPED = "SKIPPED"
+DEFAULT_RETRY_ATTEMPTS = 5
+DEFAULT_RETRY_STATUS_CODES = (420, 429, 500, 502, 503, 504)
 
 
 class AdcResultSyncHook:
@@ -28,6 +30,9 @@ class AdcResultSyncHook:
         self.api_base = str(self._require_value(self.ctx.get("apiBase"), "ctx.apiBase")).rstrip("/")
         self.user_account = str(self._require_value(self.ctx.get("userAccount"), "ctx.userAccount"))
         self.timeout = float(hook_cfg.get("timeout", 30.0))
+        self.retry_attempts = int(hook_cfg.get("retry_attempts", DEFAULT_RETRY_ATTEMPTS))
+        if self.retry_attempts < 0:
+            raise ValueError("after_export_hook.retry_attempts must be non-negative")
 
     def run(self) -> None:
         if self.export_cfg.get("target") != "magnus":
@@ -149,6 +154,8 @@ class AdcResultSyncHook:
             method="POST",
             headers=headers,
             timeout=self.timeout,
+            retry_attempts=self.retry_attempts,
+            retry_status_codes=DEFAULT_RETRY_STATUS_CODES,
         )
         result = client.request(json_body=payload)
         if not result["ok"]:

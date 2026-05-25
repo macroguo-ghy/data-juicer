@@ -7,11 +7,21 @@ from data_juicer.core.export_hooks import run_after_export_hook
 class FakeHttpClient:
     requests = []
 
-    def __init__(self, endpoint, method="POST", headers=None, timeout=30.0):
+    def __init__(
+        self,
+        endpoint,
+        method="POST",
+        headers=None,
+        timeout=30.0,
+        retry_attempts=0,
+        retry_status_codes=None,
+    ):
         self.endpoint = endpoint
         self.method = method
         self.headers = headers or {}
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
+        self.retry_status_codes = retry_status_codes
 
     def request(self, *, params=None, json_body=None):
         self.__class__.requests.append({
@@ -19,6 +29,8 @@ class FakeHttpClient:
             "method": self.method,
             "headers": self.headers,
             "timeout": self.timeout,
+            "retry_attempts": self.retry_attempts,
+            "retry_status_codes": self.retry_status_codes,
             "params": params,
             "json_body": json_body,
         })
@@ -221,6 +233,24 @@ class AfterExportHookTest(unittest.TestCase):
         self.assertEqual(FakeHttpClient.requests[0]["headers"]["space-id"], "9")
         notification_request = FakeHttpClient.requests[1]
         self.assertEqual(notification_request["json_body"]["templateVariable"]["spaceId"], 9)
+
+    @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FakeHttpClient)
+    def test_adc_result_sync_retries_420_by_default(self):
+        export_cfg = self._export_cfg()
+        export_cfg["after_export_hook"]["sync"]["targets"] = [{
+            "type": "eval_set",
+            "enabled": True,
+            "target": {
+                "mode": "CREATE_VERSION",
+                "evalSetId": 123,
+            },
+        }]
+
+        run_after_export_hook(export_cfg)
+
+        eval_request = FakeHttpClient.requests[0]
+        self.assertEqual(eval_request["retry_attempts"], 5)
+        self.assertIn(420, eval_request["retry_status_codes"])
 
     @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FailingHttpClient)
     def test_notification_summarizes_target_failures_without_raising_when_fail_on_error_false(self):
