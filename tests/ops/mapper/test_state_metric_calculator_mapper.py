@@ -212,6 +212,7 @@ process:
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_id",
             operators=self._operators(),
             ctx=self._ctx(),
             auto_op_parallelism=False,
@@ -296,6 +297,7 @@ process:
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_id",
             operators=[self._operators()[0]],
             ctx=self._ctx(),
         )
@@ -328,6 +330,7 @@ process:
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_id",
             operators=[self._operators()[0]],
             result_mode="object",
             ctx=self._ctx(),
@@ -692,6 +695,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
             operators=[{
                 "operator_id": 220,
                 "parameter_mapping": {
@@ -744,6 +748,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
             operators=[{
                 "operator_id": 223,
                 "parameter_mapping": {
@@ -786,6 +791,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
             operators=[{
                 "operator_id": 224,
                 "parameter_mapping": {
@@ -828,6 +834,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="issue_id",
             operators=[{
                 "operator_id": 225,
                 "parameter_mapping": {
@@ -849,7 +856,7 @@ process:
         self.assertEqual(metric["error"], "Unknown id: 999")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_output_id_prefers_ids_then_id_then_other_id_params(self, mock_client_cls):
+    def test_output_id_ignores_id_like_parameter_mappings_without_id_source_key(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -923,7 +930,7 @@ process:
             "ids_field": "idsabc",
         })
 
-        self.assertEqual(list(self._summary(result).keys()), ["idsabc"])
+        self.assertEqual(list(self._summary(result).keys()), ["unknown"])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_comma_separated_ids_are_calculated_as_separate_items(self, mock_client_cls):
@@ -934,26 +941,22 @@ process:
                     "operatorNameEn": "ad_roi_latest",
                     "operatorNameCn": "广告最新 ROI",
                     "inputParameter": (
-                        '{"params": ['
-                        '{"data_type": "placeholder", "key_name_en": "ids", '
-                        '"default_or_placeholder_value": "ids"}'
-                        ']}'
+                        '{"params": []}'
                     ),
                     "operatorCode": (
-                        "def calculate(state, ids):\n"
+                        "def calculate(state, id_value):\n"
                         "    adv_by_id = {item['adv_id']: item for item in state['adv_state']}\n"
-                        "    return adv_by_id[ids]['adv_roi'][-1]\n"
+                        "    return adv_by_id[id_value]['adv_roi'][-1]\n"
                     ),
                 },
             ],
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_ids",
             operators=[{
                 "operator_id": 208,
-                "parameter_mapping": {
-                    "ids": "material_ids",
-                },
+                "parameter_mapping": {},
             }],
             ctx=self._ctx(),
         )
@@ -1062,7 +1065,7 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_metric_id_mapping_overrides_common_id_source_key(self, mock_client_cls):
+    def test_common_id_source_key_overrides_metric_id_mapping(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -1098,7 +1101,9 @@ process:
             "state": {},
         })
 
-        self.assertEqual(list(self._summary(result).keys()), ["222", "333"])
+        summary = self._summary(result)
+        self.assertEqual(list(summary.keys()), ["111"])
+        self.assertEqual(summary["111"]["metrics"][0]["output"], "222,333")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_intermediate_items_extract_numeric_ids_from_mixed_issue_id(self, mock_client_cls):
@@ -1120,6 +1125,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_ids",
             operators=[{
                 "operator_id": 208,
                 "parameter_mapping": {
@@ -1163,6 +1169,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_ids",
             operators=[{
                 "operator_id": 208,
                 "parameter_mapping": {
@@ -1200,6 +1207,7 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_ids",
             operators=[{
                 "operator_id": 208,
                 "parameter_mapping": {
@@ -1221,7 +1229,7 @@ process:
         )
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_id_like_parameters_from_same_field_receive_current_item_id(self, mock_client_cls):
+    def test_id_like_parameters_are_plain_mapped_fields(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -1252,17 +1260,18 @@ process:
         }))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_ids",
             operators=[
                 {
                     "operator_id": 209,
                     "parameter_mapping": {
-                        "ids": "material_ids",
+                        "ids": "payload_ids",
                     },
                 },
                 {
                     "operator_id": 210,
                     "parameter_mapping": {
-                        "adv_id": "material_ids",
+                        "adv_id": "payload_adv_id",
                     },
                 },
             ],
@@ -1272,6 +1281,8 @@ process:
         result = op.process_single({
             RECORD_KEY_FIELD: "record-1",
             "material_ids": "1854751525764108,1853671159428096",
+            "payload_ids": "payload-ids",
+            "payload_adv_id": "payload-adv-id",
             "state": {},
         })
 
@@ -1281,13 +1292,13 @@ process:
                     {
                         "metricCode": "metric_with_ids",
                         "metricName": "IDS 指标",
-                        "output": "1854751525764108",
+                        "output": "payload-ids",
                         "error": "",
                     },
                     {
                         "metricCode": "metric_with_adv_id",
                         "metricName": "广告 ID 指标",
-                        "output": "1854751525764108",
+                        "output": "payload-adv-id",
                         "error": "",
                     },
                 ],
@@ -1297,13 +1308,13 @@ process:
                     {
                         "metricCode": "metric_with_ids",
                         "metricName": "IDS 指标",
-                        "output": "1853671159428096",
+                        "output": "payload-ids",
                         "error": "",
                     },
                     {
                         "metricCode": "metric_with_adv_id",
                         "metricName": "广告 ID 指标",
-                        "output": "1853671159428096",
+                        "output": "payload-adv-id",
                         "error": "",
                     },
                 ],
@@ -1542,6 +1553,7 @@ process:
         fake_client = FakeHttpClient(success_envelope(self._operator_details()))
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
+            id_source_key="material_id",
             operators=[self._operators()[0]],
             ctx=self._ctx(),
         )
