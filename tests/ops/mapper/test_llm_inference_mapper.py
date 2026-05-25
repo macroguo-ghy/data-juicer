@@ -93,6 +93,7 @@ class LLMInferenceMapperTest(unittest.TestCase):
             "operatorName": "llm_inference_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     @staticmethod
@@ -198,6 +199,7 @@ process:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "user-account": "wangjianda.667",
+            "space-id": "1",
             "x-tt-env": "ppe_sirius2",
             "x-use-ppe": "1",
             "x-tt-logid": "log-001",
@@ -311,6 +313,21 @@ process:
             "userPrompt": "direct prompt",
             "model": "",
         })
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
+    def test_rejects_missing_space_id_before_llm_request(self, mock_client_cls):
+        ctx = self._ctx()
+        ctx.pop("spaceId")
+        op = LLMInferenceMapper(
+            prompt="static prompt",
+            ctx=ctx,
+            poll_interval_seconds=0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "ctx.spaceId"):
+            op.process_single({RECORD_KEY_FIELD: "record-1"})
+
+        mock_client_cls.assert_not_called()
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.llm_inference_mapper.HttpClient")
     def test_string_output_is_preserved_and_metadata_is_stringified(self, mock_client_cls):

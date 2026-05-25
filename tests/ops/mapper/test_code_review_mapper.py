@@ -243,6 +243,25 @@ process:
         self.assertEqual(result["review_status"], True)
         self.assertEqual(result["review_reason"], "")
 
+    def test_missing_ctx_does_not_block_review_or_report_callbacks(self):
+        op = CodeReviewMapper(
+            input_field="state",
+            python_code=(
+                "def review_row(value, row, context):\n"
+                "    return context['ctx'] is None and value['scene'] == 'feed', ''\n"
+            ),
+            ctx=None,
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "state": {"scene": "feed"},
+        })
+
+        self.assertEqual(result["review_status"], True)
+        self.assertEqual(result["review_reason"], "")
+        self.mock_callback_cls.assert_not_called()
+
     def test_before_operator_started_starts_running_once(self):
         op = CodeReviewMapper(
             input_field="state",

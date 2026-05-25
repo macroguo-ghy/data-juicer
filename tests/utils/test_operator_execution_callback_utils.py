@@ -597,11 +597,35 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             },
         )
 
-    def test_rejects_missing_ctx_required_by_need_ctx_operator(self):
-        with self.assertRaisesRegex(ValueError, "ctx.apiBase must be provided"):
-            OperatorExecutionCallbackClient({
-                "userAccount": "wangjianda.667",
-            })
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_missing_ctx_disables_callback_requests(self, mock_client_cls):
+        client = OperatorExecutionCallbackClient(None)
+
+        self.assertIsNone(client.start(operator_config={"sheet_url": "https://xxx"}))
+        self.assertEqual(
+            client.report_record_success(record_key="adc-record-001"),
+            {},
+        )
+        self.assertEqual(
+            client.report_record_failure(
+                record_key="adc-record-001",
+                error_message="failed",
+            ),
+            {},
+        )
+        self.assertEqual(client.finalize(), {})
+        self.assertEqual(client.failed(error_message="failed"), {})
+        mock_client_cls.assert_not_called()
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_incomplete_ctx_disables_callback_requests(self, mock_client_cls):
+        client = OperatorExecutionCallbackClient({
+            "userAccount": "wangjianda.667",
+        })
+
+        self.assertIsNone(client.start(operator_config={"sheet_url": "https://xxx"}))
+        self.assertEqual(client.report_record_success(record_key="adc-record-001"), {})
+        mock_client_cls.assert_not_called()
 
     def test_rejects_record_report_before_start(self):
         client = OperatorExecutionCallbackClient(self._ctx())
