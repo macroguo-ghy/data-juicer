@@ -1,4 +1,4 @@
 interface:
   display_name: "Online Ray E2E"
   short_description: "Submit and debug Data-Juicer Ray jobs"
-  default_prompt: "Use $online-ray-e2e to submit and debug a Data-Juicer online Ray E2E job."
+  default_prompt: "Use $online-ray-e2e to submit and debug a Data-Juicer online Ray job, including long-running cluster jobs."

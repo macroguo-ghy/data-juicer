@@ -1,6 +1,6 @@
 ---
 name: online-ray-e2e
-description: Submit, monitor, and debug Data-Juicer online Ray E2E jobs launched through ByteDance ai_data_forge LaunchMerlinFederalJob. Use when the user asks to run or close the loop for Ray job submission, Federal job status, Ray UI or Ray History inspection, driver stdout/stderr debugging, ExecuteHdfsCommand HDFS checks, local Ray/HDFS dry-run validation, or fixing and resubmitting Data-Juicer online Ray configs.
+description: Submit, monitor, and debug Data-Juicer online Ray E2E jobs through ByteDance ai_data_forge, including LaunchMerlinFederalJob jobs and Ray Jobs submitted to long-running Ray clusters. Use when the user asks to run or close the loop for Ray job submission, resident/long-running cluster submission, Federal job status, Ray UI or Ray History inspection, driver stdout/stderr debugging, ExecuteHdfsCommand HDFS checks, local Ray/HDFS dry-run validation, or fixing and resubmitting Data-Juicer online Ray configs.
 ---
 
 # Online Ray E2E
@@ -20,6 +20,7 @@ PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py 
 The launch `user_context.username` must match the active ByteDance login identity from `bytedcli --json auth status`, specifically `data.bytecloud_auth.identity.username`. Do not rely on the local shell `USER`, which may be a machine account such as `bytedance`. If the helper cannot infer the identity, pass `--username <bytedcli-login-username>` explicitly.
 
 For exact commands, request fields, HDFS probes, and validation snippets, read `references/runbook.md`.
+For resident / long-running Ray cluster submission through Ray Jobs, read `references/long_running_cluster.md`.
 
 ## Workflow
 
@@ -28,7 +29,7 @@ For exact commands, request fields, HDFS probes, and validation snippets, read `
    - Prefer small Ray + HDFS validation when the change touches HDFS loading, parquet schema, or IO behavior.
    - Otherwise run `ray_dry_run_plan=True` with `PYTHONPATH="$PWD"` to force current source imports.
 3. For online/distributed E2E input data, do not use repository-local files such as `demos/.../*.jsonl`; Ray workers may not see those files in their runtime working directories. Prefer HDFS-backed sample data and probe it with `ExecuteHdfsCommand` when needed.
-4. Submit through `online_ray_job.py launch` unless the user explicitly needs raw RPC JSON.
+4. Submit through `online_ray_job.py launch` for one-off Federal jobs. For resident / long-running Ray clusters, use `SubmitRayJobToLongRunningCluster` from `references/long_running_cluster.md`.
 5. Poll Federal status, but treat Ray driver terminal state as authoritative when Federal status lags.
 6. Open Ray UI / Ray History and inspect Jobs first. Read driver stdout/stderr before worker logs.
 7. Attribute failure to the first useful exception, not to secondary Ray debugger, pickling, or materialize noise.

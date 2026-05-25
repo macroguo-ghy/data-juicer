@@ -241,6 +241,7 @@ All the specific operators are listed below, each featured with several capabili
 | query_sentiment_detection_mapper | 🚀GPU 🧩HF 🧩HF 🟢Stable | Predicts user's sentiment label ('negative', 'neutral', 'positive') in a query. 在查询中预测用户的情绪标签 (“负面” 、 “中性” 、 “正面”)。 | [info](operators/mapper/query_sentiment_detection_mapper.md) | - |
 | query_topic_detection_mapper | 🚀GPU 🧩HF 🧩HF 🟢Stable | Predicts the topic label and its corresponding score for a given query. 预测给定查询的主题标签及其相应的分数。 | [info](operators/mapper/query_topic_detection_mapper.md) | - |
 | relation_identity_mapper | 🔤Text 💻CPU 🔗API 🟢Stable | Identify the relation between two entities in a given text. 确定给定文本中两个实体之间的关系。 | [info](operators/mapper/relation_identity_mapper.md) | - |
+| repartition_mapper | 💻CPU 🟢Stable | Repartition a Ray Dataset into a target number of blocks. 将 Ray Dataset 重新分区到指定 block 数。 | [info](operators/mapper/repartition_mapper.md) | - |
 | remove_bibliography_mapper | 🔤Text 💻CPU 🟢Stable | Removes bibliography sections at the end of LaTeX documents. 删除LaTeX文档末尾的参考书目部分。 | [info](operators/mapper/remove_bibliography_mapper.md) | - |
 | remove_comments_mapper | 🔤Text 💻CPU 🟢Stable | Removes comments from documents, currently supporting only 'tex' format. 从文档中删除注释，当前仅支持 “文本” 格式。 | [info](operators/mapper/remove_comments_mapper.md) | - |
 | remove_header_mapper | 🔤Text 💻CPU 🟢Stable | Removes headers at the beginning of documents in LaTeX samples. 删除LaTeX示例中文档开头的标题。 | [info](operators/mapper/remove_header_mapper.md) | - |
