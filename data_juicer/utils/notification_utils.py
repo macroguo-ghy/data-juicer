@@ -41,6 +41,7 @@ def send_test_card_notification(
 
 def _build_headers(ctx: dict[str, Any]) -> dict[str, str]:
     headers = dict(TEST_CARD_NOTIFICATION_HEADERS)
+    headers["space-id"] = _get_ctx_required_value(ctx, "spaceId")
     for key in ("x-tt-env", "x-use-ppe"):
         value = ctx.get(key)
         if value:

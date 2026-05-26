@@ -94,6 +94,7 @@ class ExternalEvalDataImportMapper(Mapper):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "user-account": user_account,
+            "space-id": self._get_ctx_required_value(self.ctx, "spaceId"),
         }
         add_record_log_id_header(headers, sample)
         client = HttpClient(

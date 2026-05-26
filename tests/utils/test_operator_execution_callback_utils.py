@@ -39,6 +39,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             "operatorIndex": 0,
             "operatorName": "load_external_dataset",
             "operatorType": "Mapper",
+            "spaceId": 1,
         }
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
@@ -76,6 +77,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             headers={
                 "Content-Type": "application/json",
                 "user-account": "wangjianda.667",
+                "space-id": "1",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
             },
@@ -205,6 +207,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             headers={
                 "Content-Type": "application/json",
                 "user-account": "wangjianda.667",
+                "space-id": "1",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
             },
@@ -255,6 +258,7 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
             headers={
                 "Content-Type": "application/json",
                 "user-account": "wangjianda.667",
+                "space-id": "1",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
                 "x-tt-logid": "log-001",

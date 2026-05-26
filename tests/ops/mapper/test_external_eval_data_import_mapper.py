@@ -64,6 +64,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
             "operatorName": "external_eval_data_import_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     def test_before_operator_started_starts_running_once(self):
@@ -157,6 +158,7 @@ class ExternalEvalDataImportMapperTest(unittest.TestCase):
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "user-account": "wangjianda.667",
+                "space-id": "1",
                 "x-tt-logid": "log-001",
             },
         )

@@ -79,6 +79,7 @@ class StateTemplateMapperTest(unittest.TestCase):
             "operatorName": "state_template_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     @staticmethod
@@ -179,6 +180,7 @@ process:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "user-account": "wangjianda.667",
+                "space-id": "1",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
                 "x-tt-logid": "log-001",
