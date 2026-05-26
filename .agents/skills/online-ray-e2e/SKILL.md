@@ -8,7 +8,7 @@ description: Submit, monitor, and debug Data-Juicer online Ray E2E jobs through 
 Use this skill to run the loop:
 
 ```text
-submit Ray job -> monitor status -> inspect driver logs -> fix config/code -> validate -> resubmit until success
+submit Ray job -> monitor status -> inspect driver logs -> fix config/code -> validate -> resubmit until success -> stop Federal job
 ```
 
 Work from the Data-Juicer repo root. Prefer the repo helper script over hand-written RPC JSON when possible:
@@ -35,6 +35,7 @@ For resident / long-running Ray cluster submission through Ray Jobs, read `refer
 7. Attribute failure to the first useful exception, not to secondary Ray debugger, pickling, or materialize noise.
 8. Fix the smallest owning layer: YAML, Data-Juicer code, image, resource spec, or external service config.
 9. Revalidate, push code when needed, resubmit, and continue monitoring until success or a new blocker is proven.
+10. Always stop every one-off Federal Ray job you launched before handing off. The helper sets `BYTED_RAY_ray_io_dont_shutdown_cluster_after_job_finished=true`, so successful or failed Ray drivers can leave the Ray cluster alive until you call `online_ray_job.py stop` or `OperateMerlinFederalJob` with `"action": "Stop"`. After stopping, poll `status` and record evidence that each SID is `STOPPED`.
 
 ## Safety Rules
 
@@ -42,6 +43,7 @@ For resident / long-running Ray cluster submission through Ray Jobs, read `refer
 - Store raw requests and downloaded logs only under `/tmp` or the helper run directory.
 - If `operator_yaml` contains secrets, use redacted summaries in reports.
 - Do not call a job successful unless Federal/Ray/Data-Juicer/export evidence all agree, or clearly state the missing layer.
+- Do not leave launched one-off Federal Ray jobs running. Because `BYTED_RAY_ray_io_dont_shutdown_cluster_after_job_finished=true` is set for these jobs, manual Stop is required even after terminal Ray driver success or expected failure.
 
 ## Debug Priorities
 

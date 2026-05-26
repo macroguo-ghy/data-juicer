@@ -2,6 +2,7 @@ import base64
 import inspect
 import json
 import os
+import posixpath
 import uuid
 from functools import partial
 
@@ -52,6 +53,11 @@ def _json_default(value):
         return isoformat()
     return str(value)
 
+
+try:
+    from ray.data.datasource import Datasink
+except ImportError:  # pragma: no cover - Ray is required for RayExporter at runtime.
+    Datasink = object
 
 try:
     from ray.data.datasource.file_datasink import BlockBasedFileDatasink
@@ -112,6 +118,166 @@ class _AppendFilenameProvider(FilenameProvider):
             write_uuid, task_index, block_index, row_index = args
             return self._filename(write_uuid, task_index, block_index, row_index)
         raise TypeError("Unexpected FilenameProvider row callback signature.")
+
+
+class RayHdfsFanoutDatasink(Datasink):
+    """A Ray datasink that writes one input dataset to multiple HDFS file sinks."""
+
+    def __init__(self, *, targets, columns=None):
+        self.targets = []
+        self.columns = columns
+        self.write_uuid = uuid.uuid4().hex
+        for index, target in enumerate(targets):
+            condition = target.get("condition", target.get("filter_condition", ""))
+            from data_juicer.ops.filter.general_field_filter import compile_filter_condition
+
+            self.targets.append(
+                {
+                    **target,
+                    "index": index,
+                    "condition": condition,
+                    "compiled_condition": compile_filter_condition(condition),
+                    "mode": target.get("mode") or "error_if_exists",
+                    "extra_args": dict(target.get("extra_args") or {}),
+                    "created_dir": False,
+                }
+            )
+
+    @property
+    def supports_distributed_writes(self) -> bool:
+        return True
+
+    def get_name(self) -> str:
+        return "HdfsFanout"
+
+    def on_write_start(self, schema=None) -> None:
+        from pyarrow.fs import FileType
+
+        file_infos = []
+        for target in self.targets:
+            info = target["filesystem"].get_file_info(target["path"])
+            file_infos.append(info)
+            if target["mode"] == "error_if_exists" and info.type is not FileType.NotFound:
+                raise FileExistsError(
+                    f"Ray HDFS fan-out export path already exists: {target['original_uri']}. "
+                    "Set `mode: overwrite` to replace it or `mode: append` to append."
+                )
+
+        for target, info in zip(self.targets, file_infos):
+            filesystem = target["filesystem"]
+            if target["mode"] == "overwrite" and info.type is not FileType.NotFound:
+                if info.type is FileType.Directory:
+                    filesystem.delete_dir(target["path"])
+                else:
+                    filesystem.delete_file(target["path"])
+                target["created_dir"] = True
+            elif info.type is FileType.NotFound:
+                target["created_dir"] = True
+            self._create_dir(filesystem, target["path"])
+
+    @staticmethod
+    def _create_dir(filesystem, path):
+        try:
+            filesystem.create_dir(path, recursive=True)
+        except TypeError:
+            filesystem.create_dir(path)
+
+    def write(self, blocks, ctx):
+        results = {target["index"]: 0 for target in self.targets}
+        for block_index, block in enumerate(blocks):
+            table = self._block_to_table(block)
+            for target in self.targets:
+                filtered_table = self._filter_table_for_target(table, target)
+                if filtered_table.num_rows == 0:
+                    continue
+                filtered_table = self._select_export_columns(filtered_table)
+                filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
+                output_path = posixpath.join(target["path"], filename)
+                self._write_table(target, filtered_table, output_path)
+                results[target["index"]] += filtered_table.num_rows
+        return results
+
+    def on_write_complete(self, write_result):
+        from pyarrow.fs import FileType
+
+        row_counts = {target["index"]: 0 for target in self.targets}
+        for write_return in getattr(write_result, "write_returns", []) or []:
+            for target_index, count in (write_return or {}).items():
+                row_counts[target_index] = row_counts.get(target_index, 0) + count
+
+        for target in self.targets:
+            if not target.get("created_dir") or row_counts.get(target["index"], 0) != 0:
+                continue
+            filesystem = target["filesystem"]
+            if filesystem.get_file_info(target["path"]).type is not FileType.NotFound:
+                filesystem.delete_dir(target["path"])
+
+    @staticmethod
+    def _block_to_table(block):
+        import pyarrow as pa
+        from ray.data.block import BlockAccessor
+
+        if isinstance(block, pa.Table):
+            return block
+        to_arrow = getattr(block, "to_arrow", None)
+        if callable(to_arrow):
+            return to_arrow()
+        return BlockAccessor.for_block(block).to_arrow()
+
+    def _filter_table_for_target(self, table, target):
+        condition = target["compiled_condition"]
+        if not condition.filter_condition:
+            return table
+
+        rows = table.to_pylist()
+        mask = [condition.matches(row) for row in rows]
+        if all(mask):
+            return table
+        if not any(mask):
+            return table.slice(0, 0)
+
+        import pyarrow as pa
+
+        return table.filter(pa.array(mask))
+
+    def _select_export_columns(self, table):
+        if self.columns is None:
+            return table
+        available = set(table.schema.names)
+        columns = [column for column in self.columns if column in available]
+        return table.select(columns)
+
+    def _filename(self, target, task_index: int, block_index: int) -> str:
+        extension = "jsonl" if target["type"] == "jsonl" else target["type"]
+        return f"part-{target['index']:02d}-{self.write_uuid}-{task_index:06d}-{block_index:06d}.{extension}"
+
+    def _write_table(self, target, table, output_path: str) -> None:
+        export_type = target["type"]
+        extra_args = dict(target.get("extra_args") or {})
+        if export_type == "parquet":
+            self._write_parquet(target["filesystem"], output_path, table, extra_args)
+            return
+        if export_type == "jsonl":
+            self._write_jsonl(target["filesystem"], output_path, table, extra_args)
+            return
+        raise NotImplementedError(f"Ray HDFS fan-out export does not support type [{export_type}]")
+
+    @staticmethod
+    def _write_parquet(filesystem, output_path: str, table, extra_args):
+        import pyarrow.parquet as pq
+
+        allowed = set(inspect.signature(pq.write_table).parameters)
+        parquet_args = {key: value for key, value in extra_args.items() if key in allowed}
+        with filesystem.open_output_stream(output_path) as file:
+            pq.write_table(table, file, **parquet_args)
+
+    @staticmethod
+    def _write_jsonl(filesystem, output_path: str, table, extra_args):
+        ensure_ascii = extra_args.get("force_ascii", extra_args.get("ensure_ascii", False))
+        with filesystem.open_output_stream(output_path) as file:
+            for row in table.to_pylist():
+                line = json.dumps(row, ensure_ascii=ensure_ascii, default=_json_default)
+                file.write((line + "\n").encode("utf-8"))
 
 
 class RayExporter:

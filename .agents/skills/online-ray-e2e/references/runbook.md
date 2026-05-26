@@ -74,6 +74,36 @@ PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py 
   --run-dir /tmp/data_juicer_e2e/<job_id>
 ```
 
+Manual Stop is mandatory for one-off Federal Ray jobs launched by this helper. The launch request sets:
+
+```text
+BYTED_RAY_ray_io_dont_shutdown_cluster_after_job_finished=true
+```
+
+That keeps the Ray cluster alive after the driver reaches `SUCCEEDED`, `FAILED`, or an expected failure. Before handoff, stop every SID you launched and then poll `status` until each one reports `STOPPED`.
+
+For batches, keep a manifest of `sid` and `out_dir` and stop from that manifest:
+
+```bash
+jq -r '.[] | [.sid, .out_dir] | @tsv' /tmp/data_juicer_e2e/manifest.json |
+while IFS=$'\t' read -r sid run_dir; do
+  PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py stop \
+    --username "<your-username>" \
+    --run-dir "$run_dir"
+done
+```
+
+Then verify:
+
+```bash
+jq -r '.[] | [.sid, .out_dir] | @tsv' /tmp/data_juicer_e2e/manifest.json |
+while IFS=$'\t' read -r sid run_dir; do
+  PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py status \
+    --username "<your-username>" \
+    --run-dir "$run_dir"
+done
+```
+
 Raw RPC defaults:
 
 ```bash
@@ -247,5 +277,6 @@ After a failure:
 5. Resubmit with `online_ray_job.py launch`.
 6. Monitor Ray driver terminal state and driver logs.
 7. Verify export rows, partition, or table output before calling the E2E successful.
+8. Stop every Federal Ray job launched during the loop and confirm each SID is `STOPPED`.
 
 Success requires Federal success, Ray driver success, no failed Ray Data stage, Data-Juicer completion, and expected exported output. If a layer cannot be checked, state the blocker and the deepest verified layer.

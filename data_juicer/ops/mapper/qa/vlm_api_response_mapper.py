@@ -459,6 +459,7 @@ class VlmApiResponseMapper(Pipeline):
            top_p: 0.7
            thinking:
              type: "disabled"
+           reasoning_effort: "low"
 
        Responses 示例：
        - vlm_api_response_mapper:
@@ -559,6 +560,7 @@ class VlmApiResponseMapper(Pipeline):
         text: dict[str, Any] | None = None,
         store: bool | None = None,
         reasoning: dict[str, Any] | None = None,
+        reasoning_effort: str | None = None,
         thinking: dict[str, Any] | None = None,
         previous_response_id: str | None = None,
         response_format: dict[str, Any] | None = None,
@@ -615,6 +617,7 @@ class VlmApiResponseMapper(Pipeline):
         self.text = text
         self.store = store
         self.reasoning = reasoning
+        self.reasoning_effort = reasoning_effort
         self.thinking = thinking
         self.previous_response_id = previous_response_id
         self.response_format = response_format
@@ -1336,6 +1339,8 @@ class VlmApiResponseMapper(Pipeline):
             payload["top_p"] = self.top_p
         if self.thinking is not None:
             payload["thinking"] = self.thinking
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         if self.response_format is not None:
             payload["response_format"] = self.response_format
         if self.stop is not None:

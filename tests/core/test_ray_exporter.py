@@ -5,6 +5,7 @@ import json
 import os
 import os.path as osp
 import shutil
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +14,7 @@ import pyarrow.parquet as pq
 from pyarrow.fs import FileInfo, FileType, LocalFileSystem
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
-from data_juicer.core.ray_exporter import RayExporter
+from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.mm_utils import load_images_byte
 
@@ -256,14 +257,297 @@ class TestRayExporterHDFS(unittest.TestCase):
             )
 
 
+class TestRayHdfsFanoutDatasink(unittest.TestCase):
+    def _ctx(self, task_idx=0):
+        return type("Ctx", (), {"task_idx": task_idx})()
+
+    def _target(self, path, *, filesystem=None, export_type="jsonl", mode="error_if_exists", condition="", extra_args=None):
+        return {
+            "path": path,
+            "original_uri": path,
+            "filesystem": filesystem or LocalFileSystem(),
+            "type": export_type,
+            "mode": mode,
+            "condition": condition,
+            "extra_args": extra_args or {},
+        }
+
+    def test_fanout_parquet_writes_matching_rows_to_each_target(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_a = os.path.join(tmp_dir, "a")
+            output_b = os.path.join(tmp_dir, "b")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    {
+                        "path": output_a,
+                        "original_uri": output_a,
+                        "filesystem": LocalFileSystem(),
+                        "type": "parquet",
+                        "mode": "error_if_exists",
+                        "condition": "score >= 0.8",
+                        "extra_args": {},
+                    },
+                    {
+                        "path": output_b,
+                        "original_uri": output_b,
+                        "filesystem": LocalFileSystem(),
+                        "type": "parquet",
+                        "mode": "error_if_exists",
+                        "condition": "lang == 'zh'",
+                        "extra_args": {},
+                    },
+                ],
+                columns=["id", "score", "lang"],
+            )
+            table = pa.table(
+                {
+                    "id": [1, 2, 3],
+                    "score": [0.9, 0.1, 0.95],
+                    "lang": ["en", "zh", "zh"],
+                    Fields.stats: [{"x": 1}, {"x": 2}, {"x": 3}],
+                }
+            )
+
+            datasink.on_write_start(table.schema)
+            datasink.write([table], self._ctx())
+
+            rows_a = pq.read_table(output_a).to_pylist()
+            rows_b = pq.read_table(output_b).to_pylist()
+            self.assertEqual([row["id"] for row in rows_a], [1, 3])
+            self.assertEqual([row["id"] for row in rows_b], [2, 3])
+            self.assertNotIn(Fields.stats, rows_a[0])
+
+    def test_fanout_jsonl_write_failure_is_propagated(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_a = os.path.join(tmp_dir, "a")
+            output_b = os.path.join(tmp_dir, "b")
+            failing_filesystem = MagicMock()
+            failing_filesystem.get_file_info.return_value = FileInfo(output_b, FileType.NotFound)
+            failing_filesystem.create_dir.side_effect = RuntimeError("cannot create target")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    {
+                        "path": output_a,
+                        "original_uri": output_a,
+                        "filesystem": LocalFileSystem(),
+                        "type": "jsonl",
+                        "mode": "error_if_exists",
+                        "condition": "",
+                        "extra_args": {},
+                    },
+                    {
+                        "path": output_b,
+                        "original_uri": output_b,
+                        "filesystem": failing_filesystem,
+                        "type": "jsonl",
+                        "mode": "error_if_exists",
+                        "condition": "",
+                        "extra_args": {},
+                    },
+                ],
+                columns=["id"],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "cannot create target"):
+                datasink.on_write_start(pa.schema([pa.field("id", pa.int64())]))
+
+    def test_fanout_jsonl_writes_matching_rows(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "jsonl")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    {
+                        "path": output_dir,
+                        "original_uri": output_dir,
+                        "filesystem": LocalFileSystem(),
+                        "type": "jsonl",
+                        "mode": "error_if_exists",
+                        "condition": "score >= 0.8",
+                        "extra_args": {},
+                    },
+                ],
+                columns=["id", "score"],
+            )
+            table = pa.table({"id": [1, 2], "score": [0.9, 0.1], Fields.stats: [{"x": 1}, {"x": 2}]})
+
+            datasink.on_write_start(table.schema)
+            datasink.write([table], self._ctx())
+
+            files = [os.path.join(output_dir, name) for name in os.listdir(output_dir)]
+            self.assertEqual(len(files), 1)
+            with open(files[0], "r", encoding="utf-8") as file:
+                rows = [json.loads(line) for line in file]
+            self.assertEqual(rows, [{"id": 1, "score": 0.9}])
+
+    def test_fanout_respects_empty_export_columns(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                {
+                    "path": "/unused",
+                    "original_uri": "/unused",
+                    "filesystem": LocalFileSystem(),
+                    "type": "jsonl",
+                    "mode": "error_if_exists",
+                    "condition": "",
+                    "extra_args": {},
+                },
+            ],
+            columns=[],
+        )
+        table = pa.table({"id": [1], Fields.stats: [{"x": 1}]})
+
+        selected = datasink._select_export_columns(table)
+
+        self.assertEqual(selected.schema.names, [])
+        self.assertEqual(selected.num_rows, 1)
+
+    def test_fanout_error_if_exists_preflights_all_targets_before_mutating(self):
+        fs_overwrite = MagicMock()
+        fs_existing = MagicMock()
+        fs_overwrite.get_file_info.return_value = FileInfo("/path/a", FileType.Directory)
+        fs_existing.get_file_info.return_value = FileInfo("/path/b", FileType.Directory)
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                self._target("/path/a", filesystem=fs_overwrite, mode="overwrite"),
+                self._target("/path/b", filesystem=fs_existing, mode="error_if_exists"),
+            ],
+            columns=["id"],
+        )
+
+        with self.assertRaisesRegex(FileExistsError, "already exists"):
+            datasink.on_write_start(pa.schema([pa.field("id", pa.int64())]))
+
+        fs_overwrite.delete_dir.assert_not_called()
+        fs_overwrite.delete_file.assert_not_called()
+        fs_overwrite.create_dir.assert_not_called()
+        fs_existing.create_dir.assert_not_called()
+
+    def test_fanout_on_write_start_handles_modes_and_existing_path_types(self):
+        cases = [
+            ("overwrite", FileType.Directory, "delete_dir", True),
+            ("overwrite", FileType.File, "delete_file", True),
+            ("append", FileType.Directory, None, False),
+            ("error_if_exists", FileType.NotFound, None, True),
+        ]
+        for mode, file_type, delete_method, created_dir in cases:
+            filesystem = MagicMock()
+            filesystem.get_file_info.return_value = FileInfo("/path/output", file_type)
+            datasink = RayHdfsFanoutDatasink(
+                targets=[self._target("/path/output", filesystem=filesystem, mode=mode)],
+                columns=["id"],
+            )
+
+            datasink.on_write_start(pa.schema([pa.field("id", pa.int64())]))
+
+            self.assertEqual(datasink.targets[0]["created_dir"], created_dir)
+            if delete_method is None:
+                filesystem.delete_dir.assert_not_called()
+                filesystem.delete_file.assert_not_called()
+            else:
+                getattr(filesystem, delete_method).assert_called_once_with("/path/output")
+            filesystem.create_dir.assert_called_once_with("/path/output", recursive=True)
+
+    def test_fanout_error_if_exists_rejects_existing_file(self):
+        filesystem = MagicMock()
+        filesystem.get_file_info.return_value = FileInfo("/path/output", FileType.File)
+        datasink = RayHdfsFanoutDatasink(
+            targets=[self._target("/path/output", filesystem=filesystem, mode="error_if_exists")],
+            columns=["id"],
+        )
+
+        with self.assertRaisesRegex(FileExistsError, "already exists"):
+            datasink.on_write_start(pa.schema([pa.field("id", pa.int64())]))
+
+        filesystem.create_dir.assert_not_called()
+
+    def test_fanout_on_write_complete_removes_only_new_empty_targets(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            empty_dir = os.path.join(tmp_dir, "empty")
+            non_empty_dir = os.path.join(tmp_dir, "non_empty")
+            append_dir = os.path.join(tmp_dir, "append")
+            for path in (empty_dir, non_empty_dir, append_dir):
+                os.makedirs(path, exist_ok=True)
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(empty_dir, mode="error_if_exists"),
+                    self._target(non_empty_dir, mode="error_if_exists"),
+                    self._target(append_dir, mode="append"),
+                ],
+                columns=["id"],
+            )
+            datasink.targets[0]["created_dir"] = True
+            datasink.targets[1]["created_dir"] = True
+            datasink.targets[2]["created_dir"] = False
+            write_result = type("WriteResult", (), {"write_returns": [{0: 0, 1: 1, 2: 0}]})()
+
+            datasink.on_write_complete(write_result)
+
+            self.assertFalse(os.path.exists(empty_dir))
+            self.assertTrue(os.path.exists(non_empty_dir))
+            self.assertTrue(os.path.exists(append_dir))
+
+    def test_fanout_write_failure_after_partial_target_write_is_propagated(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_a = os.path.join(tmp_dir, "a")
+            output_b = os.path.join(tmp_dir, "b")
+            failing_filesystem = MagicMock()
+            failing_filesystem.get_file_info.return_value = FileInfo(output_b, FileType.NotFound)
+            failing_filesystem.open_output_stream.side_effect = RuntimeError("cannot write target")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(output_a, condition="score >= 0.8"),
+                    self._target(output_b, filesystem=failing_filesystem, condition="score >= 0.8"),
+                ],
+                columns=["id", "score"],
+            )
+            table = pa.table({"id": [1], "score": [0.9]})
+            datasink.on_write_start(table.schema)
+
+            with self.assertRaisesRegex(RuntimeError, "cannot write target"):
+                datasink.write([table], self._ctx())
+
+            self.assertEqual(len(os.listdir(output_a)), 1)
+
+    def test_fanout_unknown_export_type_fails_fast(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[self._target("/unused", export_type="csv")],
+            columns=["id"],
+        )
+
+        with self.assertRaisesRegex(NotImplementedError, "does not support"):
+            datasink._write_table(datasink.targets[0], pa.table({"id": [1]}), "/unused/file.csv")
+
+
 class TestRayExporterHDFSRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import ray
 
+        cls._av_stub_dir = tempfile.TemporaryDirectory()
+        with open(osp.join(cls._av_stub_dir.name, "av.py"), "w", encoding="utf-8") as file:
+            file.write(
+                "class _Logging:\n"
+                "    PANIC = 0\n"
+                "    def set_level(self, *args, **kwargs):\n"
+                "        pass\n"
+                "logging = _Logging()\n"
+                "class _Container:\n"
+                "    class InputContainer:\n"
+                "        pass\n"
+                "container = _Container()\n"
+            )
         cls._ray_started_by_test = not ray.is_initialized()
         if cls._ray_started_by_test:
-            ray.init(address="local", num_cpus=2, include_dashboard=False, log_to_driver=False)
+            pythonpath = cls._av_stub_dir.name
+            if os.environ.get("PYTHONPATH"):
+                pythonpath = pythonpath + os.pathsep + os.environ["PYTHONPATH"]
+            ray.init(
+                address="local",
+                num_cpus=2,
+                include_dashboard=False,
+                log_to_driver=False,
+                runtime_env={"env_vars": {"PYTHONPATH": pythonpath}},
+            )
 
     @classmethod
     def tearDownClass(cls):
@@ -271,6 +555,7 @@ class TestRayExporterHDFSRoundTrip(unittest.TestCase):
             import ray
 
             ray.shutdown()
+        cls._av_stub_dir.cleanup()
 
     def setUp(self):
         self.tmp_dir = osp.join(
@@ -336,6 +621,56 @@ class TestRayExporterHDFSRoundTrip(unittest.TestCase):
                 mode=mode,
                 **export_args,
             ).export(dataset)
+
+    def test_fanout_datasink_ray_write_datasink_jsonl_roundtrip(self):
+        import ray
+
+        output_a = osp.join(self.tmp_dir, "fanout_a")
+        output_b = osp.join(self.tmp_dir, "fanout_b")
+        dataset = ray.data.from_items(
+            [
+                {"id": 1, "score": 0.9, "lang": "en"},
+                {"id": 2, "score": 0.1, "lang": "zh"},
+                {"id": 3, "score": 0.95, "lang": "zh"},
+            ]
+        ).repartition(2)
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                {
+                    "path": output_a,
+                    "original_uri": output_a,
+                    "filesystem": self.filesystem,
+                    "type": "jsonl",
+                    "mode": "error_if_exists",
+                    "condition": "score >= 0.8",
+                    "extra_args": {},
+                },
+                {
+                    "path": output_b,
+                    "original_uri": output_b,
+                    "filesystem": self.filesystem,
+                    "type": "jsonl",
+                    "mode": "error_if_exists",
+                    "condition": "lang == 'zh'",
+                    "extra_args": {},
+                },
+            ],
+            columns=["id", "score", "lang"],
+        )
+
+        dataset.write_datasink(datasink)
+
+        def read_jsonl_dir(path):
+            rows = []
+            for filename in os.listdir(path):
+                if not filename.endswith(".jsonl"):
+                    continue
+                with open(osp.join(path, filename), "r", encoding="utf-8") as file:
+                    rows.extend(json.loads(line) for line in file)
+            return sorted(rows, key=lambda row: row["id"])
+
+        self.assertEqual([row["id"] for row in read_jsonl_dir(output_a)], [1, 3])
+        self.assertEqual([row["id"] for row in read_jsonl_dir(output_b)], [2, 3])
 
     def _data_files(self, output_dir, export_type):
         suffix = ".parquet" if export_type == "parquet" else ".json"
