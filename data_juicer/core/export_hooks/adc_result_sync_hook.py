@@ -84,7 +84,11 @@ class AdcResultSyncHook:
         }
         if target.get("sheetTitle") is not None:
             payload["sheetTitle"] = target.get("sheetTitle")
-        result = self._post(EXPORT_TO_SHEET_PATH, payload, headers=self._base_headers())
+        result = self._post(
+            EXPORT_TO_SHEET_PATH,
+            payload,
+            headers=self._base_headers(include_space_id=True),
+        )
         return self._openapi_data(result)
 
     def _sync_eval_set(self, target: dict[str, Any]) -> dict[str, Any]:
@@ -103,7 +107,7 @@ class AdcResultSyncHook:
             payload["fieldMapping"] = target.get("fieldMapping")
 
         space_id = target_cfg.get("spaceId", self.ctx.get("spaceId"))
-        headers = self._base_headers()
+        headers = self._base_headers(include_space_id=True)
         headers["space-id"] = str(self._require_value(space_id, "ctx.spaceId or target.spaceId"))
         result = self._post(SYNC_EVAL_SET_FROM_LANCE_PATH, payload, headers=headers)
         data = self._openapi_data(result)
@@ -173,11 +177,13 @@ class AdcResultSyncHook:
         data = envelope.get("data")
         return data if isinstance(data, dict) else {}
 
-    def _base_headers(self) -> dict[str, str]:
+    def _base_headers(self, include_space_id: bool = False) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "User-Account": self.user_account,
         }
+        if include_space_id:
+            headers["space-id"] = str(self._require_value(self.ctx.get("spaceId"), "ctx.spaceId"))
         for key in ("x-tt-env", "x-use-ppe"):
             value = self.ctx.get(key)
             if value:
