@@ -461,6 +461,26 @@ export:
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
 
+`export.targets` 用于 Ray HDFS fan-out 写出，不能和 `export.target` 同时配置。第一版仅支持 `executor_type: ray`、`target: hdfs`、`type: parquet/jsonl`，且所有 target 的 `target` 与 `type` 必须一致。每个 target 可配置 `filter_condition`，语法复用 `general_field_filter` 的字段比较表达式；同一行可命中多个 target。任一写出失败都会让任务失败；`mode: append` 仍是 at-least-once，task retry 或用户重跑可能产生重复 part 文件。
+
+```yaml
+executor_type: ray
+export:
+  targets:
+    - target: hdfs
+      type: parquet
+      path: hdfs://cluster/path/high_score
+      mode: overwrite
+      filter_condition: "score >= 0.8"
+      filesystem: pyarrow
+    - target: hdfs
+      type: parquet
+      path: hdfs://cluster/path/zh
+      mode: overwrite
+      filter_condition: "lang == 'zh'"
+      filesystem: pyarrow
+```
+
 `export.max_rows` 只控制传给 sink 的数据规模，不改变写入模式；例如 `OVERWRITE` 仍会覆盖目标，只是写入受控后的数据。`limit` 模式下，Ray limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 `max_rows` 行的上游工作。`quota_reservation` 控制的是进入 sink 输入流的数据，不是写入提交计数器；它会在真正 sink 前增加一次 materialize 屏障，用来避免 Ray 写入前的 schema/sample 动作重复执行带状态的 quota reservation。任务重试或 sink 失败时不提供 exactly-once 计数保证。`ray_collect_real_metrics: true` 不能和 `export.max_rows` 同时配置，因为导出前的 eager `materialize()` / `count()` 会破坏 lazy limit 路径。
 
 导出前，默认会移除中间字段：

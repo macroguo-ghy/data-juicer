@@ -193,6 +193,30 @@ AWS credentials are resolved in priority order:
 
 `ray_collect_real_metrics: true` is invalid together with `export.max_rows`, because eager Ray Dataset `materialize()`/`count()` before export defeats the lazy limit path.
 
+## Ray HDFS Fan-Out Export
+
+Ray mode can write one processed dataset to multiple HDFS directories in a single sink action:
+
+```yaml
+executor_type: ray
+export:
+  targets:
+    - target: hdfs
+      type: parquet
+      path: hdfs://cluster/path/high_score
+      mode: overwrite
+      filter_condition: "score >= 0.8"
+      filesystem: pyarrow
+    - target: hdfs
+      type: parquet
+      path: hdfs://cluster/path/zh
+      mode: overwrite
+      filter_condition: "lang == 'zh'"
+      filesystem: pyarrow
+```
+
+`export.targets` cannot be used together with `export.target`. The first version only supports Ray HDFS `parquet` and `jsonl`; all targets must use the same `target` and `type`. Conditions use the same expression syntax as `general_field_filter`. A row can match multiple targets, and any write failure fails the task. `append` is at-least-once, so retries or reruns can produce duplicate part files.
+
 ## Stats and Hash Management
 
 During processing, DataJuicer computes intermediate fields:

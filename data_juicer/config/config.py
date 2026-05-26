@@ -1,4 +1,5 @@
 import argparse
+import ast
 import copy
 import importlib.util
 import json
@@ -958,6 +959,11 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         return cfg
     if not isinstance(export_cfg, dict):
         raise ValueError("Structured `export` config must be a dictionary")
+    if "targets" in export_cfg:
+        _validate_export_targets(export_cfg, cfg)
+        cfg.export_path = export_cfg["targets"][0]["path"]
+        cfg.export = dict_to_namespace(export_cfg)
+        return cfg
     _validate_export_max_rows(export_cfg, cfg)
 
     path = export_cfg.get("path")
@@ -976,6 +982,83 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
 
     cfg.export = dict_to_namespace(export_cfg)
     return cfg
+
+
+def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
+    targets = export_cfg.get("targets")
+    if export_cfg.get("target") is not None:
+        raise ValueError("`export.targets` cannot be used together with `export.target`.")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("`export.targets` must be a non-empty list.")
+    if getattr(cfg, "executor_type", "default") != "ray":
+        raise ValueError("`export.targets` requires `executor_type: ray`.")
+    if "max_rows" in export_cfg or "max_rows_mode" in export_cfg or "max_rows_quota_batch_size" in export_cfg:
+        raise ValueError("`export.targets` cannot be used together with `export.max_rows*` in the first version.")
+    if getattr(cfg, "ray_collect_real_metrics", False):
+        raise ValueError("`ray_collect_real_metrics` cannot be true when `export.targets` is set.")
+    checkpoint_cfg = _plain_cfg_value(getattr(cfg, "ray_data_checkpoint", None))
+    if isinstance(checkpoint_cfg, dict) and checkpoint_cfg.get("enabled"):
+        raise ValueError("`ray_data_checkpoint.enabled` is not supported with `export.targets` in the first version.")
+    hook_cfg = export_cfg.get("after_export_hook")
+    if isinstance(hook_cfg, dict) and hook_cfg.get("enabled") is True:
+        raise ValueError("`after_export_hook` is not supported with `export.targets` in the first version.")
+
+    common_target = None
+    common_type = None
+    seen_paths = set()
+    valid_modes = {"error_if_exists", "overwrite", "append"}
+    for index, target_cfg in enumerate(targets):
+        if not isinstance(target_cfg, dict):
+            raise ValueError("Each `export.targets` item must be a dictionary.")
+        target = target_cfg.get("target")
+        export_type = target_cfg.get("type")
+        path = target_cfg.get("path")
+        if target != "hdfs":
+            raise ValueError("`export.targets` first version only supports `target: hdfs`.")
+        if export_type not in {"parquet", "jsonl"}:
+            raise ValueError("`export.targets` first version only supports `type: parquet/jsonl`.")
+        if not isinstance(path, str) or not path.startswith("hdfs://"):
+            raise ValueError("Each `export.targets` item requires an HDFS `path`.")
+        if _looks_like_export_file_path(path):
+            raise ValueError("Ray HDFS `export.targets` paths must be directory paths, not file-like paths.")
+        mode = target_cfg.get("mode", "error_if_exists")
+        if mode not in valid_modes:
+            raise ValueError("`export.targets[].mode` must be one of error_if_exists, overwrite, append.")
+        filter_condition = target_cfg.get("filter_condition", "")
+        if filter_condition is not None and not isinstance(filter_condition, str):
+            raise ValueError("`export.targets[].filter_condition` must be a string when set.")
+        if filter_condition:
+            try:
+                ast.parse(filter_condition, mode="eval")
+            except SyntaxError as exc:
+                raise ValueError("`export.targets[].filter_condition` must be a valid expression.") from exc
+        target_cfg.setdefault("mode", mode)
+        target_cfg.setdefault("extra_args", {})
+        target_cfg.setdefault("filter_condition", "")
+        if common_target is None:
+            common_target = target
+            common_type = export_type
+        elif target != common_target:
+            raise ValueError("All `export.targets` items must use the same `target`.")
+        elif export_type != common_type:
+            raise ValueError("All `export.targets` items must use the same `type`.")
+        if path in seen_paths:
+            raise ValueError("`export.targets` paths must be unique.")
+        seen_paths.add(path)
+        targets[index] = target_cfg
+
+
+def _suffix_from_export_path(path):
+    if not path:
+        return None
+    basename = path.rstrip("/").split("/")[-1]
+    if "." not in basename:
+        return None
+    return basename.rsplit(".", 1)[-1].lower()
+
+
+def _looks_like_export_file_path(path):
+    return _suffix_from_export_path(path) in {"parquet", "json", "jsonl", "csv"}
 
 
 def _validate_export_max_rows(export_cfg: dict, cfg: Namespace) -> None:
@@ -1052,7 +1135,10 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
         export_cfg = _plain_cfg_value(cfg.export)
         placeholders = {"work_dir": cfg.work_dir, "job_id": getattr(cfg, "job_id", "")}
         export_cfg = _substitute_nested_placeholders(export_cfg, placeholders)
-        if export_cfg.get("path"):
+        if export_cfg.get("targets"):
+            _validate_export_targets(export_cfg, cfg)
+            cfg.export_path = export_cfg["targets"][0]["path"]
+        elif export_cfg.get("path"):
             export_cfg["path"] = cfg.export_path
         cfg.export = dict_to_namespace(export_cfg)
 

@@ -1584,6 +1584,7 @@ class VlmApiResponseMapperTest(unittest.TestCase):
             base_url="https://seed.example/v1/chat/completions",
             top_p=0.6,
             thinking={"type": "disabled"},
+            reasoning_effort="low",
             response_format={"type": "json_object"},
             stop=["END"],
             frequency_penalty=0.1,
@@ -1596,6 +1597,7 @@ class VlmApiResponseMapperTest(unittest.TestCase):
         payload = calls[0]
         self.assertEqual(payload["top_p"], 0.6)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["reasoning_effort"], "low")
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertEqual(payload["stop"], ["END"])
         self.assertEqual(payload["frequency_penalty"], 0.1)
@@ -2294,6 +2296,7 @@ class VlmApiResponseMapperTest(unittest.TestCase):
                         "prompt_template": "classify",
                         "model": "m",
                         "base_url": "https://seed.example/v1",
+                        "reasoning_effort": "low",
                         "rpm": 60,
                         "adaptive_rate_limit": True,
                         "rate_limit_retry_attempts": 2,
@@ -2305,6 +2308,7 @@ class VlmApiResponseMapperTest(unittest.TestCase):
 
         self.assertEqual(len(ops), 1)
         self.assertIsInstance(ops[0], VlmApiResponseMapper)
+        self.assertEqual(ops[0].reasoning_effort, "low")
         self.assertTrue(ops[0].adaptive_rate_limit)
         self.assertEqual(ops[0].rate_limit_retry_attempts, 2)
 

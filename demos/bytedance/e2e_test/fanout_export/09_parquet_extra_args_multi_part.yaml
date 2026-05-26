@@ -1,0 +1,41 @@
+project_name: "fanout-parquet-extra-args-multi-part"
+executor_type: "ray"
+ray_address: "auto"
+np: 1
+text_keys: "texts"
+min_common_dep_num_to_combine: 0
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/product_core_attribute_sample_stats_daily_v2/20260428_addurl_product_filter_schema_md5_dedup_final/part-20642-a4f293e6-a6aa-4cc5-8d94-68cd079ce329-c000.snappy.parquet"
+      format: "parquet"
+      filesystem: "pyarrow"
+      columns: ["id", "extra", "texts", "images", "md5", "source", "type"]
+      override_num_blocks: 4
+      skip_zero_row_group_files: true
+      limit: 10
+
+export:
+  targets:
+    - target: "hdfs"
+      type: "parquet"
+      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/data_juicer/e2e/fanout_export/{job_id}/parquet_extra/all"
+      filesystem: "pyarrow"
+      mode: "overwrite"
+      filter_condition: "id != ''"
+      extra_args:
+        min_rows_per_file: 2
+        compression: "snappy"
+    - target: "hdfs"
+      type: "parquet"
+      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/data_juicer/e2e/fanout_export/{job_id}/parquet_extra/none"
+      filesystem: "pyarrow"
+      mode: "overwrite"
+      filter_condition: "id == '__dj_never_match__'"
+      extra_args:
+        min_rows_per_file: 2
+        compression: "snappy"
+
+process: []

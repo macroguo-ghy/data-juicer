@@ -660,6 +660,204 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_targets_accepts_ray_hdfs_parquet_targets(self):
+        config_data = {
+            'project_name': 'structured_export_targets',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_a',
+                        'type': 'parquet',
+                        'mode': 'overwrite',
+                        'filter_condition': "score >= 0.8",
+                        'filesystem': 'pyarrow',
+                    },
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_b',
+                        'type': 'parquet',
+                        'mode': 'append',
+                        'filter_condition': "lang == 'zh'",
+                        'filesystem': 'pyarrow',
+                    },
+                ],
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(len(cfg.export.targets), 2)
+            self.assertEqual(cfg.export_path, 'hdfs://cluster/path/output_a')
+            self.assertEqual(cfg.export.targets[0].filter_condition, "score >= 0.8")
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_target_conflict(self):
+        config_data = {
+            'project_name': 'structured_export_targets_conflict',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'target': 'hdfs',
+                'targets': [{
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'parquet',
+                }],
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            with self.assertRaisesRegex(ValueError, 'export.targets'):
+                init_configs(args=['--config', temp_config], load_configs_only=True)
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_non_ray_and_mismatched_types(self):
+        base_export = {
+            'targets': [
+                {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'},
+                {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_b', 'type': 'jsonl'},
+            ],
+        }
+        cases = [
+            ({'executor_type': 'default', 'export': {'targets': [base_export['targets'][0]]}}, 'executor_type: ray'),
+            ({'executor_type': 'ray', 'export': base_export}, 'same `type`'),
+            ({
+                'executor_type': 'ray',
+                'export': {'targets': [{'target': 'local', 'path': './outputs/a', 'type': 'parquet'}]},
+            }, 'target: hdfs'),
+            ({
+                'executor_type': 'ray',
+                'export': {'targets': [{'target': 'hdfs', 'path': 'hdfs://cluster/path/a.csv', 'type': 'csv'}]},
+            }, 'parquet/jsonl'),
+            ({
+                'executor_type': 'ray',
+                'export': {'targets': [{
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'parquet',
+                    'filter_condition': 'not valid syntax',
+                }]},
+            }, 'filter_condition'),
+        ]
+
+        for overrides, expected_error in cases:
+            config_data = {
+                'project_name': 'structured_export_targets_invalid',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'process': [],
+                **overrides,
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_invalid_target_shapes(self):
+        cases = [
+            ({'targets': []}, 'non-empty list'),
+            ({'targets': 'hdfs://cluster/path/output_a'}, 'non-empty list'),
+            ({'targets': ['hdfs://cluster/path/output_a']}, 'item must be a dictionary'),
+            ({'targets': [{'target': 'hdfs', 'type': 'parquet'}]}, 'requires an HDFS `path`'),
+            ({
+                'targets': [{'target': 'hdfs', 'path': './outputs/a', 'type': 'parquet'}],
+            }, 'requires an HDFS `path`'),
+            ({
+                'targets': [{'target': 'hdfs', 'path': 'hdfs://cluster/path/result.parquet', 'type': 'parquet'}],
+            }, 'directory paths'),
+            ({
+                'targets': [
+                    {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'},
+                    {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'},
+                ],
+            }, 'paths must be unique'),
+            ({
+                'targets': [{
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'parquet',
+                    'mode': 'ignore',
+                }],
+            }, 'mode'),
+            ({
+                'targets': [{
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'parquet',
+                    'filter_condition': 123,
+                }],
+            }, 'filter_condition'),
+        ]
+
+        for export_cfg, expected_error in cases:
+            config_data = {
+                'project_name': 'structured_export_targets_invalid_shape',
+                'executor_type': 'ray',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'export': export_cfg,
+                'process': [],
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_unsupported_companion_features(self):
+        cases = [
+            ({'export': {'max_rows': 10}}, 'max_rows'),
+            ({'export': {'max_rows_mode': 'limit'}}, 'max_rows'),
+            ({'export': {'max_rows_quota_batch_size': 10}}, 'max_rows'),
+            ({'ray_collect_real_metrics': True}, 'ray_collect_real_metrics'),
+            ({'ray_data_checkpoint': {'enabled': True}}, 'ray_data_checkpoint'),
+            ({'export': {'after_export_hook': {'enabled': True}}}, 'after_export_hook'),
+        ]
+        base_target = {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'}
+
+        for overrides, expected_error in cases:
+            export_cfg = {'targets': [copy.deepcopy(base_target)]}
+            export_cfg.update(overrides.get('export', {}))
+            config_data = {
+                'project_name': 'structured_export_targets_unsupported_companion',
+                'executor_type': 'ray',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'export': export_cfg,
+                'process': [],
+            }
+            config_data.update({key: value for key, value in overrides.items() if key != 'export'})
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
     def test_cli_override(self):
         """Test that command line arguments correctly override YAML config values."""
         out = StringIO()

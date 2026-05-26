@@ -27,12 +27,8 @@ class GeneralFieldFilter(Filter):
         """
         super().__init__(*args, **kwargs)
         self.filter_condition = filter_condition.strip()
-        self.ast_tree: ast.Expression = None
-        if filter_condition:
-            try:
-                self.ast_tree = ast.parse(filter_condition, mode="eval")
-            except SyntaxError as e:
-                raise ValueError(f"Invalid filter condition: {filter_condition}") from e
+        self.condition = compile_filter_condition(filter_condition)
+        self.ast_tree = self.condition.ast_tree
 
     def compute_stats_single(self, sample, context=False):
         if (
@@ -42,14 +38,32 @@ class GeneralFieldFilter(Filter):
         ):
             return sample
 
-        transformer = ExpressionTransformer(sample)
-        result = transformer.transform(self.ast_tree)
-
-        sample[Fields.stats][StatsKeys.general_field_filter_condition] = result
+        sample[Fields.stats][StatsKeys.general_field_filter_condition] = self.condition.matches(sample)
         return sample
 
     def process_single(self, sample: Dict) -> bool:
         return sample.get(Fields.stats, {}).get(StatsKeys.general_field_filter_condition, True)
+
+
+def compile_filter_condition(filter_condition: str = ""):
+    return CompiledFilterCondition(filter_condition)
+
+
+class CompiledFilterCondition:
+    def __init__(self, filter_condition: str = ""):
+        self.filter_condition = (filter_condition or "").strip()
+        self.ast_tree = None
+        if self.filter_condition:
+            try:
+                self.ast_tree = ast.parse(self.filter_condition, mode="eval")
+            except SyntaxError as e:
+                raise ValueError(f"Invalid filter condition: {filter_condition}") from e
+
+    def matches(self, sample: Dict) -> bool:
+        if not self.ast_tree:
+            return True
+        transformer = ExpressionTransformer(sample)
+        return bool(transformer.transform(self.ast_tree))
 
 
 class ExpressionTransformer(ast.NodeVisitor):

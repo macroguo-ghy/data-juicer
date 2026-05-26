@@ -1,7 +1,7 @@
 import unittest
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter
+from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter, compile_filter_condition
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
@@ -111,6 +111,22 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
         dataset = Dataset.from_list(ds_list)
         op = GeneralFieldFilter(filter_condition="(num < 10 or num > 20) and flag == True and text!='sample3'")
         self._run_general_field_filter(dataset, op, target_list)
+
+    def test_compiled_condition_reuses_general_field_syntax_without_mutating_sample(self):
+        condition = compile_filter_condition("10 < num < 20 and __dj__meta__.a == 2")
+        sample = {
+            "text": "sample",
+            "num": 15,
+            Fields.meta: {"a": 2},
+            Fields.stats: {},
+        }
+
+        self.assertTrue(condition.matches(sample))
+        self.assertEqual(sample[Fields.stats], {})
+
+    def test_compiled_condition_treats_empty_as_match_all_and_missing_field_as_false(self):
+        self.assertTrue(compile_filter_condition("").matches({"text": "sample"}))
+        self.assertFalse(compile_filter_condition("num <= 5").matches({"text": "sample"}))
 
 
 if __name__ == '__main__':

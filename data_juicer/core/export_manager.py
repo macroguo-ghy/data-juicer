@@ -12,6 +12,7 @@ from data_juicer.core.io_utils import (
     copy_local_to_uri,
     create_lark_spreadsheet,
     ensure_parent,
+    get_pyarrow_filesystem,
     infer_storage_target_from_path,
     make_staging_dir,
     merge_dicts,
@@ -23,7 +24,7 @@ from data_juicer.core.io_utils import (
     write_ray_dataset_to_magnus,
     _ray_dataset_columns,
 )
-from data_juicer.core.ray_exporter import RayExporter
+from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink
 from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, HashKeys
 
@@ -59,14 +60,18 @@ class ExportManager:
         self.cfg = cfg
         self.executor_type = executor_type
         self.export_cfg = self._normalize_export_cfg(cfg)
+        self.export_targets = self.export_cfg.get("targets") or []
         self.target = self.export_cfg["target"]
         self.path = self.export_cfg.get("path") or getattr(cfg, "export_path", "")
 
         self.file_exporter = None
-        if self.target in {"local", "s3"}:
+        if not self.export_targets and self.target in {"local", "s3"}:
             self.file_exporter = self._build_file_exporter(self.path)
 
     def export(self, dataset, columns=None):
+        if self.export_targets:
+            return self._export_to_hdfs_targets(dataset, columns=columns)
+
         dataset = self._limit_dataset_for_export(dataset)
         if self.target in {"local", "s3"}:
             if self.executor_type == "ray":
@@ -256,7 +261,82 @@ class ExportManager:
             storage_options=self.export_cfg.get("webhdfs"),
         )
 
+    def _export_to_hdfs_targets(self, dataset, columns=None):
+        self._validate_hdfs_targets_for_export()
+        export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
+        targets = []
+        for target in self.export_targets:
+            filesystem, writer_path = get_pyarrow_filesystem(
+                target["path"],
+                filesystem=target.get("filesystem"),
+                storage_options=target.get("webhdfs"),
+            )
+            targets.append(
+                {
+                    "path": writer_path,
+                    "original_uri": target["path"],
+                    "filesystem": filesystem,
+                    "type": target["type"],
+                    "mode": target.get("mode") or "error_if_exists",
+                    "condition": target.get("filter_condition") or target.get("condition") or "",
+                    "extra_args": merge_dicts(target.get("extra_args"), {}),
+                }
+            )
+
+        action_args = merge_dicts(self.export_cfg.get("extra_args"), {})
+        datasink = RayHdfsFanoutDatasink(targets=targets, columns=export_columns)
+        return dataset.write_datasink(
+            datasink,
+            ray_remote_args=action_args.get("ray_remote_args"),
+            concurrency=action_args.get("concurrency"),
+        )
+
+    def _validate_hdfs_targets_for_export(self):
+        if self.executor_type != "ray":
+            raise ValueError("`export.targets` requires `executor_type: ray`.")
+        if not self.export_targets:
+            raise ValueError("`export.targets` must be a non-empty list.")
+        common_type = None
+        paths = set()
+        for target in self.export_targets:
+            if target.get("target") != "hdfs":
+                raise ValueError("`export.targets` first version only supports `target: hdfs`.")
+            if target.get("type") not in {"parquet", "jsonl"}:
+                raise ValueError("`export.targets` first version only supports `type: parquet/jsonl`.")
+            if common_type is None:
+                common_type = target.get("type")
+            elif target.get("type") != common_type:
+                raise ValueError("All `export.targets` items must use the same `type`.")
+            if self._looks_like_file_path(target.get("path")):
+                raise ValueError("Ray HDFS `export.targets` paths must be directory paths, not file-like paths.")
+            if target.get("path") in paths:
+                raise ValueError("`export.targets` paths must be unique.")
+            paths.add(target.get("path"))
+
+    def _export_columns_after_internal_field_removal(self, dataset, columns=None):
+        export_columns = list(columns) if columns is not None else _ray_dataset_columns(dataset, fetch_if_missing=False)
+        if export_columns is None:
+            return None
+
+        removed_fields = []
+        if not getattr(self.cfg, "keep_stats_in_res_ds", False):
+            removed_fields.extend(DATA_JUICER_INTERNAL_FIELDS)
+        if not getattr(self.cfg, "keep_hashes_in_res_ds", False):
+            removed_fields.extend(
+                [
+                    HashKeys.hash,
+                    HashKeys.minhash,
+                    HashKeys.simhash,
+                    HashKeys.imagehash,
+                    HashKeys.videohash,
+                ]
+            )
+        removed = set(removed_fields)
+        return [column for column in export_columns if column not in removed]
+
     def validate_ray_data_checkpoint_sink(self):
+        if self.export_targets:
+            raise ValueError("Ray Data checkpointing is not supported with `export.targets` in the first version.")
         if self.target == "hdfs" and not self._use_ray_distributed_hdfs_export():
             raise ValueError(
                 "Ray Data checkpointing with HDFS export requires Ray distributed HDFS parquet/jsonl export."
@@ -493,6 +573,21 @@ class ExportManager:
     def _normalize_export_cfg(cfg) -> Dict[str, Any]:
         export_cfg = namespace_to_plain_dict(getattr(cfg, "export", None) or {})
         if export_cfg:
+            if export_cfg.get("targets"):
+                targets = [dict(target) for target in export_cfg["targets"]]
+                for target in targets:
+                    target.setdefault("mode", "error_if_exists")
+                    target.setdefault("extra_args", {})
+                    target.setdefault("filter_condition", "")
+                return {
+                    **export_cfg,
+                    "targets": targets,
+                    "target": "hdfs",
+                    "path": targets[0].get("path", ""),
+                    "type": targets[0].get("type"),
+                    "extra_args": export_cfg.get("extra_args", {}),
+                    "aws_credentials": export_cfg.get("aws_credentials", {}),
+                }
             export_cfg.setdefault("target", ExportManager._infer_export_target(export_cfg))
             export_cfg.setdefault("path", getattr(cfg, "export_path", ""))
             export_cfg.setdefault("type", export_cfg.get("export_type"))
