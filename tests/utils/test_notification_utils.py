@@ -35,6 +35,7 @@ class TestCardNotificationTest(unittest.TestCase):
             "operatorName": "http_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     @patch("data_juicer.utils.notification_utils.HttpClient")
@@ -67,6 +68,7 @@ class TestCardNotificationTest(unittest.TestCase):
             method="POST",
             headers={
                 "Content-Type": "application/json",
+                "space-id": "1",
                 "x-tt-env": "ppe_sirius2",
                 "x-use-ppe": "1",
             },

@@ -199,6 +199,7 @@ class StateTemplateMapper(Mapper):
             "Content-Type": "application/json",
             "Accept": "application/json",
             "user-account": StateTemplateMapper._get_ctx_required_value(ctx, "userAccount"),
+            "space-id": StateTemplateMapper._get_ctx_required_value(ctx, "spaceId"),
         }
         for key in ("x-tt-env", "x-use-ppe"):
             value = ctx.get(key)

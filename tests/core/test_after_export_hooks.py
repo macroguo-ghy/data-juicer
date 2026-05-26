@@ -138,6 +138,7 @@ class AfterExportHookTest(unittest.TestCase):
         self.assertEqual(sheet_request["headers"], {
             "Content-Type": "application/json",
             "User-Account": "wangjianda.667",
+            "space-id": "1",
             "x-tt-env": "ppe_sirius3",
             "x-use-ppe": "1",
         })

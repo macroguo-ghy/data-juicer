@@ -38,6 +38,7 @@ def has_operator_execution_callback_ctx(ctx: dict[str, Any] | None) -> bool:
         isinstance(ctx, dict)
         and ctx.get("apiBase") not in (None, "")
         and ctx.get("userAccount") not in (None, "")
+        and ctx.get("spaceId") not in (None, "")
     )
 
 
@@ -281,6 +282,7 @@ class OperatorExecutionCallbackClient:
         headers = {
             "Content-Type": "application/json",
             "user-account": self.user_account,
+            "space-id": str(self._get_ctx_required_value("spaceId")),
         }
         for key in ("x-tt-env", "x-use-ppe"):
             value = self.ctx.get(key)
