@@ -118,7 +118,7 @@ class PythonScriptMapperTest(unittest.TestCase):
                 RECORD_KEY_FIELD: "record-1",
                 "value": 1,
             },
-            output_data=sample,
+            output_data=None,
             error_message="script failed",
             started_at=ANY,
         )
