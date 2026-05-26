@@ -387,6 +387,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         failure_call = self.mock_callback.report_record_failure.call_args.kwargs
         self.assertTrue(failure_call["record_key"].startswith("prepare_record_key_failed:"))
         self.assertEqual(failure_call["input_data"], {"query": "hello"})
+        self.assertIsNone(failure_call["output_data"])
         self.assertEqual(failure_call["error_message"], "hash failed")
         self.assertNotIn(RECORD_KEY_FIELD, sample)
 
@@ -401,6 +402,7 @@ class PrepareRecordKeyMapperTest(unittest.TestCase):
         failure_call = self.mock_callback.report_record_failure.call_args.kwargs
         self.assertTrue(failure_call["record_key"].startswith("prepare_record_key_failed:"))
         self.assertEqual(failure_call["input_data"], sample)
+        self.assertIsNone(failure_call["output_data"])
         self.assertEqual(failure_call["error_message"], "deepcopy failed")
 
     def test_callback_failure_does_not_block_record_key_generation(self):

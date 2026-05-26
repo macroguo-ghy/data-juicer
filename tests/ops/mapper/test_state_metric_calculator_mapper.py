@@ -1596,7 +1596,7 @@ process:
         self.mock_callback.report_record_failure.assert_called_once_with(
             record_key="record-1",
             input_data=sample,
-            output_data=sample,
+            output_data=None,
             error_message="sample.state must be provided",
             started_at=ANY,
         )
@@ -1619,7 +1619,7 @@ process:
         self.mock_callback.report_record_failure.assert_called_once_with(
             record_key="record-1",
             input_data=sample,
-            output_data=sample,
+            output_data=None,
             error_message="ctx.userAccount must be provided",
             started_at=ANY,
         )

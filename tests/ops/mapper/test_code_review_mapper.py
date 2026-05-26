@@ -57,6 +57,7 @@ class CodeReviewMapperTest(unittest.TestCase):
             "operatorName": "code_review_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     def test_declares_operator_metadata(self):
@@ -82,6 +83,7 @@ process:
         operatorName: "code_review_mapper"
         operatorType: "business"
         apiBase: "https://ai-data-center.bytedance.net/api"
+        spaceId: 1
       input_field: "state"
       status_field: "state_review_status"
       reason_field: "state_review_reason"
@@ -177,7 +179,7 @@ process:
             input_data={
                 RECORD_KEY_FIELD: "record-1",
             },
-            output_data=sample,
+            output_data=None,
             error_message="sample.state must be provided",
             started_at=ANY,
         )

@@ -629,7 +629,7 @@ process:
             input_data={
                 RECORD_KEY_FIELD: "record-1",
             },
-            output_data=sample,
+            output_data=None,
             error_message="workflow task fail, request_id=req-001",
             started_at=ANY,
         )

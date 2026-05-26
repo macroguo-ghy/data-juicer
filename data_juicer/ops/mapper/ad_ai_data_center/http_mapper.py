@@ -220,10 +220,10 @@ class HttpMapper(Mapper):
     def _report_record_failure(self, input_sample, output_sample, error_message, started_at):
         try:
             self._get_operator_execution_callback_client().report_record_failure(
-                record_key=self._get_record_key(output_sample),
+                record_key=self._get_record_key(input_sample),
                 input_data=input_sample,
                 error_message=error_message,
-                output_data=copy.deepcopy(output_sample),
+                output_data=None,
                 started_at=started_at,
             )
         except Exception as exc:

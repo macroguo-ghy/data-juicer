@@ -445,7 +445,7 @@ process:
                 RECORD_KEY_FIELD: "record-1",
             },
             error_message="bad",
-            output_data=sample,
+            output_data=None,
             started_at=ANY,
         )
 

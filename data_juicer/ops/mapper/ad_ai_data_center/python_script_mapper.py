@@ -74,7 +74,7 @@ class PythonScriptMapper(Mapper):
         except Exception as exc:
             self._report_record_failure(
                 input_sample,
-                sample,
+                None,
                 str(exc),
                 record_started_at,
             )
@@ -152,10 +152,11 @@ class PythonScriptMapper(Mapper):
 
     def _report_record_failure(self, input_sample, output_sample, error_message, started_at):
         try:
+            record_key_sample = output_sample if output_sample is not None else input_sample
             self._get_operator_execution_callback_client().report_record_failure(
-                record_key=self._get_record_key(output_sample),
+                record_key=self._get_record_key(record_key_sample),
                 input_data=input_sample,
-                output_data=copy.deepcopy(output_sample),
+                output_data=copy.deepcopy(output_sample) if output_sample is not None else None,
                 error_message=error_message,
                 started_at=started_at,
             )
