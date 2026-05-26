@@ -700,6 +700,45 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_targets_accepts_ray_local_jsonl_targets(self):
+        config_data = {
+            'project_name': 'structured_export_local_targets',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/high_score',
+                        'type': 'jsonl',
+                        'mode': 'overwrite',
+                        'filter_condition': "score >= 0.8",
+                    },
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/zh',
+                        'type': 'jsonl',
+                        'mode': 'append',
+                        'filter_condition': "lang == 'zh'",
+                    },
+                ],
+            },
+            'process': []
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(len(cfg.export.targets), 2)
+            self.assertEqual(cfg.export_path, './outputs/fanout_local/high_score')
+            self.assertEqual(cfg.export.targets[0].target, 'local')
+            self.assertEqual(cfg.export.targets[1].mode, 'append')
+        finally:
+            os.unlink(temp_config)
+
     def test_structured_export_targets_rejects_target_conflict(self):
         config_data = {
             'project_name': 'structured_export_targets_conflict',
@@ -738,8 +777,17 @@ class ConfigTest(DataJuicerTestCaseBase):
             ({'executor_type': 'ray', 'export': base_export}, 'same `type`'),
             ({
                 'executor_type': 'ray',
-                'export': {'targets': [{'target': 'local', 'path': './outputs/a', 'type': 'parquet'}]},
-            }, 'target: hdfs'),
+                'export': {'targets': [{'target': 'tos', 'path': './outputs/a', 'type': 'parquet'}]},
+            }, 'target: local/hdfs'),
+            ({
+                'executor_type': 'ray',
+                'export': {
+                    'targets': [
+                        {'target': 'local', 'path': './outputs/a', 'type': 'parquet'},
+                        {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_b', 'type': 'parquet'},
+                    ]
+                },
+            }, 'same `target`'),
             ({
                 'executor_type': 'ray',
                 'export': {'targets': [{'target': 'hdfs', 'path': 'hdfs://cluster/path/a.csv', 'type': 'csv'}]},
@@ -782,7 +830,13 @@ class ConfigTest(DataJuicerTestCaseBase):
                 'targets': [{'target': 'hdfs', 'path': './outputs/a', 'type': 'parquet'}],
             }, 'requires an HDFS `path`'),
             ({
+                'targets': [{'target': 'local', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'}],
+            }, 'requires a local `path`'),
+            ({
                 'targets': [{'target': 'hdfs', 'path': 'hdfs://cluster/path/result.parquet', 'type': 'parquet'}],
+            }, 'directory paths'),
+            ({
+                'targets': [{'target': 'local', 'path': './outputs/result.jsonl', 'type': 'jsonl'}],
             }, 'directory paths'),
             ({
                 'targets': [
@@ -832,7 +886,6 @@ class ConfigTest(DataJuicerTestCaseBase):
             ({'export': {'max_rows_mode': 'limit'}}, 'max_rows'),
             ({'export': {'max_rows_quota_batch_size': 10}}, 'max_rows'),
             ({'ray_collect_real_metrics': True}, 'ray_collect_real_metrics'),
-            ({'ray_data_checkpoint': {'enabled': True}}, 'ray_data_checkpoint'),
             ({'export': {'after_export_hook': {'enabled': True}}}, 'after_export_hook'),
         ]
         base_target = {'target': 'hdfs', 'path': 'hdfs://cluster/path/output_a', 'type': 'parquet'}
@@ -848,6 +901,104 @@ class ConfigTest(DataJuicerTestCaseBase):
                 'process': [],
             }
             config_data.update({key: value for key, value in overrides.items() if key != 'export'})
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_targets_accepts_checkpoint_append_modes(self):
+        base_targets = [
+            {
+                'target': 'hdfs',
+                'path': 'hdfs://cluster/path/output_a',
+                'type': 'parquet',
+                'mode': 'append',
+                'filter_condition': "score >= 0.8",
+            },
+            {
+                'target': 'hdfs',
+                'path': 'hdfs://cluster/path/output_b',
+                'type': 'parquet',
+                'mode': 'append',
+                'filter_condition': "lang == 'zh'",
+            },
+        ]
+
+        for target_kind, targets in [
+            ('hdfs', base_targets),
+            (
+                'local',
+                [
+                    {**base_targets[0], 'target': 'local', 'path': './outputs/checkpoint_local/output_a'},
+                    {**base_targets[1], 'target': 'local', 'path': './outputs/checkpoint_local/output_b'},
+                ],
+            ),
+        ]:
+            for delete_no_checkpoint_files in [False, True]:
+                config_data = {
+                    'project_name': f'structured_export_targets_checkpoint_append_{target_kind}',
+                    'executor_type': 'ray',
+                    'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                    'ray_data_checkpoint': {
+                        'enabled': True,
+                        'dir': 'hdfs://cluster/path/checkpoints/{job_id}',
+                        'delete_no_checkpoint_files': delete_no_checkpoint_files,
+                    },
+                    'export': {'targets': copy.deepcopy(targets)},
+                    'process': [],
+                }
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.safe_dump(config_data, f)
+                    temp_config = f.name
+
+                try:
+                    cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+                    self.assertTrue(cfg.ray_data_checkpoint.enabled)
+                    self.assertEqual(len(cfg.export.targets), 2)
+                    self.assertTrue(all(target.mode == 'append' for target in cfg.export.targets))
+                    self.assertTrue(all(target.target == target_kind for target in cfg.export.targets))
+                    self.assertEqual(cfg.ray_data_checkpoint.delete_no_checkpoint_files, delete_no_checkpoint_files)
+                finally:
+                    os.unlink(temp_config)
+
+    def test_structured_export_targets_checkpoint_rejects_non_append_modes(self):
+        cases = [
+            ({}, 'append'),
+            ({'mode': 'error_if_exists'}, 'append'),
+            ({'mode': 'overwrite'}, 'append'),
+        ]
+
+        for mode_override, expected_error in cases:
+            targets = [
+                {
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'jsonl',
+                    'mode': 'append',
+                },
+                {
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_b',
+                    'type': 'jsonl',
+                    **mode_override,
+                },
+            ]
+            config_data = {
+                'project_name': 'structured_export_targets_checkpoint_non_append',
+                'executor_type': 'ray',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'ray_data_checkpoint': {
+                    'enabled': True,
+                    'dir': 'hdfs://cluster/path/checkpoints/{job_id}',
+                },
+                'export': {'targets': targets},
+                'process': [],
+            }
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
                 yaml.safe_dump(config_data, f)
                 temp_config = f.name
