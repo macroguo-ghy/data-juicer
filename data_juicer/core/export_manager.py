@@ -70,7 +70,7 @@ class ExportManager:
 
     def export(self, dataset, columns=None):
         if self.export_targets:
-            return self._export_to_hdfs_targets(dataset, columns=columns)
+            return self._export_to_file_targets(dataset, columns=columns)
 
         dataset = self._limit_dataset_for_export(dataset)
         if self.target in {"local", "s3"}:
@@ -261,16 +261,12 @@ class ExportManager:
             storage_options=self.export_cfg.get("webhdfs"),
         )
 
-    def _export_to_hdfs_targets(self, dataset, columns=None):
-        self._validate_hdfs_targets_for_export()
+    def _export_to_file_targets(self, dataset, columns=None):
+        self._validate_file_targets_for_export()
         export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
         targets = []
         for target in self.export_targets:
-            filesystem, writer_path = get_pyarrow_filesystem(
-                target["path"],
-                filesystem=target.get("filesystem"),
-                storage_options=target.get("webhdfs"),
-            )
+            filesystem, writer_path = self._fanout_target_filesystem_and_path(target)
             targets.append(
                 {
                     "path": writer_path,
@@ -291,27 +287,57 @@ class ExportManager:
             concurrency=action_args.get("concurrency"),
         )
 
-    def _validate_hdfs_targets_for_export(self):
+    def _fanout_target_filesystem_and_path(self, target):
+        if target.get("target") == "local":
+            return self._local_fanout_filesystem_and_path(target["path"])
+        return get_pyarrow_filesystem(
+            target["path"],
+            filesystem=target.get("filesystem"),
+            storage_options=target.get("webhdfs"),
+        )
+
+    @staticmethod
+    def _local_fanout_filesystem_and_path(path: str):
+        import pyarrow.fs as pa_fs
+
+        if path.startswith("file://"):
+            return pa_fs.FileSystem.from_uri(path)
+        return pa_fs.LocalFileSystem(), os.path.abspath(path)
+
+    def _validate_file_targets_for_export(self):
         if self.executor_type != "ray":
             raise ValueError("`export.targets` requires `executor_type: ray`.")
         if not self.export_targets:
             raise ValueError("`export.targets` must be a non-empty list.")
+        common_target = None
         common_type = None
         paths = set()
         for target in self.export_targets:
-            if target.get("target") != "hdfs":
-                raise ValueError("`export.targets` first version only supports `target: hdfs`.")
+            target_name = target.get("target")
+            target_path = target.get("path")
+            if target_name not in {"hdfs", "local"}:
+                raise ValueError("`export.targets` first version only supports `target: local/hdfs`.")
             if target.get("type") not in {"parquet", "jsonl"}:
                 raise ValueError("`export.targets` first version only supports `type: parquet/jsonl`.")
+            if target_name == "hdfs" and (not isinstance(target_path, str) or not target_path.startswith("hdfs://")):
+                raise ValueError("Each `export.targets` item requires an HDFS `path`.")
+            if target_name == "local" and (not isinstance(target_path, str) or not self._is_local_fanout_path(target_path)):
+                raise ValueError("Each `export.targets` item requires a local `path`.")
+            if common_target is None:
+                common_target = target_name
+            elif target_name != common_target:
+                raise ValueError("All `export.targets` items must use the same `target`.")
             if common_type is None:
                 common_type = target.get("type")
             elif target.get("type") != common_type:
                 raise ValueError("All `export.targets` items must use the same `type`.")
-            if self._looks_like_file_path(target.get("path")):
-                raise ValueError("Ray HDFS `export.targets` paths must be directory paths, not file-like paths.")
-            if target.get("path") in paths:
+            if self._looks_like_file_path(target_path):
+                raise ValueError("Ray file `export.targets` paths must be directory paths, not file-like paths.")
+            if target_path in paths:
                 raise ValueError("`export.targets` paths must be unique.")
-            paths.add(target.get("path"))
+            paths.add(target_path)
+
+    _validate_hdfs_targets_for_export = _validate_file_targets_for_export
 
     def _export_columns_after_internal_field_removal(self, dataset, columns=None):
         export_columns = list(columns) if columns is not None else _ray_dataset_columns(dataset, fetch_if_missing=False)
@@ -336,7 +362,7 @@ class ExportManager:
 
     def validate_ray_data_checkpoint_sink(self):
         if self.export_targets:
-            raise ValueError("Ray Data checkpointing is not supported with `export.targets` in the first version.")
+            return self._validate_ray_data_checkpoint_fanout_sink()
         if self.target == "hdfs" and not self._use_ray_distributed_hdfs_export():
             raise ValueError(
                 "Ray Data checkpointing with HDFS export requires Ray distributed HDFS parquet/jsonl export."
@@ -350,6 +376,27 @@ class ExportManager:
                     "but it has limited value for cross-job recovery after resubmission; "
                     "use `export.mode: append` if preserving already written part files is required."
                 )
+
+    def _validate_ray_data_checkpoint_fanout_sink(self):
+        self._validate_file_targets_for_export()
+
+        for target in self.export_targets:
+            mode = target.get("mode") or "error_if_exists"
+            if mode != "append":
+                raise ValueError(
+                    "Ray Data checkpointing with `export.targets` requires every "
+                    f"`export.targets[].mode` to be append; got {mode} for {target.get('path')}."
+                )
+
+        checkpoint_cfg = getattr(self.cfg, "ray_data_checkpoint", None)
+        if bool(getattr(checkpoint_cfg, "delete_no_checkpoint_files", False)):
+            logger.warning(
+                "Ray Data checkpointing is enabled with `export.targets` fan-out and "
+                "`ray_data_checkpoint.delete_no_checkpoint_files=true`. The custom fan-out "
+                "Datasink uses Ray post-write checkpointing; output files across target directories "
+                "are not atomically cleaned or made exactly-once. Fan-out append remains at-least-once, "
+                "and retries or reruns may produce duplicate part files."
+            )
 
     def _use_ray_distributed_hdfs_export(self):
         return (
@@ -374,6 +421,12 @@ class ExportManager:
     def _looks_like_file_path(path: str | None) -> bool:
         suffix = ExportManager._suffix_from_path(path)
         return suffix in {"parquet", "json", "jsonl", "csv"}
+
+    @staticmethod
+    def _is_local_fanout_path(path: str | None) -> bool:
+        if not path:
+            return False
+        return "://" not in path or path.startswith("file://")
 
     def _export_to_hive(self, dataset, columns=None):
         if self.executor_type != "ray":

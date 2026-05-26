@@ -121,7 +121,7 @@ class _AppendFilenameProvider(FilenameProvider):
 
 
 class RayHdfsFanoutDatasink(Datasink):
-    """A Ray datasink that writes one input dataset to multiple HDFS file sinks."""
+    """A Ray datasink that writes one input dataset to multiple file sinks."""
 
     def __init__(self, *, targets, columns=None):
         self.targets = []
@@ -148,7 +148,7 @@ class RayHdfsFanoutDatasink(Datasink):
         return True
 
     def get_name(self) -> str:
-        return "HdfsFanout"
+        return "FileFanout"
 
     def on_write_start(self, schema=None) -> None:
         from pyarrow.fs import FileType
@@ -159,7 +159,7 @@ class RayHdfsFanoutDatasink(Datasink):
             file_infos.append(info)
             if target["mode"] == "error_if_exists" and info.type is not FileType.NotFound:
                 raise FileExistsError(
-                    f"Ray HDFS fan-out export path already exists: {target['original_uri']}. "
+                    f"Ray file fan-out export path already exists: {target['original_uri']}. "
                     "Set `mode: overwrite` to replace it or `mode: append` to append."
                 )
 
@@ -260,7 +260,7 @@ class RayHdfsFanoutDatasink(Datasink):
         if export_type == "jsonl":
             self._write_jsonl(target["filesystem"], output_path, table, extra_args)
             return
-        raise NotImplementedError(f"Ray HDFS fan-out export does not support type [{export_type}]")
+        raise NotImplementedError(f"Ray file fan-out export does not support type [{export_type}]")
 
     @staticmethod
     def _write_parquet(filesystem, output_path: str, table, extra_args):
