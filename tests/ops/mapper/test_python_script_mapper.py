@@ -57,6 +57,7 @@ class PythonScriptMapperTest(unittest.TestCase):
             "operatorName": "python_script_mapper",
             "operatorType": "business",
             "apiBase": "https://ai-data-center.bytedance.net/api",
+            "spaceId": 1,
         }
 
     def test_processes_sample_with_ctx_and_reports_record_success(self):
@@ -245,6 +246,7 @@ process:
         operatorName: "python_script_mapper"
         operatorType: "business"
         apiBase: "https://ai-data-center.bytedance.net/api"
+        spaceId: 1
       python_code: "def process(sample, context):\\n    return sample"
 """,
             encoding="utf-8",
