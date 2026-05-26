@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = Path("demos/bytedance/e2e_test/e2e_test.yaml")
-DEFAULT_IMAGE_URL = "hub.byted.org/ad_stats/data_juicer:ea784a3ddfc181e1c6b1dc717f3250b4"
+DEFAULT_IMAGE_URL = "hub.byted.org/ad_stats/data_juicer:82593a69270f060caf8dcc96bb6de110"
 DEFAULT_NAMESPACE = "/topic/790e3ece1131c882"
 DEFAULT_QUEUE = "root.panda_hl_ad_stats_general_h"
 DEFAULT_YARN_CLUSTER = "rabbit-hl"

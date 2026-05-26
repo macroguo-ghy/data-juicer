@@ -105,6 +105,33 @@ class RayFieldDeduplicatorTest(unittest.TestCase):
         self.assertEqual(RayFieldDeduplicator._hash_value(value), RayFieldDeduplicator._hash_value(value))
         self.assertNotEqual(RayFieldDeduplicator._hash_value(value), RayFieldDeduplicator._hash_value({"a": "1"}))
 
+    def test_group_representative_writes_duplicate_ids_when_existing_list_is_null_typed(self):
+        table = pa.Table.from_arrays(
+            [
+                pa.array(["b", "a"], type=pa.string()),
+                pa.array(["same", "same"], type=pa.string()),
+                pa.array([[], []], type=pa.list_(pa.null())),
+            ],
+            names=["id", "md5", "duplicate_id_list"],
+        )
+        with_hash = RayFieldDeduplicator._append_hash_batch(
+            table,
+            field_key="md5",
+            hash_key=RayFieldDeduplicator._HASH_KEY,
+        )
+
+        output = RayFieldDeduplicator._take_group_representative(
+            with_hash,
+            hash_key=RayFieldDeduplicator._HASH_KEY,
+            id_key="id",
+            duplicate_ids_key="duplicate_id_list",
+            duplicate_ids_mode="removed",
+            representative_policy="min_id",
+        )
+
+        self.assertEqual(output.to_pylist(), [{"id": "a", "md5": "same", "duplicate_id_list": ["b"]}])
+        self.assertEqual(output.schema.field("duplicate_id_list").type, pa.list_(pa.string()))
+
 
 if __name__ == "__main__":
     unittest.main()

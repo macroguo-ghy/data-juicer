@@ -12,7 +12,7 @@ from data_juicer.utils.metrics_utils import emit_rpc_qps
 
 OP_NAME = "aweme_pack_url_mapper"
 
-DEFAULT_SOURCE_PSM = "ad.ai.data_forge"
+DEFAULT_SOURCE_PSM = "ad.ai.data_forge_merlin"
 DEFAULT_SOURCE_CLUSTER = "default"
 DEFAULT_TARGET_PSM = "aweme.pack.url"
 DEFAULT_TARGET_CLUSTER = "default"

@@ -90,7 +90,7 @@ cat >/tmp/dj_ray_launch.json <<'JSON'
       "image_sid": "",
       "image_vid": "",
       "image_source": "url",
-      "image_url": "hub.byted.org/ad_stats/data_juicer:ea784a3ddfc181e1c6b1dc717f3250b4",
+      "image_url": "hub.byted.org/ad_stats/data_juicer:82593a69270f060caf8dcc96bb6de110",
       "task_id": 0,
       "need_build": false
     },

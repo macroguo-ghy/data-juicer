@@ -266,6 +266,8 @@ class ExportManager:
         export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
         targets = []
         for target in self.export_targets:
+            target_extra_args = merge_dicts(target.get("extra_args"), {})
+            target_columns = target_extra_args.pop("columns", None)
             filesystem, writer_path = self._fanout_target_filesystem_and_path(target)
             targets.append(
                 {
@@ -275,7 +277,8 @@ class ExportManager:
                     "type": target["type"],
                     "mode": target.get("mode") or "error_if_exists",
                     "condition": target.get("filter_condition") or target.get("condition") or "",
-                    "extra_args": merge_dicts(target.get("extra_args"), {}),
+                    "columns": target_columns,
+                    "extra_args": target_extra_args,
                 }
             )
 

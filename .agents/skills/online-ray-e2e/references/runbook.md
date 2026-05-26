@@ -17,7 +17,7 @@ PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py 
 The helper defaults to:
 
 - config: `demos/bytedance/e2e_test/e2e_test.yaml`
-- image: `hub.byted.org/ad_stats/data_juicer:ea784a3ddfc181e1c6b1dc717f3250b4`
+- image: `hub.byted.org/ad_stats/data_juicer:82593a69270f060caf8dcc96bb6de110`
 - repo mount: `/opt/tiger/data-juicer`
 - branch: current Git branch
 - YARN project: `paubxt82r1tu`

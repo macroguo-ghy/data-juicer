@@ -123,6 +123,12 @@ def _ocr_payload(text="hello", area_ratio=0.3):
 
 
 class ImageOcrMapperTest(unittest.TestCase):
+    def test_default_euler_caller_uses_data_forge_merlin(self):
+        op = ImageOcrMapper()
+
+        self.assertEqual(op.caller, "ad.ai.data_forge_merlin")
+        self.assertEqual(op.expected_caller_psm, "ad.ai.data_forge_merlin")
+
     def test_thrift_response_serialization_adds_area_ratio(self):
         class Point:
             def __init__(self, x, y):

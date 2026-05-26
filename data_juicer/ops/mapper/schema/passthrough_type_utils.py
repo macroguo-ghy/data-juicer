@@ -31,6 +31,9 @@ def parse_arrow_type(value: str | pa.DataType) -> pa.DataType:
     if isinstance(value, pa.DataType):
         return value
     normalized = str(value).strip().lower()
+    if normalized.startswith("list<") and normalized.endswith(">"):
+        item_type = parse_arrow_type(normalized[len("list<") : -1])
+        return pa.list_(item_type)
     if normalized in _ARROW_TYPE_ALIASES:
         return _ARROW_TYPE_ALIASES[normalized]
     raise ValueError(f"Unsupported passthrough arrow type: {value}")
@@ -50,6 +53,17 @@ def coerce_value_for_arrow_type(value: Any, arrow_type: pa.DataType) -> Any:
         return _coerce_bool(value)
     if pa.types.is_binary(arrow_type) or pa.types.is_large_binary(arrow_type):
         return bytes(value) if isinstance(value, (bytes, bytearray, memoryview)) else _coerce_string(value).encode()
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
+        item_type = arrow_type.value_type
+        if value is None:
+            return []
+        if isinstance(value, (bytes, bytearray, memoryview)) and (
+            pa.types.is_binary(item_type) or pa.types.is_large_binary(item_type)
+        ):
+            return [bytes(value)]
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        return [coerce_value_for_arrow_type(item, item_type) for item in value]
     return value
 
 
