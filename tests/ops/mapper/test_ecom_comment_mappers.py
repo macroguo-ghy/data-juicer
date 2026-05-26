@@ -354,7 +354,7 @@ class AwemePackUrlMapperTest(unittest.TestCase):
         self.assertEqual(sample["image_urls"], ["https://img/a", "https://img/b", "https://img/c"])
         self.assertEqual([req.uri for req in client.calls], ["uri-a", "uri-fail", "uri-bad-status", "uri-b"])
         self.assertEqual(client.calls[0].image_expire_second, 123)
-        self.assertEqual(client.calls[0].Base.Caller, "ad.ai.data_forge")
+        self.assertEqual(client.calls[0].Base.Caller, "ad.ai.data_forge_merlin")
         self.assertEqual(client.calls[0].Base.Extra, {"cluster": "default"})
 
     def test_pack_image_rpc_qps_metrics_cover_success_status_error_and_exception(self):

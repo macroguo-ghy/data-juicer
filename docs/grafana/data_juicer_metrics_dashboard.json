@@ -1,0 +1,1157 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Bosun-style Grafana dashboard for all Data-Juicer bytedance.metrics call sites: VLM, VLM adaptive rate limit, and RPC/OCR metrics.",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Metrics 平台",
+      "tooltip": "Open ByteDance metrics platform",
+      "type": "link",
+      "url": "https://metrics-fe.byted.org/web/plot/metrics"
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": [],
+      "title": "说明 / Inventory",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Counter metric emitted by emit_vlm_qps. Tags: job_id, ray_address, op_name, target, method, status.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "hiddenSeries": false,
+      "id": 2,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "VLM 请求 QPS（status/op/target/method）",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "VLM API error requests only. Source: vlm_api_response_mapper.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "hiddenSeries": false,
+      "id": 3,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "error"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "VLM 错误 QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": true,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Counter metric for VLM adaptive rate-limit events: 429, retry, exhausted, penalty, recovery.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 4,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "hiddenSeries": false,
+      "id": 4,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": false,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.rate_limit.event",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "model": "*",
+            "event": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "VLM Rate Limit 事件",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "cps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Store metric for configured/effective VLM RPM/TPM values. The metric tag distinguishes configured_rpm/configured_tpm/effective_rpm/effective_tpm.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "hiddenSeries": false,
+      "id": 5,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "avg",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.rate_limit.value",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "model": "*",
+            "event": "*",
+            "metric": "*"
+          },
+          "tenant": "default",
+          "isCounter": false
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "VLM Rate Limit 当前值",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 6,
+      "panels": [],
+      "title": "RPC / OCR / Schema RPC",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Counter metric emitted by emit_rpc_qps. Current call sites include image_ocr_mapper, aweme_pack_url_mapper, and item_id_image_url_mapper.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "hiddenSeries": false,
+      "id": 7,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RPC 请求 QPS（status/op/target/method）",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "RPC-style operator errors only.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "hiddenSeries": false,
+      "id": 8,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "error"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RPC 错误 QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Focused view for image_ocr_mapper RPC traffic.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "hiddenSeries": false,
+      "id": 9,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "image_ocr_mapper",
+            "target": "*",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "OCR RPC QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Focused view for schema RPC traffic, especially item_id_image_url_mapper.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "hiddenSeries": false,
+      "id": 10,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "item_id_image_url",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Schema RPC QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 11,
+      "panels": [],
+      "title": "Dashboard Notes",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "This repository currently emits these rate-counter metric families plus the VLM rate-limit store metric. Use tags to filter by job_id, ray_address, op_name, target, method, status, model, and event.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "hiddenSeries": false,
+      "id": 12,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.qps",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        },
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "refId": "B",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "status": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        },
+        {
+          "aggregator": "sum",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "metric": "ad.ai.data_forge.vlm.rate_limit.event",
+          "refId": "C",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "ray_address": "*",
+            "op_name": "*",
+            "target": "*",
+            "method": "*",
+            "model": "*",
+            "event": "*"
+          },
+          "tenant": "default",
+          "isCounter": true,
+          "rateDownsampleType": "before_downsample"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "全部 Data-Juicer 外发打点总览",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "qps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 27,
+  "style": "dark",
+  "sync_vregion": {},
+  "tags": [
+    "data-juicer",
+    "bytedance.metrics",
+    "vlm",
+    "rpc"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Data-Juicer Metrics",
+  "uid": "data-juicer-metrics",
+  "version": 1
+}

@@ -190,7 +190,7 @@ class RayHdfsFanoutDatasink(Datasink):
                 filtered_table = self._filter_table_for_target(table, target)
                 if filtered_table.num_rows == 0:
                     continue
-                filtered_table = self._select_export_columns(filtered_table)
+                filtered_table = self._select_export_columns(filtered_table, target)
                 filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
                 output_path = posixpath.join(target["path"], filename)
                 self._write_table(target, filtered_table, output_path)
@@ -240,11 +240,14 @@ class RayHdfsFanoutDatasink(Datasink):
 
         return table.filter(pa.array(mask))
 
-    def _select_export_columns(self, table):
-        if self.columns is None:
+    def _select_export_columns(self, table, target=None):
+        columns = None if target is None else target.get("columns")
+        if columns is None:
+            columns = self.columns
+        if columns is None:
             return table
         available = set(table.schema.names)
-        columns = [column for column in self.columns if column in available]
+        columns = [column for column in columns if column in available]
         return table.select(columns)
 
     def _filename(self, target, task_index: int, block_index: int) -> str:

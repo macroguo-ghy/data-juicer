@@ -8,9 +8,11 @@ dataset:
   configs:
     - type: remote
       source: hdfs
-      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_video_item_sample_stats_daily_v2/_add_vid"
+      path:
+        - "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid/part-00999-b82f6a0e-7a71-4705-adc5-c2b0e27c4a48-c000.snappy.parquet"
+        - "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid/part-00998-b82f6a0e-7a71-4705-adc5-c2b0e27c4a48-c000.snappy.parquet"
       format: "parquet"
-      override_num_blocks: 800
+      override_num_blocks: 100
       skip_zero_row_group_files: true
 
 process:
@@ -87,7 +89,7 @@ export:
   targets:
     - target: "hdfs"
       type: "parquet"
-      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_video_item_sample_stats_daily_v2/_add_vid_full_video_short_dedup"
+      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/_add_vid_full_video_short_dedup"
       mode: "overwrite"
       filter_condition: "item_duration <= 60 and valid_video_count > 0"
       filesystem: "pyarrow"
@@ -107,7 +109,7 @@ export:
           - "type"
     - target: "hdfs"
       type: "parquet"
-      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/ecom_video_item_sample_stats_daily_v2/_add_vid_video_long"
+      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/_add_vid_video_long"
       mode: "overwrite"
       filter_condition: "item_duration > 60"
       filesystem: "pyarrow"

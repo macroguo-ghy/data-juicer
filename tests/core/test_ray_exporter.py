@@ -401,6 +401,36 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
         self.assertEqual(selected.schema.names, [])
         self.assertEqual(selected.num_rows, 1)
 
+    def test_fanout_target_columns_override_global_export_columns(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                {
+                    "path": "/unused",
+                    "original_uri": "/unused",
+                    "filesystem": LocalFileSystem(),
+                    "type": "jsonl",
+                    "mode": "error_if_exists",
+                    "condition": "",
+                    "columns": ["id", "videos", "md5"],
+                    "extra_args": {},
+                },
+            ],
+            columns=["item_id", "vid"],
+        )
+        table = pa.table(
+            {
+                "item_id": [1],
+                "vid": ["v1"],
+                "id": ["item_id-1"],
+                "videos": [[b"video"]],
+                "md5": ["abc"],
+            }
+        )
+
+        selected = datasink._select_export_columns(table, datasink.targets[0])
+
+        self.assertEqual(selected.schema.names, ["id", "videos", "md5"])
+
     def test_fanout_error_if_exists_preflights_all_targets_before_mutating(self):
         fs_overwrite = MagicMock()
         fs_existing = MagicMock()

@@ -263,6 +263,43 @@ class ExportManagerTest(unittest.TestCase):
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_uses_target_columns_from_extra_args(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "parquet",
+                        "extra_args": {
+                            "columns": ["id", "videos", "md5"],
+                            "compression": "snappy",
+                        },
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["item_id", "vid"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["item_id", "vid"])
+
+        _, kwargs = mock_fanout_datasink.call_args
+        self.assertEqual(kwargs["columns"], ["item_id", "vid"])
+        self.assertEqual(kwargs["targets"][0]["columns"], ["id", "videos", "md5"])
+        self.assertEqual(kwargs["targets"][0]["extra_args"], {"compression": "snappy"})
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
     def test_ray_hdfs_multi_target_export_propagates_action_args_and_unknown_columns(
         self,
         mock_get_pyarrow_filesystem,

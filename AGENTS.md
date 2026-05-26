@@ -7,6 +7,7 @@
 - Keep changes scoped to the requested behavior. Do not refactor unrelated operators, configs, Docker files, demos, or docs while fixing a narrow issue.
 - Preserve local-only files. Do not commit generated files such as `yaml.base64`, `outputs/`, caches, virtual environments, or temporary artifacts.
 - Main package code lives under `data_juicer/`; CLI entry points and utility scripts live under `tools/`; tests live under `tests/`; runnable examples live under `demos/`.
+- If new metrics are added, update `/Users/bytedance/repo/data-juicer-task-b/docs/grafana/data_juicer_metrics_dashboard.json` in the same change.
 
 ## Task Routing
 
@@ -20,6 +21,7 @@
 - Compose existing operators in YAML when practical. If an existing operator is close but insufficient, first consider a narrow reusable enhancement.
 - Do not create a large operator that bundles independent operations. Split multi-step logic into small focused operators and compose them in YAML.
 - New operators should be generic and business-agnostic unless the generic form cannot express the required behavior cleanly.
+- Euler RPC operators should default their caller/source PSM identity to `ad.ai.data_forge_merlin` unless a task-specific service identity is explicitly required.
 
 ## Testing Baseline
 
