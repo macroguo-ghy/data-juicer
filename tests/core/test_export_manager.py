@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
+import pyarrow.fs as pa_fs
 import yaml
 from jsonargparse import Namespace
 
@@ -300,6 +301,52 @@ class ExportManagerTest(unittest.TestCase):
         _, kwargs = mock_fanout_datasink.call_args
         self.assertIsNone(kwargs["columns"])
 
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_local_multi_target_export_uses_local_filesystem(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "local",
+                        "path": "./outputs/fanout_local/a",
+                        "type": "jsonl",
+                        "mode": "overwrite",
+                        "filter_condition": "score >= 0.8",
+                    },
+                    {
+                        "target": "local",
+                        "path": "file:///tmp/fanout_local/b",
+                        "type": "jsonl",
+                        "mode": "append",
+                        "filter_condition": "lang == 'zh'",
+                    },
+                ],
+            }
+        )
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["text", "score", "lang"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["text", "score", "lang"])
+
+        mock_get_pyarrow_filesystem.assert_not_called()
+        dataset.write_datasink.assert_called_once_with(datasink, ray_remote_args=None, concurrency=None)
+        _, kwargs = mock_fanout_datasink.call_args
+        targets = kwargs["targets"]
+        self.assertIsInstance(targets[0]["filesystem"], pa_fs.LocalFileSystem)
+        self.assertTrue(os.path.isabs(targets[0]["path"]))
+        self.assertEqual(targets[0]["original_uri"], "./outputs/fanout_local/a")
+        self.assertIsInstance(targets[1]["filesystem"], pa_fs.LocalFileSystem)
+        self.assertEqual(targets[1]["path"], "/tmp/fanout_local/b")
+        self.assertEqual(targets[1]["condition"], "lang == 'zh'")
+
     def test_ray_hdfs_multi_target_export_revalidates_config_bypass(self):
         cases = [
             ({
@@ -319,6 +366,12 @@ class ExportManagerTest(unittest.TestCase):
                     {"target": "hdfs", "path": "hdfs://cluster/path/output_b", "type": "jsonl"},
                 ],
             }, "same `type`"),
+            ({
+                "targets": [
+                    {"target": "local", "path": "./outputs/a", "type": "parquet"},
+                    {"target": "hdfs", "path": "hdfs://cluster/path/output_b", "type": "parquet"},
+                ],
+            }, "same `target`"),
         ]
 
         for export_cfg, expected_error in cases:
@@ -326,22 +379,89 @@ class ExportManagerTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, expected_error):
                 manager.export(RayLikeDataset(["text"]))
 
-    def test_ray_data_checkpoint_rejects_multi_target_export(self):
+    def test_ray_data_checkpoint_accepts_append_multi_target_export(self):
+        for targets in [
+            [
+                {
+                    "target": "hdfs",
+                    "path": "hdfs://cluster/path/output_a",
+                    "type": "parquet",
+                    "mode": "append",
+                },
+                {
+                    "target": "hdfs",
+                    "path": "hdfs://cluster/path/output_b",
+                    "type": "parquet",
+                    "mode": "append",
+                },
+            ],
+            [
+                {
+                    "target": "local",
+                    "path": "./outputs/checkpoint_local/output_a",
+                    "type": "parquet",
+                    "mode": "append",
+                },
+                {
+                    "target": "local",
+                    "path": "file:///tmp/checkpoint_local/output_b",
+                    "type": "parquet",
+                    "mode": "append",
+                },
+            ],
+        ]:
+            cfg = self._make_cfg({"targets": targets})
+            manager = ExportManager(cfg, executor_type="ray")
+
+            with patch("data_juicer.core.export_manager.logger.warning") as mock_warning:
+                manager.validate_ray_data_checkpoint_sink()
+
+            mock_warning.assert_not_called()
+
+    def test_ray_data_checkpoint_rejects_non_append_multi_target_export(self):
+        cases = [
+            (None, "error_if_exists"),
+            ("error_if_exists", "error_if_exists"),
+            ("overwrite", "overwrite"),
+        ]
+
+        for mode, expected_mode in cases:
+            target = {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_a",
+                "type": "parquet",
+            }
+            if mode is not None:
+                target["mode"] = mode
+            cfg = self._make_cfg({"targets": [target]})
+            manager = ExportManager(cfg, executor_type="ray")
+
+            with self.assertRaisesRegex(ValueError, expected_mode):
+                manager.validate_ray_data_checkpoint_sink()
+
+    def test_ray_data_checkpoint_warns_when_delete_no_checkpoint_files_with_multi_target_export(self):
         cfg = self._make_cfg(
             {
                 "targets": [
                     {
                         "target": "hdfs",
                         "path": "hdfs://cluster/path/output_a",
-                        "type": "parquet",
+                        "type": "jsonl",
+                        "mode": "append",
                     },
-                ],
+                ]
             }
         )
+        cfg.ray_data_checkpoint = Namespace(enabled=True, delete_no_checkpoint_files=True)
         manager = ExportManager(cfg, executor_type="ray")
 
-        with self.assertRaisesRegex(ValueError, "checkpointing"):
+        with patch("data_juicer.core.export_manager.logger.warning") as mock_warning:
             manager.validate_ray_data_checkpoint_sink()
+
+        mock_warning.assert_called_once()
+        self.assertIn("fan-out", mock_warning.call_args.args[0])
+        self.assertIn("at-least-once", mock_warning.call_args.args[0])
+        self.assertIn("delete_no_checkpoint_files", mock_warning.call_args.args[0])
 
     def test_ray_hdfs_distributed_export_rejects_file_like_path(self):
         cfg = self._make_cfg(

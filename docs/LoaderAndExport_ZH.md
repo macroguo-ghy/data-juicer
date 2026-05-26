@@ -461,7 +461,7 @@ export:
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
 
-`export.targets` 用于 Ray HDFS fan-out 写出，不能和 `export.target` 同时配置。第一版仅支持 `executor_type: ray`、`target: hdfs`、`type: parquet/jsonl`，且所有 target 的 `target` 与 `type` 必须一致。每个 target 可配置 `filter_condition`，语法复用 `general_field_filter` 的字段比较表达式；同一行可命中多个 target。任一写出失败都会让任务失败；`mode: append` 仍是 at-least-once，task retry 或用户重跑可能产生重复 part 文件。
+`export.targets` 用于 Ray 文件 fan-out 写出，不能和 `export.target` 同时配置。第一版支持 `executor_type: ray`、`target: hdfs/local`、`type: parquet/jsonl`，且同一个 `targets` 列表里的所有 target 的 `target` 与 `type` 必须一致。HDFS path 必须以 `hdfs://` 开头；local path 支持相对路径、绝对路径或 `file://`，但该目录必须对所有 Ray worker 可见。每个 target 可配置 `filter_condition`，语法复用 `general_field_filter` 的字段比较表达式；同一行可命中多个 target。任一写出失败都会让任务失败；`mode: append` 仍是 at-least-once，task retry 或用户重跑可能产生重复 part 文件。启用 `ray_data_checkpoint.enabled: true` 时，fan-out 只支持所有 target 都显式配置 `mode: append`；未配置 `mode` 仍按默认 `error_if_exists` 处理并被拒绝。
 
 ```yaml
 executor_type: ray
@@ -479,6 +479,22 @@ export:
       mode: overwrite
       filter_condition: "lang == 'zh'"
       filesystem: pyarrow
+```
+
+```yaml
+executor_type: ray
+export:
+  targets:
+    - target: local
+      type: jsonl
+      path: ./outputs/fanout/high_score
+      mode: overwrite
+      filter_condition: "score >= 0.8"
+    - target: local
+      type: jsonl
+      path: file:///tmp/data-juicer/fanout/zh
+      mode: overwrite
+      filter_condition: "lang == 'zh'"
 ```
 
 `export.max_rows` 只控制传给 sink 的数据规模，不改变写入模式；例如 `OVERWRITE` 仍会覆盖目标，只是写入受控后的数据。`limit` 模式下，Ray limit 可能被下推并减少兼容 lazy pipeline 的上游执行量，但这是 best-effort：需要全量输入的算子、all-to-all 算子、filter、已 materialize 的 dataset 都可能执行超过 `max_rows` 行的上游工作。`quota_reservation` 控制的是进入 sink 输入流的数据，不是写入提交计数器；它会在真正 sink 前增加一次 materialize 屏障，用来避免 Ray 写入前的 schema/sample 动作重复执行带状态的 quota reservation。任务重试或 sink 失败时不提供 exactly-once 计数保证。`ray_collect_real_metrics: true` 不能和 `export.max_rows` 同时配置，因为导出前的 eager `materialize()` / `count()` 会破坏 lazy limit 路径。
@@ -578,14 +594,15 @@ export:
 | `type` | 否 | 从路径后缀推断，否则 `jsonl` | Ray 分布式 HDFS export 当前支持 `parquet`、`jsonl`。其他格式仍走默认 staging copy 路径；开启 `ray_data_checkpoint` 时会提前报错。 |
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
-| `mode` | 否 | `error_if_exists` | 写入模式。`error_if_exists`：目标已存在时失败；`overwrite`：写入前删除已有目标；`append`：直接追加 part 文件，重试或重跑可能产生重复文件。checkpoint 的可启用性不依赖具体 `mode`，但失败后重提任务的恢复语义依赖 `mode`。 |
+| `mode` | 否 | `error_if_exists` | 写入模式。`error_if_exists`：目标已存在时失败；`overwrite`：写入前删除已有目标；`append`：直接追加 part 文件，重试或重跑可能产生重复文件。single-target checkpoint 的可启用性不依赖具体 `mode`，但 fan-out checkpoint 只允许显式 `append`。 |
 | `extra_args` | 否 | `{}` | 传给 Ray writer / datasink 的参数，例如 `concurrency`、`ray_remote_args`、`min_rows_per_file`、`num_rows_per_file`、`max_rows_per_file`。Parquet 的 `max_rows_per_file` 只有在当前 Ray writer 支持该参数时才会生效；旧版 Ray 不支持时会被参数过滤逻辑丢弃。JSONL 推荐使用 `num_rows_per_file` 或 `min_rows_per_file`。 |
 
 限制：
 
 - Ray 分布式 HDFS export 不支持 `export.shard_size`；需要控制文件大小或行数时使用 `export.extra_args` 中的 Ray writer 参数。
 - `ray_data_checkpoint.enabled: true` 的硬要求是 Ray 文件 source 到文件 sink 的 lazy 路径；HDFS export 场景需要使用上述 Ray 分布式 `parquet/jsonl` 写入路径。
-- checkpoint 与 `export.mode` 没有硬绑定，但恢复语义不同。`error_if_exists` / `overwrite` 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，`error_if_exists` 可能因输出目录已存在而失败，`overwrite` 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。
+- single-target checkpoint 与 `export.mode` 没有硬绑定，但恢复语义不同。`error_if_exists` / `overwrite` 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，`error_if_exists` 可能因输出目录已存在而失败，`overwrite` 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。
+- fan-out checkpoint 只允许 `export.targets[].mode: append`。`ray_data_checkpoint.delete_no_checkpoint_files: true` 可配置，但不会把 fan-out 输出升级成 exactly-once；custom fan-out datasink 走 Ray 的 post-write checkpoint，多个目标目录之间没有原子清理或原子可见性保证。
 - `mode: append` 才可能保留已经写出的 part 文件，但第一版只提供 at-least-once 语义，不提供 exactly-once；同一次任务重试、用户重跑或局部失败后再次提交都可能产生重复 part。
 
 ## Hive Export

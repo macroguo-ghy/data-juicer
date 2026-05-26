@@ -561,7 +561,13 @@ class RayExecutorTest(DataJuicerTestCaseBase):
             self.assertIs(exported_data, dataset.data)
             self.assertEqual(columns, ['text'])
 
-        executor.exporter = SimpleNamespace(export=MagicMock(side_effect=assert_normal_export))
+        def assert_sink_validated_before_checkpoint_context():
+            fake_data_context.get_current.assert_not_called()
+
+        executor.exporter = SimpleNamespace(
+            export=MagicMock(side_effect=assert_normal_export),
+            validate_ray_data_checkpoint_sink=MagicMock(side_effect=assert_sink_validated_before_checkpoint_context),
+        )
 
         with (
             patch('data_juicer.core.executor.ray_executor.ray', fake_ray),
@@ -571,6 +577,7 @@ class RayExecutorTest(DataJuicerTestCaseBase):
 
         executor.exporter.export.assert_called_once()
         executor.datasetbuilder.validate_ray_data_checkpoint_support.assert_called_once()
+        executor.exporter.validate_ray_data_checkpoint_sink.assert_called_once()
         self.assertTrue(executor.cfg.ray_data_checkpoint.enabled)
         self.assertEqual(dataset.data.materialize_calls, 0)
         self.assertEqual(dataset.data.count_calls, 0)

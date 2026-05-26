@@ -997,8 +997,7 @@ def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
     if getattr(cfg, "ray_collect_real_metrics", False):
         raise ValueError("`ray_collect_real_metrics` cannot be true when `export.targets` is set.")
     checkpoint_cfg = _plain_cfg_value(getattr(cfg, "ray_data_checkpoint", None))
-    if isinstance(checkpoint_cfg, dict) and checkpoint_cfg.get("enabled"):
-        raise ValueError("`ray_data_checkpoint.enabled` is not supported with `export.targets` in the first version.")
+    checkpoint_enabled = isinstance(checkpoint_cfg, dict) and checkpoint_cfg.get("enabled")
     hook_cfg = export_cfg.get("after_export_hook")
     if isinstance(hook_cfg, dict) and hook_cfg.get("enabled") is True:
         raise ValueError("`after_export_hook` is not supported with `export.targets` in the first version.")
@@ -1013,17 +1012,24 @@ def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
         target = target_cfg.get("target")
         export_type = target_cfg.get("type")
         path = target_cfg.get("path")
-        if target != "hdfs":
-            raise ValueError("`export.targets` first version only supports `target: hdfs`.")
+        if target not in {"hdfs", "local"}:
+            raise ValueError("`export.targets` first version only supports `target: local/hdfs`.")
         if export_type not in {"parquet", "jsonl"}:
             raise ValueError("`export.targets` first version only supports `type: parquet/jsonl`.")
-        if not isinstance(path, str) or not path.startswith("hdfs://"):
+        if target == "hdfs" and (not isinstance(path, str) or not path.startswith("hdfs://")):
             raise ValueError("Each `export.targets` item requires an HDFS `path`.")
+        if target == "local" and (not isinstance(path, str) or not _is_local_export_path(path)):
+            raise ValueError("Each `export.targets` item requires a local `path`.")
         if _looks_like_export_file_path(path):
-            raise ValueError("Ray HDFS `export.targets` paths must be directory paths, not file-like paths.")
+            raise ValueError("Ray file `export.targets` paths must be directory paths, not file-like paths.")
         mode = target_cfg.get("mode", "error_if_exists")
         if mode not in valid_modes:
             raise ValueError("`export.targets[].mode` must be one of error_if_exists, overwrite, append.")
+        if checkpoint_enabled and mode != "append":
+            raise ValueError(
+                "`ray_data_checkpoint.enabled` with `export.targets` requires every "
+                "`export.targets[].mode` to be append."
+            )
         filter_condition = target_cfg.get("filter_condition", "")
         if filter_condition is not None and not isinstance(filter_condition, str):
             raise ValueError("`export.targets[].filter_condition` must be a string when set.")
@@ -1059,6 +1065,12 @@ def _suffix_from_export_path(path):
 
 def _looks_like_export_file_path(path):
     return _suffix_from_export_path(path) in {"parquet", "json", "jsonl", "csv"}
+
+
+def _is_local_export_path(path):
+    if not path:
+        return False
+    return "://" not in path or path.startswith("file://")
 
 
 def _validate_export_max_rows(export_cfg: dict, cfg: Namespace) -> None:

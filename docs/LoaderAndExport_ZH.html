@@ -534,16 +534,32 @@ export:
 <tr><td><code>type</code></td><td>否</td><td>从路径后缀推断，否则 <code>jsonl</code></td><td>Ray 分布式 HDFS export 当前支持 <code>parquet</code>、<code>jsonl</code>。其他格式仍走默认 staging copy 路径；开启 <code>ray_data_checkpoint</code> 时会提前报错。</td></tr>
 <tr><td><code>filesystem</code></td><td>否</td><td><code>pyarrow</code></td><td>HDFS filesystem 实现。生产和线上 Ray 集群使用 <code>pyarrow</code>；<code>webhdfs</code> 仅用于本地或测试环境验证。</td></tr>
 <tr><td><code>webhdfs</code></td><td>否</td><td><code>{}</code></td><td>仅在 <code>filesystem: webhdfs</code> 的测试场景生效，传给 fsspec 的参数，例如 <code>host</code>、<code>port</code>、<code>user</code>。</td></tr>
-<tr><td><code>mode</code></td><td>否</td><td><code>error_if_exists</code></td><td>写入模式。<code>error_if_exists</code>：目标已存在时失败；<code>overwrite</code>：写入前删除已有目标；<code>append</code>：直接追加 part 文件，重试或重跑可能产生重复文件。checkpoint 的可启用性不依赖具体 <code>mode</code>，但失败后重提任务的恢复语义依赖 <code>mode</code>。</td></tr>
+<tr><td><code>mode</code></td><td>否</td><td><code>error_if_exists</code></td><td>写入模式。<code>error_if_exists</code>：目标已存在时失败；<code>overwrite</code>：写入前删除已有目标；<code>append</code>：直接追加 part 文件，重试或重跑可能产生重复文件。single-target checkpoint 的可启用性不依赖具体 <code>mode</code>，但 fan-out checkpoint 只允许显式 <code>append</code>。</td></tr>
 <tr><td><code>extra_args</code></td><td>否</td><td><code>{}</code></td><td>传给 Ray writer / datasink 的参数，例如 <code>concurrency</code>、<code>ray_remote_args</code>、<code>min_rows_per_file</code>、<code>num_rows_per_file</code>、<code>max_rows_per_file</code>。旧版 byted-ray 的 parquet writer 不支持 <code>max_rows_per_file</code> 时会兼容映射到 <code>min_rows_per_file</code>。JSONL 推荐使用 <code>num_rows_per_file</code> 或 <code>min_rows_per_file</code>。</td></tr>
 </tbody></table></div>
 <p>限制：</p>
 <ul>
 <li>Ray 分布式 HDFS export 不支持 <code>export.shard_size</code>；需要控制文件大小或行数时使用 <code>export.extra_args</code> 中的 Ray writer 参数。</li>
 <li><code>ray_data_checkpoint.enabled: true</code> 的硬要求是 Ray 文件 source 到文件 sink 的 lazy 路径；HDFS export 场景需要使用上述 Ray 分布式 <code>parquet/jsonl</code> 写入路径。</li>
-<li>checkpoint 与 <code>export.mode</code> 没有硬绑定，但恢复语义不同。<code>error_if_exists</code> / <code>overwrite</code> 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，<code>error_if_exists</code> 可能因输出目录已存在而失败，<code>overwrite</code> 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。</li>
+<li>single-target checkpoint 与 <code>export.mode</code> 没有硬绑定，但恢复语义不同。<code>error_if_exists</code> / <code>overwrite</code> 主要适合同一次 Ray job 内部 task retry；如果失败后由用户重新提交任务，<code>error_if_exists</code> 可能因输出目录已存在而失败，<code>overwrite</code> 会删除上次输出进度，因此二者对跨任务恢复意义有限。启用 checkpoint 且使用这两个 mode 时会输出 warning。</li>
+<li>fan-out checkpoint 只允许 <code>export.targets[].mode: append</code>。<code>ray_data_checkpoint.delete_no_checkpoint_files: true</code> 可配置，但不会把 fan-out 输出升级成 exactly-once；custom fan-out datasink 走 Ray 的 post-write checkpoint，多个目标目录之间没有原子清理或原子可见性保证。</li>
 <li><code>mode: append</code> 才可能保留已经写出的 part 文件，但第一版只提供 at-least-once 语义，不提供 exactly-once；同一次任务重试、用户重跑或局部失败后再次提交都可能产生重复 part。</li>
 </ul>
+<h3 id="ray-fan-out-写出">Ray Fan-Out 写出</h3>
+<p><code>export.targets</code> 用于 Ray 文件 fan-out 写出，不能和 <code>export.target</code> 同时配置。第一版支持 <code>target: hdfs/local</code>、<code>type: parquet/jsonl</code>，且同一个 <code>targets</code> 列表里的所有 target 的 <code>target</code> 与 <code>type</code> 必须一致。HDFS path 必须以 <code>hdfs://</code> 开头；local path 支持相对路径、绝对路径或 <code>file://</code>，但该目录必须对所有 Ray worker 可见。</p>
+<pre><code class="language-yaml">executor_type: ray
+export:
+  targets:
+    - target: local
+      type: jsonl
+      path: ./outputs/fanout/high_score
+      mode: overwrite
+      filter_condition: "score &gt;= 0.8"
+    - target: local
+      type: jsonl
+      path: file:///tmp/data-juicer/fanout/zh
+      mode: overwrite
+      filter_condition: "lang == 'zh'"</code></pre>
 <h2 id="hive-export">Hive Export</h2>
 <p>Hive export 只支持 Ray 模式，并依赖内部 byted-ray。</p>
 <pre><code class="language-yaml">executor_type: ray
