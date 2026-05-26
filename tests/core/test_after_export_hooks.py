@@ -15,6 +15,7 @@ class FakeHttpClient:
         timeout=30.0,
         retry_attempts=0,
         retry_status_codes=None,
+        retry_on_timeout=True,
     ):
         self.endpoint = endpoint
         self.method = method
@@ -22,6 +23,7 @@ class FakeHttpClient:
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self.retry_status_codes = retry_status_codes
+        self.retry_on_timeout = retry_on_timeout
 
     def request(self, *, params=None, json_body=None):
         self.__class__.requests.append({
@@ -31,6 +33,7 @@ class FakeHttpClient:
             "timeout": self.timeout,
             "retry_attempts": self.retry_attempts,
             "retry_status_codes": self.retry_status_codes,
+            "retry_on_timeout": self.retry_on_timeout,
             "params": params,
             "json_body": json_body,
         })
@@ -249,7 +252,9 @@ class AfterExportHookTest(unittest.TestCase):
         run_after_export_hook(export_cfg)
 
         eval_request = FakeHttpClient.requests[0]
+        self.assertEqual(eval_request["timeout"], 300.0)
         self.assertEqual(eval_request["retry_attempts"], 5)
+        self.assertEqual(eval_request["retry_on_timeout"], False)
         self.assertIn(420, eval_request["retry_status_codes"])
 
     @patch("data_juicer.core.export_hooks.adc_result_sync_hook.HttpClient", FailingHttpClient)
