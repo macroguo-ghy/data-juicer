@@ -140,7 +140,7 @@ class PrepareRecordKeyMapper(Mapper):
             callback_client.report_record_failure(
                 record_key=record_key,
                 input_data=input_sample,
-                output_data=self._safe_deepcopy(output_sample),
+                output_data=None,
                 error_message=str(exc),
                 started_at=started_at,
             )
