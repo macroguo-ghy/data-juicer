@@ -74,6 +74,10 @@ PYTHONPATH="$PWD" ./.venv/bin/python demos/bytedance/e2e_test/online_ray_job.py 
   --run-dir /tmp/data_juicer_e2e/<job_id>
 ```
 
+For one-off jobs that create a fresh Ray cluster, `LAUNCHING` can normally last
+several minutes. Wait at least 10 minutes before treating a cluster that has not
+started a Ray driver as stuck, unless Federal status reports a concrete failure.
+
 Manual Stop is mandatory for one-off Federal Ray jobs launched by this helper. The launch request sets:
 
 ```text

@@ -13,6 +13,70 @@ class RayDatasetImportTest(unittest.TestCase):
 
         self.assertIsNotNone(JSONStreamDatasource)
 
+    def _make_json_stream_datasource(self, on_bad_files="error"):
+        from data_juicer.core.data.ray_dataset import JSONStreamDatasource
+
+        datasource = object.__new__(JSONStreamDatasource)
+        datasource.arrow_json_args = {}
+        datasource.read_options = None
+        datasource.on_bad_files = on_bad_files
+        return datasource
+
+    def test_json_stream_datasource_skips_empty_file_when_configured(self):
+        import pyarrow as pa
+
+        datasource = self._make_json_stream_datasource(on_bad_files="skip")
+
+        tables = list(datasource._read_stream(pa.BufferReader(b""), "empty.jsonl"))
+
+        self.assertEqual(tables, [])
+
+    def test_json_stream_datasource_skips_invalid_file_when_configured(self):
+        import pyarrow as pa
+
+        datasource = self._make_json_stream_datasource(on_bad_files="skip")
+
+        tables = list(datasource._read_stream(pa.BufferReader(b"{bad json}\n"), "bad.jsonl"))
+
+        self.assertEqual(tables, [])
+
+    def test_json_stream_datasource_skips_partially_invalid_file_as_whole_file(self):
+        import pyarrow as pa
+
+        datasource = self._make_json_stream_datasource(on_bad_files="skip")
+
+        tables = list(
+            datasource._read_stream(
+                pa.BufferReader(b'{"id": 1, "text": "ok"}\n{"id": bad}\n'),
+                "mixed_bad.jsonl",
+            )
+        )
+
+        self.assertEqual(tables, [])
+
+    def test_json_stream_datasource_errors_on_invalid_file_by_default(self):
+        import pyarrow as pa
+
+        datasource = self._make_json_stream_datasource()
+
+        with self.assertRaisesRegex(ValueError, "Failed to read JSON file"):
+            list(datasource._read_stream(pa.BufferReader(b"{bad json}\n"), "bad.jsonl"))
+
+    def test_json_stream_datasource_reads_valid_jsonl(self):
+        import pyarrow as pa
+
+        datasource = self._make_json_stream_datasource(on_bad_files="skip")
+
+        tables = list(
+            datasource._read_stream(
+                pa.BufferReader(b'{"id": 1, "text": "a"}\n{"id": 2, "text": "b"}\n'),
+                "good.jsonl",
+            )
+        )
+
+        self.assertEqual(len(tables), 1)
+        self.assertEqual(tables[0].to_pylist(), [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}])
+
     def test_configured_ray_columns_accepts_hive_cast_mapping(self):
         from types import SimpleNamespace
 

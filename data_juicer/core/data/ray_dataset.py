@@ -750,6 +750,22 @@ class JSONStreamDatasource(_JSON_DATASOURCE_BASE):
         Depends on a customized `pyarrow` with `open_json` method.
     """
 
+    def __init__(self, *args, on_bad_files: str = "error", **kwargs):
+        if on_bad_files not in {"error", "skip"}:
+            raise ValueError("Expected `error` or `skip` for on_bad_files")
+        self.on_bad_files = on_bad_files
+        super().__init__(*args, **kwargs)
+
+    def _skip_bad_json_file(self, path: str, error: Exception) -> bool:
+        if getattr(self, "on_bad_files", "error") != "skip":
+            return False
+        logger.warning(
+            "Skipping bad JSON file {} due to on_bad_files=skip. Error: {}",
+            path,
+            error,
+        )
+        return True
+
     def _read_stream(self, f: "pyarrow.NativeFile", path: str):
         # Check if open_json is available (PyArrow 20.0.0+)
         try:
@@ -765,7 +781,36 @@ class JSONStreamDatasource(_JSON_DATASOURCE_BASE):
                 if table.num_rows > 0:
                     yield table
             except Exception as e:
+                if self._skip_bad_json_file(path, e):
+                    return
                 raise ValueError(f"Failed to read JSON file: {path}. Error: {e}") from e
+            return
+
+        if getattr(self, "on_bad_files", "error") == "skip":
+            try:
+                reader = open_json(
+                    f,
+                    read_options=self.read_options,
+                    **self.arrow_json_args,
+                )
+                schema = None
+                tables = []
+                while True:
+                    try:
+                        batch = reader.read_next_batch()
+                        table = pyarrow.Table.from_batches([batch], schema=schema)
+                        if schema is None:
+                            schema = table.schema
+                        tables.append(table)
+                    except StopIteration:
+                        break
+            except pyarrow.lib.ArrowInvalid as e:
+                if self._skip_bad_json_file(path, e):
+                    return
+                raise ValueError(f"Failed to read JSON file: {path}.") from e
+
+            for table in tables:
+                yield table
             return
 
         try:
@@ -804,8 +849,12 @@ def read_json_stream(
     file_extensions: Optional[List[str]] = ["json", "jsonl", "json.gz", "jsonl.gz", "json.zst", "jsonl.zst"],
     concurrency: Optional[int] = None,
     override_num_blocks: Optional[int] = None,
+    on_bad_files: str = "error",
     **arrow_json_args,
 ) -> ray.data.Dataset:
+    if on_bad_files not in {"error", "skip"}:
+        raise ValueError("Expected `error` or `skip` for on_bad_files")
+
     # Check if open_json is available (PyArrow 20.0.0+)
     # If not, fall back to ray.data.read_json which works with older PyArrow
     try:
@@ -815,7 +864,8 @@ def read_json_stream(
     except (ImportError, AttributeError):
         # Fall back to standard ray.data.read_json for older PyArrow versions
         # This works with filesystem parameter for S3
-        return ray.data.read_json(paths, filesystem=filesystem)
+        if on_bad_files == "error":
+            return ray.data.read_json(paths, filesystem=filesystem)
 
     if meta_provider is None:
         meta_provider = ray.data.read_api.DefaultFileMetadataProvider()
@@ -832,6 +882,7 @@ def read_json_stream(
         shuffle=shuffle,
         include_paths=include_paths,
         file_extensions=file_extensions,
+        on_bad_files=on_bad_files,
     )
     return ray.data.read_datasource(
         datasource,

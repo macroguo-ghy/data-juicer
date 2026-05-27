@@ -508,7 +508,7 @@ class DatasetBuilderTest(DataJuicerTestCaseBase):
 
         builder = DatasetBuilder(cfg, executor_type='ray')
 
-        with self.assertRaisesRegex(ValueError, "source='tqs'.*TQS loader"):
+        with self.assertRaisesRegex(ValueError, "source='tqs'.*TQS loader.*已物化 HDFS"):
             builder.validate_ray_data_checkpoint_support()
 
     def test_ray_data_checkpoint_support_rejects_any_unsupported_loader_in_mixture(self):

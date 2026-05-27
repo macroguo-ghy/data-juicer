@@ -52,6 +52,39 @@ _RAY_PARQUET_READ_KWARGS = {
     "override_num_blocks",
 }
 
+_RAY_JSON_READ_KWARGS = {
+    "parallelism",
+    "ray_remote_args",
+    "arrow_open_stream_args",
+    "meta_provider",
+    "partition_filter",
+    "partitioning",
+    "include_paths",
+    "ignore_missing_paths",
+    "shuffle",
+    "file_extensions",
+    "concurrency",
+    "override_num_blocks",
+    "read_options",
+    "parse_options",
+}
+
+_RAY_HDFS_PARQUET_FORMATS = {"parquet", ".parquet"}
+_RAY_HDFS_JSON_FORMATS = {
+    "json",
+    ".json",
+    "jsonl",
+    ".jsonl",
+    "json.gz",
+    ".json.gz",
+    "jsonl.gz",
+    ".jsonl.gz",
+    "json.zst",
+    ".json.zst",
+    "jsonl.zst",
+    ".jsonl.zst",
+}
+
 
 def _validate_ray_hdfs_filesystem(filesystem_type: str) -> None:
     if filesystem_type not in {"pyarrow", "webhdfs"}:
@@ -381,6 +414,21 @@ class DataLoadStrategy(ABC, ConfigValidator):
             {
                 key: self.ds_config[key]
                 for key in _RAY_PARQUET_READ_KWARGS
+                if key in self.ds_config
+            }
+        )
+        return read_kwargs
+
+    def get_ray_json_read_kwargs(self, load_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        read_kwargs = {
+            key: load_kwargs[key]
+            for key in _RAY_JSON_READ_KWARGS
+            if key in load_kwargs
+        }
+        read_kwargs.update(
+            {
+                key: self.ds_config[key]
+                for key in _RAY_JSON_READ_KWARGS
                 if key in self.ds_config
             }
         )
@@ -1164,15 +1212,19 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
 
         hdfs_uri = self.ds_config["path"]
         data_format = self.ds_config.get("format", "parquet")
-        if data_format not in {"parquet", ".parquet"}:
+        normalized_format = str(data_format).lower()
+        if normalized_format in _RAY_HDFS_PARQUET_FORMATS:
+            normalized_format = "parquet"
+        elif normalized_format in _RAY_HDFS_JSON_FORMATS:
+            normalized_format = "json"
+        else:
             raise ValueError(
                 f"Unsupported HDFS data format for Ray direct loading: {data_format}. "
-                "Ray HDFS loading currently supports parquet only. "
+                "Ray HDFS loading currently supports parquet, json, and jsonl. "
                 "Use the default executor or stage the data locally for other formats."
             )
 
-        read_kwargs = self.get_ray_parquet_read_kwargs(kwargs)
-        logger.info(f"Loading parquet dataset from HDFS with Ray: {hdfs_uri}")
+        logger.info(f"Loading {normalized_format} dataset from HDFS with Ray: {hdfs_uri}")
 
         try:
             filesystem_type = self.ds_config.get("filesystem", "pyarrow")
@@ -1199,6 +1251,26 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                 else:
                     filesystem, fs_path = get_pyarrow_filesystem(hdfs_uri)
             on_bad_files = self.ds_config.get("on_bad_files", "error")
+            if normalized_format == "json":
+                from data_juicer.core.data.ray_dataset import read_json_stream
+
+                read_kwargs = self.get_ray_json_read_kwargs(kwargs)
+                dataset = read_json_stream(
+                    fs_path,
+                    filesystem=filesystem,
+                    on_bad_files=on_bad_files,
+                    **read_kwargs,
+                )
+                limit = self.ds_config.get("limit")
+                if limit is not None:
+                    dataset = dataset.limit(limit)
+                return RayDataset(
+                    dataset,
+                    dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
+                    cfg=self.cfg,
+                )
+
+            read_kwargs = self.get_ray_parquet_read_kwargs(kwargs)
             skip_zero_row_group_files = self.ds_config.get("skip_zero_row_group_files", True)
             if on_bad_files == "skip":
                 read_plan = _build_parquet_read_plan_from_filesystem(
@@ -1244,7 +1316,7 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
             )
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load parquet data from HDFS path {hdfs_uri}. "
+                f"Failed to load {normalized_format} data from HDFS path {hdfs_uri}. "
                 "Ensure Hadoop client libraries, libjvm, and HDFS credentials are available "
                 "on the Ray driver and workers, or use `filesystem: webhdfs` with a reachable "
                 "WebHDFS endpoint. "
@@ -1255,7 +1327,20 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
 class TQSQueryLoadMixin(StagedLocalLoadMixin):
     query_field = "query"
     MATERIALIZED_READ_MODE = "materialized"
+    MATERIALIZED_REMOTE_READ_MODE = "materialized_remote"
     CLIENT_RESULT_READ_MODE = "client_result"
+    _MATERIALIZED_REMOTE_HDFS_FIELDS = {
+        "filesystem",
+        "webhdfs",
+        "columns",
+        "concurrency",
+        "override_num_blocks",
+        "ray_remote_args",
+        "limit",
+        "skip_zero_row_group_files",
+        "on_bad_files",
+        "load_kwargs",
+    }
 
     def _get_query(self) -> str:
         query = self.ds_config.get(self.query_field)
@@ -1265,20 +1350,30 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
 
     def _get_read_mode(self) -> str:
         read_mode = self.ds_config.get("read_mode", self.MATERIALIZED_READ_MODE)
-        if read_mode not in {self.MATERIALIZED_READ_MODE, self.CLIENT_RESULT_READ_MODE}:
+        supported_modes = {
+            self.MATERIALIZED_READ_MODE,
+            self.MATERIALIZED_REMOTE_READ_MODE,
+            self.CLIENT_RESULT_READ_MODE,
+        }
+        if read_mode not in supported_modes:
             raise ValueError(
                 f"Unsupported TQS/Hive read_mode [{read_mode}]. "
-                f"Supported modes: {self.MATERIALIZED_READ_MODE}, {self.CLIENT_RESULT_READ_MODE}"
+                "Supported modes: "
+                f"{self.MATERIALIZED_READ_MODE}, "
+                f"{self.MATERIALIZED_REMOTE_READ_MODE}, "
+                f"{self.CLIENT_RESULT_READ_MODE}"
             )
         return read_mode
 
-    def _materialize_query_output(self) -> str:
-        query = self._get_query()
+    def _get_output_uri(self) -> str:
         output_uri = self.ds_config.get("output_uri") or self.ds_config.get("tqs_output_uri")
         if not output_uri:
             raise ValueError("TQS/Hive loading requires `output_uri` or `tqs_output_uri`")
+        return output_uri
+
+    def _run_tqs_materialization(self, output_uri: str) -> str:
         run_tqs_query(
-            query=query,
+            query=self._get_query(),
             output_uri=output_uri,
             tqs_app_id=self.ds_config["tqs_app_id"],
             tqs_app_key=self.ds_config["tqs_app_key"],
@@ -1288,8 +1383,26 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
             priority=self.ds_config.get("priority", 5),
             memory=self.ds_config.get("memory", 0),
         )
+        return output_uri
+
+    def _materialize_query_output(self) -> str:
+        output_uri = self._run_tqs_materialization(self._get_output_uri())
         local_dir = self._make_stage_dir(f"tqs:{output_uri}")
         return copy_uri_to_local(output_uri, local_dir)
+
+    def _load_remote_materialized_hdfs_output(self, output_uri: str, **kwargs):
+        _validate_hdfs_uri(output_uri)
+        self._run_tqs_materialization(output_uri)
+        hdfs_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": output_uri,
+            "format": self.ds_config.get("format", "parquet"),
+        }
+        for field in self._MATERIALIZED_REMOTE_HDFS_FIELDS:
+            if field in self.ds_config:
+                hdfs_config[field] = self.ds_config[field]
+        return RayHDFSDataLoadStrategy(hdfs_config, self.cfg).load_data(**kwargs)
 
     def _load_client_result_records(self) -> list[dict]:
         return run_tqs_query_to_records(
@@ -1323,7 +1436,10 @@ class DefaultTQSDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrat
 
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
-        if self._get_read_mode() == self.CLIENT_RESULT_READ_MODE:
+        read_mode = self._get_read_mode()
+        if read_mode == self.MATERIALIZED_REMOTE_READ_MODE:
+            raise ValueError("TQS read_mode `materialized_remote` requires `executor_type: ray`.")
+        if read_mode == self.CLIENT_RESULT_READ_MODE:
             from data_juicer.core.data import NestedDataset
 
             return NestedDataset.from_list(self._load_client_result_records())
@@ -1338,17 +1454,22 @@ class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
     def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
         return RayDataCheckpointSupport(
             False,
-            "TQS loader is intended for tests and does not provide a supported Ray Data checkpoint source boundary",
+            "TQS loader is intended for tests and does not provide a supported Ray Data checkpoint "
+            "source boundary. For rerun or recovery, configure the already materialized HDFS path "
+            "directly as `source: hdfs` / `path: hdfs://...`（直接读已物化 HDFS 路径）.",
         )
 
     def load_data(self, **kwargs):
-        kwargs = self.get_load_kwargs(**kwargs)
-        if self._get_read_mode() == self.CLIENT_RESULT_READ_MODE:
+        read_mode = self._get_read_mode()
+        if read_mode == self.CLIENT_RESULT_READ_MODE:
             import ray
 
             from data_juicer.core.data.ray_dataset import RayDataset
 
             return RayDataset(ray.data.from_items(self._load_client_result_records()), cfg=self.cfg)
+        if read_mode == self.MATERIALIZED_REMOTE_READ_MODE:
+            return self._load_remote_materialized_hdfs_output(self._get_output_uri(), **kwargs)
+        kwargs = self.get_load_kwargs(**kwargs)
         staged_path = self._materialize_query_output()
         return self._load_staged_local_dataset(staged_path, **kwargs)
 
