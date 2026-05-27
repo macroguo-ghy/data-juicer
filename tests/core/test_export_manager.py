@@ -1159,6 +1159,7 @@ class ExportManagerTest(unittest.TestCase):
             operation="APPEND",
             validate_overwrite_partition_before_write=False,
             infer_schema_on_create=False,
+            serialize_complex_fields=False,
         )
 
     def test_default_hive_export_requires_ray_executor(self):
@@ -1238,6 +1239,7 @@ class ExportManagerTest(unittest.TestCase):
             operation="OVERWRITE",
             validate_overwrite_partition_before_write=True,
             infer_schema_on_create=False,
+            serialize_complex_fields=False,
         )
 
     @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
@@ -1285,6 +1287,52 @@ class ExportManagerTest(unittest.TestCase):
 
         self.assertTrue(mock_write_hf_dataset_to_magnus.call_args.kwargs["create_table_if_not_exists"])
         self.assertTrue(mock_write_hf_dataset_to_magnus.call_args.kwargs["infer_schema_on_create"])
+
+    @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
+    def test_magnus_export_passes_serialize_complex_fields_flag_to_ray_writer(
+        self, mock_write_ray_dataset_to_magnus
+    ):
+        class RayLikeDataset:
+            def columns(self):
+                return ["id", "state"]
+
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "create_table_if_not_exists": True,
+                "infer_schema_on_create": True,
+                "serialize_complex_fields": True,
+                "magnus_conf": {},
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        manager._export_to_magnus(RayLikeDataset())
+
+        self.assertTrue(mock_write_ray_dataset_to_magnus.call_args.kwargs["serialize_complex_fields"])
+
+    @patch("data_juicer.core.export_manager.write_hf_dataset_to_magnus")
+    def test_magnus_export_does_not_pass_serialize_complex_fields_flag_to_hf_writer(
+        self, mock_write_hf_dataset_to_magnus
+    ):
+        class HFDatasetLike:
+            column_names = ["id", "state"]
+
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "create_table_if_not_exists": True,
+                "infer_schema_on_create": True,
+                "magnus_conf": {},
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        manager._export_to_magnus(HFDatasetLike())
+
+        self.assertNotIn("serialize_complex_fields", mock_write_hf_dataset_to_magnus.call_args.kwargs)
 
     @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
     def test_magnus_export_passes_failure_policy_to_ray_writer(self, mock_write_ray_dataset_to_magnus):

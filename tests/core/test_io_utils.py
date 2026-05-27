@@ -25,6 +25,9 @@ from data_juicer.core.io_utils import (
     _MAGNUS_FAILURE_POLICY_SNAPSHOT_SUMMARY_KEY,
     _infer_magnus_schema_from_ray_dataset,
     _magnus_table_properties_from_write_options,
+    _serialize_complex_fields_in_arrow_table,
+    _serialize_complex_export_value,
+    _should_serialize_complex_export_value,
     _patch_magnus_datasink_failure_policy,
     _patch_magnus_datasink_worker_file_appender_compat,
     _patch_magnus_parquet_appender_hdfs_uri_compat,
@@ -158,7 +161,214 @@ class UnknownSchemaRayDatasetWithMultipleArrowBatches:
         )
 
 
+class SplitBatchRayDataset(FakeRayDataset):
+    def __init__(self, rows, schema=None, batch_size=1):
+        super().__init__(rows, schema=schema)
+        self.batch_size = batch_size
+
+    def map_batches(self, fn, *, batch_format="pyarrow", **kwargs):
+        if batch_format != "pyarrow":
+            raise ValueError(batch_format)
+        output_rows = []
+        output_schema = None
+        for idx in range(0, len(self.rows), self.batch_size):
+            table = pa.Table.from_pylist(self.rows[idx : idx + self.batch_size], schema=self._schema)
+            output = fn(table)
+            output_rows.extend(output.to_pylist())
+            if output_schema is None:
+                output_schema = output.schema
+            elif output.schema != output_schema:
+                raise AssertionError(f"inconsistent batch output schema: {output.schema} != {output_schema}")
+        return FakeRayDataset(output_rows, output_schema or self._schema)
+
+
 class WriteRayDatasetToMagnusTest(unittest.TestCase):
+    def test_serialize_complex_export_value_normalizes_supported_container_types(self):
+        self.assertEqual(_serialize_complex_export_value({"a": [1, 2]}, ensure_ascii=False), '{"a":[1,2]}')
+        self.assertEqual(_serialize_complex_export_value((1, 2), ensure_ascii=False), "[1,2]")
+        self.assertEqual(_serialize_complex_export_value({"b", "a"}, ensure_ascii=False), '["a","b"]')
+
+    def test_should_serialize_complex_export_value_only_matches_top_level_containers(self):
+        self.assertTrue(_should_serialize_complex_export_value([]))
+        self.assertTrue(_should_serialize_complex_export_value({}))
+        self.assertFalse(_should_serialize_complex_export_value("[]"))
+        self.assertFalse(_should_serialize_complex_export_value(1))
+
+    def test_serialize_complex_fields_in_arrow_table_only_pythonizes_selected_columns(self):
+        class ScalarColumn:
+            def __init__(self):
+                self._array = pa.array([None], type=pa.string())
+                self.to_pylist_calls = 0
+
+            def __arrow_c_array__(self, requested_schema=None):
+                return self._array.__arrow_c_array__()
+
+            def to_pylist(self):
+                self.to_pylist_calls += 1
+                raise AssertionError("scalar column should not be converted to Python")
+
+        scalar_column = ScalarColumn()
+
+        class ComplexColumn:
+            def to_pylist(self):
+                return [{"ok": True}]
+
+        class FakeTable:
+            schema = pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                ]
+            )
+
+            def column(self, field_index):
+                if field_index == 0:
+                    return scalar_column
+                if field_index == 1:
+                    return ComplexColumn()
+                raise IndexError(field_index)
+
+        output = _serialize_complex_fields_in_arrow_table(FakeTable(), {"state"})
+
+        self.assertEqual(scalar_column.to_pylist_calls, 0)
+        self.assertEqual(output.schema.field("id").type, pa.string())
+        self.assertEqual(output.schema.field("state").type, pa.string())
+        self.assertEqual(output.to_pylist(), [{"id": None, "state": '{"ok":true}'}])
+
+    def test_write_ray_dataset_to_magnus_serializes_top_level_complex_fields_when_enabled(self):
+        dataset = FakeRayDataset(
+            [{"id": "1", "rubrics": [], "state": {"ok": True}}],
+            pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("rubrics", pa.list_(pa.null())),
+                    pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                ]
+            ),
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=True,
+                infer_schema_on_create=True,
+                serialize_complex_fields=True,
+            )
+
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset._schema.field("rubrics").type, pa.string())
+        self.assertEqual(written_dataset._schema.field("state").type, pa.string())
+        self.assertEqual(written_dataset.rows, [{"id": "1", "rubrics": "[]", "state": '{"ok":true}'}])
+
+    def test_write_ray_dataset_to_magnus_does_not_serialize_complex_fields_when_disabled(self):
+        dataset = FakeRayDataset(
+            [{"id": "1", "rubrics": [], "state": {"ok": True}}],
+            pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("rubrics", pa.list_(pa.null())),
+                    pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                ]
+            ),
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=True,
+                infer_schema_on_create=True,
+                serialize_complex_fields=False,
+            )
+
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset._schema.field("rubrics").type, pa.list_(pa.null()))
+        self.assertEqual(written_dataset._schema.field("state").type, pa.struct([pa.field("ok", pa.bool_())]))
+        self.assertEqual(written_dataset.rows, [{"id": "1", "rubrics": [], "state": {"ok": True}}])
+
+    def test_write_ray_dataset_to_magnus_ignores_serialize_flag_without_infer_schema_on_create(self):
+        dataset = FakeRayDataset(
+            [{"id": "1", "rubrics": [], "state": {"ok": True}}],
+            pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("rubrics", pa.list_(pa.null())),
+                    pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                ]
+            ),
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=False,
+                infer_schema_on_create=False,
+                serialize_complex_fields=True,
+            )
+
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset._schema.field("rubrics").type, pa.list_(pa.null()))
+        self.assertEqual(written_dataset._schema.field("state").type, pa.struct([pa.field("ok", pa.bool_())]))
+        self.assertEqual(written_dataset.rows, [{"id": "1", "rubrics": [], "state": {"ok": True}}])
+
+    def test_write_ray_dataset_to_magnus_serializes_complex_fields_for_every_batch_once_column_is_complex(self):
+        dataset = SplitBatchRayDataset(
+            [{"id": "1", "state": None}, {"id": "2", "state": {"ok": True}}],
+            pa.schema(
+                [
+                    pa.field("id", pa.string()),
+                    pa.field("state", pa.struct([pa.field("ok", pa.bool_())])),
+                ]
+            ),
+            batch_size=1,
+        )
+        pyiceberg_ray = SimpleNamespace(write_magnus=MagicMock())
+        client = MagicMock()
+        client.exist_table.return_value = False
+        magnus_module = SimpleNamespace(MagnusClient=MagicMock(return_value=client))
+
+        with patch(
+            "data_juicer.core.io_utils.import_optional_dependency",
+            side_effect=[pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, pyiceberg_ray, magnus_module],
+        ):
+            write_ray_dataset_to_magnus(
+                dataset,
+                "catalog.db.table",
+                create_table_if_not_exists=True,
+                infer_schema_on_create=True,
+                serialize_complex_fields=True,
+            )
+
+        written_dataset = pyiceberg_ray.write_magnus.call_args.args[0]
+        self.assertEqual(written_dataset._schema.field("state").type, pa.string())
+        self.assertEqual(
+            written_dataset.rows,
+            [{"id": "1", "state": None}, {"id": "2", "state": '{"ok":true}'}],
+        )
+
     def test_copy_local_to_remote_directory_removes_stale_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             src_dir = os.path.join(tmp_dir, "src")

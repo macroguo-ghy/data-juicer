@@ -574,6 +574,7 @@ class ExportManager:
                 magnus_conf=self.export_cfg.get("magnus_conf", {}),
                 create_table_if_not_exists=self.export_cfg.get("create_table_if_not_exists", False),
                 infer_schema_on_create=self.export_cfg.get("infer_schema_on_create", False),
+                serialize_complex_fields=self.export_cfg.get("serialize_complex_fields", False),
                 magnus_failure_policy=self.export_cfg.get("magnus_failure_policy", "abort"),
                 operation=self.export_cfg.get("operation", "APPEND"),
                 validate_overwrite_partition_before_write=self.export_cfg.get(
@@ -592,6 +593,7 @@ class ExportManager:
                 magnus_conf=self.export_cfg.get("magnus_conf", {}),
                 create_table_if_not_exists=self.export_cfg.get("create_table_if_not_exists", False),
                 infer_schema_on_create=self.export_cfg.get("infer_schema_on_create", False),
+                serialize_complex_fields=self.export_cfg.get("serialize_complex_fields", False),
                 magnus_failure_policy=self.export_cfg.get("magnus_failure_policy", "abort"),
                 operation=self.export_cfg.get("operation", "APPEND"),
                 validate_overwrite_partition_before_write=self.export_cfg.get(
