@@ -17,6 +17,7 @@ from data_juicer.core.data.load_strategy import (
     DefaultHiveDataLoadStrategy,
     RayHiveDataLoadStrategy,
     DefaultTQSDataLoadStrategy,
+    RayTQSDataLoadStrategy,
     _is_countable_parquet_metadata_file,
     _build_hive_cast_block_udf,
     _build_parquet_read_plan_from_filesystem,
@@ -466,6 +467,121 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
             tqs_timeout=120,
             max_result_rows=10000,
         )
+
+    @patch("data_juicer.core.data.load_strategy.RayHDFSDataLoadStrategy")
+    @patch("data_juicer.core.data.load_strategy.copy_uri_to_local")
+    @patch("data_juicer.core.data.load_strategy.run_tqs_query")
+    def test_ray_tqs_materialized_remote_materializes_to_hdfs_and_delegates(
+        self,
+        mock_run_tqs_query,
+        mock_copy_uri_to_local,
+        mock_ray_hdfs_strategy,
+    ):
+        hdfs_dataset = MagicMock(name="hdfs_dataset")
+        hdfs_strategy = MagicMock(name="hdfs_strategy")
+        hdfs_strategy.load_data.return_value = hdfs_dataset
+        mock_ray_hdfs_strategy.return_value = hdfs_strategy
+        cfg = Namespace(work_dir=WORK_DIR, text_keys=["text"])
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "materialized_remote",
+            "query": "select id, text from db.table",
+            "output_uri": "hdfs://haruna/tmp/dj_tqs_result",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+            "cluster": "yarn-cluster",
+            "queue_name": "queue",
+            "priority": 7,
+            "memory": 12,
+            "filesystem": "webhdfs",
+            "webhdfs": {"host": "localhost", "port": 9870, "user": "root"},
+            "columns": ["id", "text"],
+            "concurrency": 4,
+            "override_num_blocks": 8,
+            "ray_remote_args": {"num_cpus": 1},
+            "limit": 10,
+            "skip_zero_row_group_files": False,
+            "on_bad_files": "skip",
+            "load_kwargs": {"shuffle": "files"},
+        }
+
+        dataset = RayTQSDataLoadStrategy(ds_config, cfg).load_data(num_proc=16)
+
+        self.assertEqual(dataset, hdfs_dataset)
+        mock_run_tqs_query.assert_called_once_with(
+            query="select id, text from db.table",
+            output_uri="hdfs://haruna/tmp/dj_tqs_result",
+            tqs_app_id="app-id",
+            tqs_app_key="app-key",
+            user_name="user",
+            cluster="yarn-cluster",
+            queue_name="queue",
+            priority=7,
+            memory=12,
+        )
+        mock_copy_uri_to_local.assert_not_called()
+        mock_ray_hdfs_strategy.assert_called_once()
+        hdfs_config = mock_ray_hdfs_strategy.call_args.args[0]
+        self.assertEqual(
+            hdfs_config,
+            {
+                "type": "remote",
+                "source": "hdfs",
+                "path": "hdfs://haruna/tmp/dj_tqs_result",
+                "format": "parquet",
+                "filesystem": "webhdfs",
+                "webhdfs": {"host": "localhost", "port": 9870, "user": "root"},
+                "columns": ["id", "text"],
+                "concurrency": 4,
+                "override_num_blocks": 8,
+                "ray_remote_args": {"num_cpus": 1},
+                "limit": 10,
+                "skip_zero_row_group_files": False,
+                "on_bad_files": "skip",
+                "load_kwargs": {"shuffle": "files"},
+            },
+        )
+        self.assertNotIn("memory", hdfs_config)
+        self.assertEqual(mock_ray_hdfs_strategy.call_args.args[1], cfg)
+        hdfs_strategy.load_data.assert_called_once_with(num_proc=16)
+
+    @patch("data_juicer.core.data.load_strategy.run_tqs_query")
+    def test_ray_tqs_materialized_remote_rejects_non_hdfs_output_uri(
+        self,
+        mock_run_tqs_query,
+    ):
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "materialized_remote",
+            "query": "select 1",
+            "output_uri": "s3://bucket/tmp/dj_tqs_result",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+        }
+
+        with self.assertRaisesRegex(ValueError, "HDFS URI"):
+            RayTQSDataLoadStrategy(ds_config, Namespace(work_dir=WORK_DIR)).load_data()
+
+        mock_run_tqs_query.assert_not_called()
+
+    def test_default_tqs_materialized_remote_rejects_ray_only_mode(self):
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "materialized_remote",
+            "query": "select 1",
+            "output_uri": "hdfs://haruna/tmp/dj_tqs_result",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+        }
+
+        with self.assertRaisesRegex(ValueError, "executor_type: ray"):
+            DefaultTQSDataLoadStrategy(ds_config, Namespace(work_dir=WORK_DIR)).load_data()
 
     def test_tqs_client_result_forwards_client_options(self):
         captured_queries = []
@@ -2193,6 +2309,199 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         )
         self.assertEqual(ray_dataset_kwargs["row_count_getter"](), 20)
 
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_reads_hdfs_directory_directly(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/json")
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/json",
+            "format": "jsonl",
+            "parallelism": 2,
+            "load_kwargs": {"concurrency": 4},
+            "override_num_blocks": 16,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_get_pyarrow_filesystem.assert_called_once_with("hdfs://haruna/user/demo/json")
+        mock_read_json_stream.assert_called_once_with(
+            "/user/demo/json",
+            filesystem=fake_filesystem,
+            parallelism=2,
+            concurrency=4,
+            override_num_blocks=16,
+            on_bad_files="error",
+        )
+        mock_ray_dataset.assert_called_once_with(
+            fake_dataset,
+            dataset_path="hdfs://haruna/user/demo/json",
+            cfg=self.cfg,
+        )
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_on_bad_files_skip_passes_skip_to_reader(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/json")
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/json",
+            "format": "json",
+            "on_bad_files": "skip",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_read_json_stream.assert_called_once_with(
+            "/user/demo/json",
+            filesystem=fake_filesystem,
+            on_bad_files="skip",
+        )
+        self.assertNotIn("row_count_getter", mock_ray_dataset.call_args.kwargs)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_applies_limit_after_read(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/json")
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/json",
+            "format": ".jsonl",
+            "limit": 1,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_reads_multiple_hdfs_paths_from_same_filesystem(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.side_effect = [
+            (fake_filesystem, "/user/demo/json/a"),
+            (fake_filesystem, "/user/demo/json/b"),
+        ]
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": [
+                "hdfs://haruna/user/demo/json/a",
+                "hdfs://haruna/user/demo/json/b",
+            ],
+            "format": "jsonl",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_read_json_stream.assert_called_once_with(
+            ["/user/demo/json/a", "/user/demo/json/b"],
+            filesystem=fake_filesystem,
+            on_bad_files="error",
+        )
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    @patch("pyarrow.fs.FSSpecHandler")
+    @patch("pyarrow.fs.PyFileSystem")
+    @patch("fsspec.filesystem")
+    def test_load_jsonl_can_use_webhdfs_filesystem(
+        self,
+        mock_fsspec_filesystem,
+        mock_pyarrow_filesystem,
+        mock_fsspec_handler,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_webhdfs_fs = MagicMock(name="webhdfs_fs")
+        fake_handler = MagicMock(name="webhdfs_handler")
+        fake_pyarrow_fs = MagicMock(name="pyarrow_fs")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_fsspec_filesystem.return_value = fake_webhdfs_fs
+        mock_fsspec_handler.return_value = fake_handler
+        mock_pyarrow_filesystem.return_value = fake_pyarrow_fs
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://namenode:9000/datasets/demo_json",
+            "format": "jsonl",
+            "filesystem": "webhdfs",
+            "webhdfs": {"host": "localhost", "port": 9870, "user": "bytedance"},
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_get_pyarrow_filesystem.assert_not_called()
+        mock_read_json_stream.assert_called_once_with(
+            "/datasets/demo_json",
+            filesystem=fake_pyarrow_fs,
+            on_bad_files="error",
+        )
+
     def test_load_rejects_multiple_hdfs_files_from_different_filesystems(self):
         ds_config = {
             "type": "remote",
@@ -2207,15 +2516,15 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(RuntimeError, "same filesystem"):
             RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
 
-    def test_load_rejects_non_parquet_format(self):
+    def test_load_rejects_unsupported_ray_hdfs_format(self):
         ds_config = {
             "type": "remote",
             "source": "hdfs",
-            "path": "hdfs://haruna/user/demo/data.jsonl",
-            "format": "jsonl",
+            "path": "hdfs://haruna/user/demo/data.csv",
+            "format": "csv",
         }
 
-        with self.assertRaisesRegex(ValueError, "supports parquet only"):
+        with self.assertRaisesRegex(ValueError, "Unsupported HDFS data format"):
             RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
 
     def test_load_rejects_unknown_filesystem(self):

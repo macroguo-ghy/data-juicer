@@ -15,6 +15,7 @@ def _register_extension_type_once(extension_type):
 
 
 pa.register_extension_type = _register_extension_type_once
+from data_juicer.ops.deduplicator.ray_basic_deduplicator import DedupSet
 from data_juicer.ops.deduplicator.ray_field_dedup_pipeline import RayFieldDedupPipeline
 
 pa.register_extension_type = _register_extension_type
@@ -23,12 +24,17 @@ pa.register_extension_type = _register_extension_type
 class _LocalBackend:
     def __init__(self):
         self.seen = set()
+        self.calls = []
 
     def is_unique(self, value):
         if value in self.seen:
             return False
         self.seen.add(value)
         return True
+
+    def is_unique_many(self, values, row_ids=None):
+        self.calls.append((list(values), list(row_ids) if row_ids is not None else None))
+        return [self.is_unique(value) for value in values]
 
 
 class _PreparedLocalBackend(_LocalBackend):
@@ -68,6 +74,13 @@ class _Scalar:
 
 
 class RayFieldDedupPipelineTest(unittest.TestCase):
+    def test_dedup_set_batch_api_reuses_row_decisions_for_retries(self):
+        dedup_set = DedupSet()
+
+        self.assertEqual(dedup_set.is_unique_many(["same", "same"], ["a", "b"]), [True, False])
+        self.assertEqual(dedup_set.is_unique_many(["same", "same"], ["a", "b"]), [True, False])
+        self.assertFalse(dedup_set.is_unique("same", "c"))
+
     def test_constructor_requires_field_key(self):
         with self.assertRaisesRegex(ValueError, "field_key"):
             RayFieldDedupPipeline(
@@ -136,6 +149,31 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         self.assertEqual(output.column("comment_id").to_pylist(), [1, 2, None])
         self.assertEqual(output.column("content").to_pylist(), ["a", "c", "d"])
         self.assertNotIn("__dj__stats__", output.column_names)
+
+    def test_process_batched_applies_condition_and_passes_nonmatching_rows_through(self):
+        op = RayFieldDedupPipeline(
+            field_key="md5",
+            condition="item_duration <= 60 and valid_video_count > 0",
+            id_key="id",
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+        backend = _LocalBackend()
+        op.backend = backend
+        table = pa.table(
+            {
+                "id": pa.array(["a", "b", "long", "invalid", "c"], type=pa.string()),
+                "md5": pa.array(["same", "same", "same", "same", "other"], type=pa.string()),
+                "item_duration": pa.array([10, 10, 90, 10, 10], type=pa.int64()),
+                "valid_video_count": pa.array([1, 1, 1, 0, 1], type=pa.int64()),
+            }
+        )
+
+        output = op.process_batched(table)
+
+        self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "c"])
+        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(backend.calls[0][1], ["a", "b", "c"])
 
     def test_calculate_hash_distinguishes_string_and_integer_values(self):
         op = RayFieldDedupPipeline(

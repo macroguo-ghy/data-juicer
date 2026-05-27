@@ -26,6 +26,31 @@ dataset:
       format: parquet
 ```
 
+### Remote HDFS Dataset On Ray
+
+When `executor_type: ray` is used, HDFS datasets can be read directly through
+Ray without first staging them to local disk. The Ray HDFS direct reader supports
+Parquet and JSON/JSONL. `path` can be a single HDFS file, a directory, a list of
+files, or a list of directories. Directory paths do not auto-detect JSON from the
+directory name, so set `format: json` or `format: jsonl` explicitly for JSON
+directories.
+
+```yaml
+executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://cluster/path/to/jsonl_dir
+      format: jsonl
+      filesystem: pyarrow
+      on_bad_files: skip
+```
+
+`on_bad_files: skip` skips bad files at file granularity. For JSON/JSONL this
+includes empty files, invalid JSON files, and files that become invalid midway
+through parsing. It does not provide per-line recovery.
+
 ### Remote Huggingface Dataset
 
 The `remote_huggingface.yaml` configuration file is used to specify huggingface datasets. *type* and *source* are fixed to 'remote' and 'huggingface' to locate huggingface loading logic. *path* is required to identify the huggingface dataset. *name*, *split* and *limit* are optional to specify the dataset name/split and limit the number of samples to load.

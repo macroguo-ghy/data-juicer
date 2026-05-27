@@ -15,13 +15,28 @@ MERSENNE_PRIME = (1 << 61) - 1
 class DedupSet:
     def __init__(self):
         self.hash_record = set()
+        self.row_decisions = {}
 
-    def is_unique(self, key):
-        if key not in self.hash_record:
-            self.hash_record.add(key)
-            return True
-        else:
-            return False
+    def is_unique(self, key, row_id=None):
+        return self.is_unique_many([key], [row_id] if row_id is not None else None)[0]
+
+    def is_unique_many(self, keys, row_ids=None):
+        row_ids = row_ids or [None] * len(keys)
+        decisions = []
+        for key, row_id in zip(keys, row_ids):
+            if row_id is not None:
+                row_decision_key = (key, str(row_id))
+                if row_decision_key in self.row_decisions:
+                    decisions.append(self.row_decisions[row_decision_key])
+                    continue
+
+            is_unique = key not in self.hash_record
+            if is_unique:
+                self.hash_record.add(key)
+            if row_id is not None:
+                self.row_decisions[(key, str(row_id))] = is_unique
+            decisions.append(is_unique)
+        return decisions
 
 
 def get_remote_dedup_set():
@@ -75,14 +90,55 @@ class ActorBackend(Backend):
             RemoteDedupSet = self._RemoteDedupSet or get_remote_dedup_set()
             self._dedup_sets = [RemoteDedupSet.remote() for _ in range(self.dedup_set_num)]
 
+    def _dedup_set_id(self, md5_value: str) -> int:
+        return int.from_bytes(md5_value.encode(), byteorder="little") % MERSENNE_PRIME % self.dedup_set_num
+
     def prepare_for_ray_tasks(self):
         """Create actor handles before this backend is serialized to Ray tasks."""
         self._ensure_actors()
 
-    def is_unique(self, md5_value: str):
+    def is_unique(self, md5_value: str, row_id=None):
+        return self.is_unique_many([md5_value], [row_id] if row_id is not None else None)[0]
+
+    def is_unique_many(self, md5_values: list[str], row_ids=None):
+        if not md5_values:
+            return []
         self._ensure_actors()
-        dedup_set_id = int.from_bytes(md5_value.encode(), byteorder="little") % MERSENNE_PRIME % self.dedup_set_num
-        return ray.get(self._dedup_sets[dedup_set_id].is_unique.remote(md5_value))
+        row_ids = row_ids or [None] * len(md5_values)
+        shard_items = {}
+        for index, (md5_value, row_id) in enumerate(zip(md5_values, row_ids)):
+            shard_items.setdefault(self._dedup_set_id(md5_value), []).append((index, md5_value, row_id))
+
+        grouped_calls = []
+        for dedup_set_id, items in shard_items.items():
+            actor = self._dedup_sets[dedup_set_id]
+            if hasattr(actor, "is_unique_many"):
+                grouped_calls.append(
+                    (
+                        items,
+                        actor.is_unique_many.remote(
+                            [item[1] for item in items],
+                            [item[2] for item in items],
+                        ),
+                    )
+                )
+            else:
+                grouped_calls.append(
+                    (
+                        items,
+                        [
+                            actor.is_unique.remote(md5_value)
+                            for _, md5_value, _ in items
+                        ],
+                    )
+                )
+
+        decisions = [False] * len(md5_values)
+        for items, future_or_futures in grouped_calls:
+            shard_decisions = ray.get(future_or_futures)
+            for (index, _, _), decision in zip(items, shard_decisions):
+                decisions[index] = decision
+        return decisions
 
 
 class RedisBackend(Backend):

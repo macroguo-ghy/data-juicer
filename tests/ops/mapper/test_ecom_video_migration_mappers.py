@@ -605,7 +605,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                         "DownloadFileMapper",
                         "BytesExactDedupMapper",
                         "FieldDropMapper",
-                        "RayFieldDeduplicator",
+                        "RayFieldDedupPipeline",
                         "DownloadFileMapper",
                         "BytesExactDedupMapper",
                     ],
@@ -617,7 +617,8 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 self.assertEqual(ops[4].bytes_key, "videos")
                 self.assertEqual(ops[5].fields, ["videos"])
                 self.assertEqual(ops[6].condition, "item_duration <= 60 and valid_video_count > 0")
-                self.assertEqual(ops[6].representative_policy, "min_id")
+                self.assertEqual(ops[6].field_key, "md5")
+                self.assertEqual(ops[6].id_key, "id")
                 self.assertTrue(ops[7].resume_download)
                 self.assertEqual(ops[7].download_field, "urls")
                 self.assertEqual(ops[7].save_field, "videos")
@@ -631,6 +632,10 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 second_filter = targets[1]["filter_condition"] if isinstance(targets[1], dict) else targets[1].filter_condition
                 self.assertIn("valid_video_count > 0", first_filter)
                 self.assertEqual(second_filter, "item_duration > 60")
+                first_columns = targets[0]["extra_args"]["columns"] if isinstance(targets[0], dict) else targets[0].extra_args["columns"]
+                second_columns = targets[1]["extra_args"]["columns"] if isinstance(targets[1], dict) else targets[1].extra_args["columns"]
+                self.assertNotIn("duplicate_id_list", first_columns)
+                self.assertNotIn("duplicate_id_list", second_columns)
 
 
 class RayFieldDeduplicatorEcomVideoTest(unittest.TestCase):
