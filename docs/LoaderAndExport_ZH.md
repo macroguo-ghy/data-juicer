@@ -233,19 +233,35 @@ dataset:
       override_num_blocks: 128
 ```
 
+读取 HDFS JSON/JSONL 目录时需要显式配置 `format`：
+
+```yaml
+executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://cluster/path/jsonl_dir
+      format: jsonl
+      filesystem: pyarrow
+      on_bad_files: skip
+      override_num_blocks: 128
+```
+
 参数：
 
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `path` | 是 | 无 | 必须以 `hdfs://` 开头。 |
-| `format` | 否 | `parquet` | Ray HDFS 直读当前只支持 Parquet。 |
+| `path` | 是 | 无 | 必须以 `hdfs://` 开头。支持单文件、目录、文件列表或目录列表；列表内所有 HDFS URI 必须指向同一个 filesystem。 |
+| `format` | 否 | `parquet` | 支持 `parquet`、`json`、`jsonl` 以及 `.parquet`、`.json`、`.jsonl` 等扩展名写法。读取目录时不会按目录名自动识别格式，省略时仍按 `parquet` 处理。 |
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
-| `limit` | 否 | 无 | Ray HDFS 直读 Parquet 后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
-| `on_bad_files` | 否 | `error` | 坏 parquet 文件处理策略。`error` 保持 fail-fast；`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。如果所有文件都被跳过，则返回空 Ray Dataset。该配置不透传给 Ray，也不覆盖 worker 读取 data page 时才暴露的深层损坏。 |
-| `skip_zero_row_group_files` | 否 | `true` | 是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
+| `limit` | 否 | 无 | Ray HDFS 直读后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
+| `on_bad_files` | 否 | `error` | 坏文件处理策略。`error` 保持 fail-fast。Parquet 下，`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。JSON/JSONL 下，`skip` 会在 worker 读取时跳过空文件、非法 JSON 文件，以及读到中途才发现非法内容的整文件；该模式是文件级跳过，不做单行容错。如果所有文件都被跳过，则返回空 Ray Dataset。 |
+| `skip_zero_row_group_files` | 否 | `true` | 仅对 Parquet 生效。是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |
-| `columns`、`parallelism`、`num_cpus`、`num_gpus`、`memory`、`ray_remote_args`、`tensor_column_schema`、`partition_filter`、`partitioning`、`shuffle`、`include_paths`、`file_extensions`、`concurrency`、`override_num_blocks` | 否 | 无 | 会转发给 Ray Parquet reader 的白名单参数。 |
+| `columns`、`parallelism`、`num_cpus`、`num_gpus`、`memory`、`ray_remote_args`、`tensor_column_schema`、`partition_filter`、`partitioning`、`shuffle`、`include_paths`、`file_extensions`、`concurrency`、`override_num_blocks` | 否 | 无 | Parquet reader 白名单参数。 |
+| `parallelism`、`ray_remote_args`、`arrow_open_stream_args`、`meta_provider`、`partition_filter`、`partitioning`、`include_paths`、`ignore_missing_paths`、`shuffle`、`file_extensions`、`concurrency`、`override_num_blocks`、`read_options`、`parse_options` | 否 | 无 | JSON/JSONL reader 白名单参数。`on_bad_files: skip` 为避免部分坏文件输出，单个 JSON 文件会在 worker 内完整解析成功后再产出，超大单文件会增加内存压力。 |
 
 ## TQS Loader
 
@@ -258,8 +274,13 @@ dataset:
       tqs_app_id: <app_id>
       tqs_app_key: <app_key>
       user_name: <user_name>
-      read_mode: materialized
+      read_mode: materialized_remote
       output_uri: hdfs://cluster/tmp/dj_tqs_result
+      filesystem: webhdfs
+      webhdfs:
+        host: namenode-host
+        port: 9870
+        user: <hdfs_user>
 ```
 
 参数：
@@ -270,18 +291,20 @@ dataset:
 | `tqs_app_id` | 是 | 无 | TQS app id。 |
 | `tqs_app_key` | 是 | 无 | TQS app key。 |
 | `user_name` | 是 | 无 | TQS 执行用户。 |
-| `read_mode` | 否 | `materialized` | `materialized`：SQL 写到 `output_uri` 后再加载；`client_result`：直接拉取查询结果。 |
-| `output_uri` / `tqs_output_uri` | materialized 必填 | 无 | 查询结果物化位置。 |
-| `cluster` | 否 | `""` | materialized 模式下的 Yarn cluster。 |
-| `queue_name` | 否 | `""` | materialized 模式下的队列。 |
-| `priority` | 否 | `5` | materialized 模式下的任务优先级。 |
-| `memory` | 否 | `0` | materialized 模式下的 executor memory，单位 GB。 |
+| `read_mode` | 否 | `materialized` | `materialized`：SQL 写到 `output_uri` 后复制到本地 staging 再加载；`materialized_remote`：Ray-only，SQL 写到 HDFS Parquet 后直接委托 Ray HDFS loader 分布式读取；`client_result`：直接拉取查询结果。 |
+| `output_uri` / `tqs_output_uri` | materialized/materialized_remote 必填 | 无 | 查询结果物化位置；`materialized_remote` 必须是 `hdfs://...`。 |
+| `cluster` | 否 | `""` | materialized/materialized_remote 模式下的 Yarn cluster。 |
+| `queue_name` | 否 | `""` | materialized/materialized_remote 模式下的队列。 |
+| `priority` | 否 | `5` | materialized/materialized_remote 模式下的任务优先级。 |
+| `memory` | 否 | `0` | materialized/materialized_remote 模式下的 TQS/Spark executor memory，单位 GB；不会转发给 Ray Parquet reader。 |
 | `max_result_rows` | 否 | `10000` | client_result 模式最多拉取行数。 |
 | `tqs_cluster` | 否 | `cn` | client_result 模式 TQS cluster。 |
 | `tqs_enable_domain` | 否 | 无 | client_result 模式 domain 开关。 |
 | `tqs_timeout` | 否 | `120` | client_result 模式超时秒数。 |
 
-默认 executor 和 Ray executor 都支持 TQS。Ray 的 `client_result` 会用 `ray.data.from_items` 构造 Ray Dataset；`materialized` 会先落地再走 staged loader。
+默认 executor 支持 `materialized` 和 `client_result`；`materialized_remote` 只支持 `executor_type: ray`。Ray 的 `client_result` 会用 `ray.data.from_items` 构造 Ray Dataset；`materialized` 会先落地再走 staged loader；`materialized_remote` 不调用本地 staging/copy，TQS 输出按 Parquet 物化到 HDFS 后由 Ray HDFS loader 读取。
+
+`materialized_remote` 会把以下 HDFS 读取参数转发给 Ray HDFS loader：`filesystem`、`webhdfs`、`columns`、`concurrency`、`override_num_blocks`、`ray_remote_args`、`limit`、`skip_zero_row_group_files`、`on_bad_files`、`load_kwargs`。如需重跑或恢复，请直接把已物化路径配置为 `source: hdfs` / `path: hdfs://...`；`ray_data_checkpoint.enabled: true` 不支持 `source: tqs`。
 
 ## Hive Loader
 

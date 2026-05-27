@@ -28,6 +28,24 @@ dataset:
       format: parquet
 ```
 
+### Ray 模式下的远程 HDFS 数据集
+
+使用 `executor_type: ray` 时，HDFS 数据集可以通过 Ray 直读，不必先复制到本地暂存目录。Ray HDFS 直读支持 Parquet 和 JSON/JSONL。`path` 可以是单个 HDFS 文件、目录、文件列表或目录列表。目录路径不会根据目录名自动识别 JSON，因此读取 JSON 目录时需要显式配置 `format: json` 或 `format: jsonl`。
+
+```yaml
+executor_type: ray
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: hdfs://cluster/path/to/jsonl_dir
+      format: jsonl
+      filesystem: pyarrow
+      on_bad_files: skip
+```
+
+`on_bad_files: skip` 是文件级跳过。JSON/JSONL 下会跳过空文件、非法 JSON 文件，以及读取到中途才发现非法内容的整文件；不提供单行级恢复。
+
 ### Remote Huggingface 数据集
 
 `remote_huggingface.yaml` 配置文件用于指定 huggingface 数据集。*type* 和 *source* 固定为 'remote' 和 'huggingface'，以定位 huggingface 加载逻辑。*path* 是必需的，用于标识 huggingface 数据集。*name*、*split* 和 *limit* 是可选的，用于指定数据集名称/拆分并限制要加载的样本数量。

@@ -12,11 +12,11 @@
       }
     ]
   },
-  "description": "Bosun-style Grafana dashboard for all Data-Juicer bytedance.metrics call sites: VLM, VLM adaptive rate limit, and RPC/OCR metrics.",
+  "description": "Bosun-style Grafana dashboard for all Data-Juicer bytedance.metrics call sites: VLM, VLM adaptive rate limit, RPC/OCR/schema, and ecom media RPC metrics.",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": null,
+  "id": 165386512,
   "links": [
     {
       "asDropdown": false,
@@ -52,7 +52,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Counter metric emitted by emit_vlm_qps. Tags: job_id, ray_address, op_name, target, method, status.",
+      "description": "Counter metric emitted by emit_vlm_qps. Tags: job_id, op_name, target, method, status.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -95,26 +95,25 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "$tag_status | $tag_op_name | $tag_target$tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
-            "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "*"
+            "op_name": "*",
+            "status": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -137,6 +136,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:328",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -145,6 +145,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:329",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -207,26 +208,26 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "$tag_job_id | $tag_op_name | $tag_target$tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "error"
+            "op_name": "*",
+            "status": "error",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -249,6 +250,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:399",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -257,6 +259,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:400",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -319,27 +322,27 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "rl.$tag_event | $tag_model | $tag_target | $tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.rate_limit.event",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
+            "event": "*",
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
             "model": "*",
-            "event": "*"
+            "op_name": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -432,27 +435,27 @@
       "targets": [
         {
           "aggregator": "avg",
+          "alias": "$tag_metric | $tag_model | $tag_target | $tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": false,
           "metric": "ad.ai.data_forge.vlm.rate_limit.value",
           "refId": "A",
           "shouldComputeRate": false,
           "tags": {
-            "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
-            "method": "*",
-            "model": "*",
             "event": "*",
-            "metric": "*"
+            "job_id": "*",
+            "method": "*",
+            "metric": "*",
+            "model": "*",
+            "op_name": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": false
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -507,7 +510,7 @@
       },
       "id": 6,
       "panels": [],
-      "title": "RPC / OCR / Schema RPC",
+      "title": "RPC / OCR / Schema / Ecom RPC",
       "type": "row"
     },
     {
@@ -516,7 +519,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Counter metric emitted by emit_rpc_qps. Current call sites include image_ocr_mapper, aweme_pack_url_mapper, and item_id_image_url_mapper.",
+      "description": "Counter metric emitted by emit_rpc_qps. Current call sites include image_ocr_mapper, aweme_pack_url_mapper, item_id_image_url_mapper, and video_url_rpc_mapper.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -559,26 +562,25 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "rpc.$tag_status | $tag_op_name | $tag_target#$tag_method()",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
-            "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "*"
+            "op_name": "*",
+            "status": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -601,6 +603,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:475",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -609,6 +612,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:476",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -671,26 +675,26 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "$tag_job_id | $tag_op_name | $tag_target#$tag_method()",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "error"
+            "op_name": "*",
+            "status": "error",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -713,6 +717,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:546",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -721,6 +726,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:547",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -783,26 +789,26 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "ocr.$tag_status | $tag_target | $tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "image_ocr_mapper",
-            "target": "*",
             "method": "*",
-            "status": "*"
+            "op_name": "image_ocr_mapper",
+            "status": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -825,6 +831,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:617",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -833,6 +840,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:618",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -895,26 +903,26 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "schema.$tag_status | $tag_op_name | $tag_method",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "item_id_image_url",
             "method": "*",
-            "status": "*"
+            "op_name": "*",
+            "status": "*",
+            "target": "item_id_image_url"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -959,13 +967,237 @@
       }
     },
     {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Focused view for aweme_pack_url_mapper PackImage RPC traffic.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "hiddenSeries": false,
+      "id": 13,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "pack.$tag_status | $tag_target#$tag_method()",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "method": "PackImage",
+            "op_name": "aweme_pack_url_mapper",
+            "status": "*",
+            "target": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Aweme Pack RPC QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Focused view for video_url_rpc_mapper SmartPlayer MGetPlayInfosV2 RPC traffic.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "hiddenSeries": false,
+      "id": 14,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "video.$tag_status | $tag_target#$tag_method()",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
+          "refId": "A",
+          "shouldComputeRate": true,
+          "tags": {
+            "job_id": "*",
+            "method": "MGetPlayInfosV2",
+            "op_name": "video_url_rpc_mapper",
+            "status": "*",
+            "target": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Video URL RPC QPS",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
       "collapsed": false,
       "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 42
       },
       "id": 11,
       "panels": [],
@@ -978,7 +1210,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "This repository currently emits these rate-counter metric families plus the VLM rate-limit store metric. Use tags to filter by job_id, ray_address, op_name, target, method, status, model, and event.",
+      "description": "This repository currently emits these rate-counter metric families plus the VLM rate-limit store metric. Use tags to filter by job_id, op_name, target, method, status, model, and event.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -989,7 +1221,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 43
       },
       "hiddenSeries": false,
       "id": 12,
@@ -1021,73 +1253,73 @@
       "targets": [
         {
           "aggregator": "sum",
+          "alias": "vlm.$tag_status",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "*"
+            "op_name": "*",
+            "status": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         },
         {
           "aggregator": "sum",
+          "alias": "rpc.$tag_status",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "B",
           "shouldComputeRate": true,
           "tags": {
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
-            "status": "*"
+            "op_name": "*",
+            "status": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         },
         {
           "aggregator": "sum",
+          "alias": "rl.$tag_event",
           "currentTagKey": "",
           "currentTagValue": "",
           "downsampleAggregator": "avg",
           "downsampleAggregatorDisabled": false,
           "downsampleFillPolicy": "none",
           "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.rate_limit.event",
+          "rateDownsampleType": "before_downsample",
           "refId": "C",
           "shouldComputeRate": true,
           "tags": {
+            "event": "*",
             "job_id": "*",
-            "ray_address": "*",
-            "op_name": "*",
-            "target": "*",
             "method": "*",
             "model": "*",
-            "event": "*"
+            "op_name": "*",
+            "target": "*"
           },
-          "tenant": "default",
-          "isCounter": true,
-          "rateDownsampleType": "before_downsample"
+          "tenant": "default"
         }
       ],
       "thresholds": [],
@@ -1135,7 +1367,7 @@
   "refresh": "1m",
   "schemaVersion": 27,
   "style": "dark",
-  "sync_vregion": {},
+  "sync_vregion": true,
   "tags": [
     "data-juicer",
     "bytedance.metrics",
@@ -1146,12 +1378,12 @@
     "list": []
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-7d",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Data-Juicer Metrics",
-  "uid": "data-juicer-metrics",
-  "version": 1
+  "uid": "LUEhrf1vk",
+  "version": 8
 }

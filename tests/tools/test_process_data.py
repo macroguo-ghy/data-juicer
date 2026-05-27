@@ -1,5 +1,6 @@
 import os
 import os.path as osp
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -118,6 +119,14 @@ class ProcessDataTest(DataJuicerTestCaseBase):
 
 
 class ProcessDataBase64Test(unittest.TestCase):
+    def test_packaged_process_data_base64_entrypoint_is_importable(self):
+        import importlib
+
+        module = importlib.import_module("data_juicer.tools.process_data_base64")
+
+        self.assertTrue(callable(module.main))
+        self.assertEqual(Path(module.__file__).parts[-3:-1], ("data_juicer", "tools"))
+
     def test_decode_base64_config_accepts_whitespace_and_missing_padding(self):
         from tools.process_data_base64 import decode_base64_config
 
@@ -205,6 +214,32 @@ class ProcessDataBase64Test(unittest.TestCase):
         with patch("sys.argv", ["process_data_base64.py", "--config_base64", encoded_config, "--config", "x.yaml"]):
             with self.assertRaises(SystemExit):
                 process_data_base64.main()
+
+    def test_main_rejects_config_equals_argument_when_config_base64_is_used(self):
+        import base64
+
+        from tools import process_data_base64
+
+        encoded_config = base64.b64encode(b"project_name: test\n").decode()
+        with patch.object(process_data_base64, "get_process_data_run") as mock_get_run:
+            with patch("sys.argv", ["process_data_base64.py", "--config_base64", encoded_config, "--config=x.yaml"]):
+                with self.assertRaises(SystemExit):
+                    process_data_base64.main()
+
+        mock_get_run.assert_not_called()
+
+    def test_packaged_main_rejects_config_equals_argument_when_config_base64_is_used(self):
+        import base64
+
+        from data_juicer.tools import process_data_base64
+
+        encoded_config = base64.b64encode(b"project_name: test\n").decode()
+        with patch.object(process_data_base64, "get_process_data_run") as mock_get_run:
+            with patch("sys.argv", ["dj-process-base64", "--config_base64", encoded_config, "--config=x.yaml"]):
+                with self.assertRaises(SystemExit):
+                    process_data_base64.main()
+
+        mock_get_run.assert_not_called()
 
 
 class ProcessDataRayTest(DataJuicerTestCaseBase):

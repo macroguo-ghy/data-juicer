@@ -361,6 +361,7 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
                 # writing output should explicitly run an action on the returned dataset.
                 if not skip_export and not dry_run_plan:
                     logger.info("Exporting dataset to disk...")
+                    columns = dataset.data.columns()
                     self.exporter.export(dataset.data, columns=columns)
                     run_after_export_hook(getattr(self.cfg, "export", None))
                 tend = time.time()

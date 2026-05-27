@@ -34,7 +34,6 @@ process:
         videos: {value: [], type: "list<binary>"}
         md5: {value: null, type: "string"}
         valid_video_count: {value: 0, type: "int64"}
-        duplicate_id_list: {value: [], type: "list<string>"}
   - video_url_rpc_mapper:
       condition: "item_duration <= 60"
       vid_key: "vid"
@@ -61,13 +60,10 @@ process:
   - field_drop_mapper:
       fields:
         - "videos"
-  - ray_field_deduplicator:
+  - ray_field_dedup_pipeline:
       condition: "item_duration <= 60 and valid_video_count > 0"
       field_key: "md5"
       id_key: "id"
-      duplicate_ids_key: "duplicate_id_list"
-      duplicate_ids_mode: "removed"
-      representative_policy: "min_id"
   - download_file_mapper:
       download_field: "urls"
       save_field: "videos"
@@ -97,7 +93,6 @@ export:
           - "urls"
           - "videos"
           - "md5"
-          - "duplicate_id_list"
           - "extra"
           - "source"
           - "texts"
@@ -117,7 +112,6 @@ export:
           - "urls"
           - "videos"
           - "md5"
-          - "duplicate_id_list"
           - "extra"
           - "source"
           - "texts"

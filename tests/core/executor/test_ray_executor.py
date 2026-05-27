@@ -334,6 +334,64 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         executor.exporter.export.assert_called_once_with(dataset.data, columns=['text'])
         mock_hook.assert_called_once_with(executor.cfg.export)
 
+    def test_run_exports_columns_from_processed_ray_dataset(self):
+        class FakeData:
+            def __init__(self, columns):
+                self._columns = columns
+
+            def columns(self):
+                return self._columns
+
+        class FakeDataset:
+            def __init__(self):
+                self.data = FakeData(['text'])
+
+            def process(self, ops, **kwargs):
+                self.data = FakeData(['text', 'generated'])
+                return self
+
+        dataset = FakeDataset()
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'add_generated_field': {}}],
+            op_fusion=False,
+            export_path=os.path.join(self.tmp_dir, 'unused.jsonl'),
+            export={
+                "targets": [
+                    {
+                        "target": "local",
+                        "type": "jsonl",
+                        "path": os.path.join(self.tmp_dir, "fanout"),
+                    }
+                ],
+            },
+            dataset=None,
+            dataset_path=None,
+            ray_collect_real_metrics=False,
+            ray_materialize_after_each_op=False,
+        )
+        executor.datasetbuilder = SimpleNamespace(load_dataset=MagicMock(return_value=dataset))
+        executor.exporter = SimpleNamespace(export=MagicMock())
+        executor.work_dir = self.tmp_dir
+        executor.executor_type = 'ray'
+        executor.tmp_dir = os.path.join(self.tmp_dir, '.tmp')
+        executor.op_env_manager = None
+        executor.tracer = None
+        executor.pipeline_dag = SimpleNamespace(nodes=[object()], edges=[], parallel_groups=[])
+        executor.log_job_start = MagicMock()
+        executor._initialize_dag_execution = MagicMock()
+        executor._pre_execute_operations_with_dag_monitoring = MagicMock()
+        executor._post_execute_operations_with_dag_monitoring = MagicMock()
+        executor.log_job_complete = MagicMock()
+
+        with (
+            patch('data_juicer.core.executor.ray_executor.load_ops', return_value=[]),
+            patch('data_juicer.core.executor.ray_executor.run_after_export_hook'),
+        ):
+            executor.run()
+
+        executor.exporter.export.assert_called_once_with(dataset.data, columns=['text', 'generated'])
+
     def test_run_does_not_call_after_export_hook_when_export_is_skipped(self):
         class FakeData:
             def columns(self):

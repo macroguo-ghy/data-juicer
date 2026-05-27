@@ -1,4 +1,4 @@
 interface:
   display_name: "Ray Helper"
-  short_description: "Tune Ray jobs; debug workflow reserved"
-  default_prompt: "Use $ray-helper to tune this Merlin Ray job with RayUI, Grafana metrics, and Data-Juicer pipeline parameters."
+  short_description: "Diagnose Ray jobs and tune Data-Juicer Ray concurrency"
+  default_prompt: "Use $ray-helper to diagnose this Ray job or tune this Data-Juicer YAML's concurrency with RayUI, Grafana metrics, and online Ray E2E validation."

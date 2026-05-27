@@ -1,15 +1,10 @@
 import argparse
 import base64
 import os
-import sys
 import tempfile
-from pathlib import Path
 
 from loguru import logger
 
-_REPO_ROOT = str(Path(__file__).resolve().parents[1])
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 
 def decode_base64_config(encoded_config: str) -> str:
     normalized = "".join(encoded_config.split())
@@ -19,10 +14,8 @@ def decode_base64_config(encoded_config: str) -> str:
 
 
 def get_process_data_run():
-    try:
-        from tools.process_data import run
-    except ImportError:
-        from data_juicer.tools.process_data import run
+    from data_juicer.tools.process_data import run
+
     return run
 
 

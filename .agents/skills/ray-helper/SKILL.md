@@ -1,17 +1,26 @@
 ---
 name: ray-helper
 description: >-
-  Help with ByteDance Merlin/Arnold Ray jobs in two modes: tune and debug. The tune workflow is implemented: start from a Merlin task instance URL, handle SSO/manual login through agent-browser when needed, extract RayUI and Grafana metrics links for head and worker nodes, analyze Ray Data Overview/jobs/datasets, query business-first Grafana dashboard/panel data with bytedcli, and correlate findings with a user-specified Data-Juicer operator pipeline/config. The debug workflow is reserved for future implementation. Use when the user provides a Merlin job/instance/trial URL, Ray History Server URL, Ray Dashboard/RayUI URL, Grafana metrics URL, or asks for Ray tuning, Ray task debugging, actor pressure or custom actor-count anomalies, resource sizing, Ray Data tuning, Data-Juicer-on-Ray bottleneck analysis, CPU/GPU/memory/IO/disk diagnosis, or pipeline parameter/concurrency recommendations.
+  Help with ByteDance Merlin/Arnold Ray jobs. Use when the user provides a Merlin job/instance/trial URL, Ray History Server URL, Ray Dashboard/RayUI URL, Grafana metrics URL, or asks for Ray tuning, Ray task debugging, actor pressure or custom actor-count anomalies, resource sizing, Ray Data tuning, Data-Juicer-on-Ray bottleneck analysis, CPU/GPU/memory/IO/disk diagnosis, or pipeline parameter/concurrency recommendations. The live diagnosis workflow starts from an existing Ray/Merlin job and correlates RayUI, Grafana, logs, and Data-Juicer config evidence. The concurrency-tuning workflow starts from a Data-Juicer YAML plus available cluster resources, validates the YAML, inspects input data size/files, builds a small demo YAML, submits online Ray E2E runs, observes Ray Data/Grafana metrics, and then proposes or applies only concurrency-related YAML changes.
 ---
 
 # Ray Helper
 
 ## Modes
 
-- `tune`: implemented. Use it to analyze resource usage, Ray Data stages, Grafana/business metrics, and Data-Juicer pipeline parameters, then propose tuning experiments.
-- `debug`: not implemented yet. If the user explicitly asks for debug mode, say that this skill currently only has the tune workflow and proceed with general investigation outside the skill if appropriate.
+- `diagnose`: implemented. Use it to analyze an existing Ray/Merlin job's resource usage, Ray Data stages, Grafana/business metrics, and Data-Juicer pipeline parameters, then propose tuning experiments.
+- `concurrency-tune`: implemented. Use it when the user provides a Data-Juicer YAML and available resources, and wants a closed-loop concurrency tuning run. Read [references/concurrency-tuning.md](references/concurrency-tuning.md) before taking action.
+- `debug`: not implemented yet. If the user explicitly asks for debug mode, say that this skill currently only has the diagnose and concurrency-tune workflows and proceed with general investigation outside the skill if appropriate.
 
-## Tune Workflow
+## Concurrency Tuning Entry Point
+
+When the user gives a YAML plus resource budget such as `100 workers, 8c16g each`, switch to the `concurrency-tune` workflow. First validate the YAML for logic/config errors. If the YAML is wrong, stop and report those errors instead of tuning. If it is valid, only change concurrency-related parameters in the production YAML: source read concurrency/blocking knobs, operator `num_proc`/`num_cpus`/`batch_size`, per-task IO concurrency such as `max_concurrent`, and export/write concurrency. Do not change business logic, filters, schemas, selected fields, table names, operator order, or output semantics unless the user explicitly asks.
+
+Use repo/service tools to inspect input dataset size, file count, schema, and sampleability before generating a demo YAML. For HDFS use `ExecuteHdfsCommand` or equivalent `hdfs dfs` checks; for Lance use `GetLanceTableSchema` and table metadata/read probes when available; for Hive/Magnus use the corresponding catalog/schema/location tools available in the environment. Build a small demo YAML that reads only a few representative files or a small bounded input and uses a small worker budget, then submit and monitor it through the `online-ray-e2e` skill. Iterate demo runs until there is no obvious bottleneck or the remaining limit is external, then scale the concurrency recommendations to the real resource budget and submit/observe the production run.
+
+Detailed procedure, metrics, and report shape: [references/concurrency-tuning.md](references/concurrency-tuning.md).
+
+## Live Diagnose Workflow
 
 Use a named browser session. Keep all authentication state and page interactions in that session.
 
@@ -671,4 +680,4 @@ Mention any boundary clearly: unauthenticated page, missing request body, Histor
 ## Future Extension
 
 TODO: Add debug workflow for failed Ray jobs, stack traces, worker/node failures, logs, and exception root-cause analysis.
-TODO: Add follow-up workflow for automated A/B tuning runs, config diff generation, and regression comparison across multiple Merlin trials.
+TODO: Add a fully automated A/B tuning runner for batch config generation and regression comparison across multiple Merlin trials.

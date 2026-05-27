@@ -1,0 +1,48 @@
+import time
+from contextlib import contextmanager
+
+from loguru import logger
+
+from data_juicer.config import init_configs
+from data_juicer.core import DefaultExecutor
+
+
+@contextmanager
+def timing_context(description):
+    start_time = time.time()
+    yield
+    elapsed_time = time.time() - start_time
+    logger.info(f"{description} took {elapsed_time:.2f} seconds")
+
+
+def run(args=None):
+    with timing_context("Loading configuration"):
+        cfg = init_configs(args=args)
+
+    with timing_context("Initializing executor"):
+        if cfg.executor_type == "default":
+            executor = DefaultExecutor(cfg)
+        elif cfg.executor_type == "ray":
+            from data_juicer.core.executor.ray_executor import RayExecutor
+
+            executor = RayExecutor(cfg)
+        elif cfg.executor_type == "ray_partitioned":
+            from data_juicer.core.executor.ray_executor_partitioned import (
+                PartitionedRayExecutor,
+            )
+
+            executor = PartitionedRayExecutor(cfg)
+        else:
+            raise ValueError(f"Unsupported executor type: {cfg.executor_type}")
+
+    with timing_context("Running executor"):
+        executor.run()
+
+
+@logger.catch(reraise=True)
+def main():
+    run()
+
+
+if __name__ == "__main__":
+    main()

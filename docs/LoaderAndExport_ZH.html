@@ -295,8 +295,13 @@ dataset:
       tqs_app_id: &lt;app_id&gt;
       tqs_app_key: &lt;app_key&gt;
       user_name: &lt;user_name&gt;
-      read_mode: materialized
-      output_uri: hdfs://cluster/tmp/dj_tqs_result</code></pre>
+      read_mode: materialized_remote
+      output_uri: hdfs://cluster/tmp/dj_tqs_result
+      filesystem: webhdfs
+      webhdfs:
+        host: namenode-host
+        port: 9870
+        user: &lt;hdfs_user&gt;</code></pre>
 <p>参数：</p>
 <div class="table-wrap"><table>
 <thead><tr><th>字段</th><th>必填</th><th>默认值</th><th>说明</th></tr></thead>
@@ -305,18 +310,19 @@ dataset:
 <tr><td><code>tqs_app_id</code></td><td>是</td><td>无</td><td>TQS app id。</td></tr>
 <tr><td><code>tqs_app_key</code></td><td>是</td><td>无</td><td>TQS app key。</td></tr>
 <tr><td><code>user_name</code></td><td>是</td><td>无</td><td>TQS 执行用户。</td></tr>
-<tr><td><code>read_mode</code></td><td>否</td><td><code>materialized</code></td><td><code>materialized</code>：SQL 写到 <code>output_uri</code> 后再加载；<code>client_result</code>：直接拉取查询结果。</td></tr>
-<tr><td><code>output_uri</code> / <code>tqs_output_uri</code></td><td>materialized 必填</td><td>无</td><td>查询结果物化位置。</td></tr>
-<tr><td><code>cluster</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized 模式下的 Yarn cluster。</td></tr>
-<tr><td><code>queue_name</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized 模式下的队列。</td></tr>
-<tr><td><code>priority</code></td><td>否</td><td><code>5</code></td><td>materialized 模式下的任务优先级。</td></tr>
-<tr><td><code>memory</code></td><td>否</td><td><code>0</code></td><td>materialized 模式下的 executor memory，单位 GB。</td></tr>
+<tr><td><code>read_mode</code></td><td>否</td><td><code>materialized</code></td><td><code>materialized</code>：SQL 写到 <code>output_uri</code> 后复制到本地 staging 再加载；<code>materialized_remote</code>：Ray-only，SQL 写到 HDFS Parquet 后直接委托 Ray HDFS loader 分布式读取；<code>client_result</code>：直接拉取查询结果。</td></tr>
+<tr><td><code>output_uri</code> / <code>tqs_output_uri</code></td><td>materialized/materialized_remote 必填</td><td>无</td><td>查询结果物化位置；<code>materialized_remote</code> 必须是 <code>hdfs://...</code>。</td></tr>
+<tr><td><code>cluster</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized/materialized_remote 模式下的 Yarn cluster。</td></tr>
+<tr><td><code>queue_name</code></td><td>否</td><td><code>&quot;&quot;</code></td><td>materialized/materialized_remote 模式下的队列。</td></tr>
+<tr><td><code>priority</code></td><td>否</td><td><code>5</code></td><td>materialized/materialized_remote 模式下的任务优先级。</td></tr>
+<tr><td><code>memory</code></td><td>否</td><td><code>0</code></td><td>materialized/materialized_remote 模式下的 TQS/Spark executor memory，单位 GB；不会转发给 Ray Parquet reader。</td></tr>
 <tr><td><code>max_result_rows</code></td><td>否</td><td><code>10000</code></td><td>client_result 模式最多拉取行数。</td></tr>
 <tr><td><code>tqs_cluster</code></td><td>否</td><td><code>cn</code></td><td>client_result 模式 TQS cluster。</td></tr>
 <tr><td><code>tqs_enable_domain</code></td><td>否</td><td>无</td><td>client_result 模式 domain 开关。</td></tr>
 <tr><td><code>tqs_timeout</code></td><td>否</td><td><code>120</code></td><td>client_result 模式超时秒数。</td></tr>
 </tbody></table></div>
-<p>默认 executor 和 Ray executor 都支持 TQS。Ray 的 <code>client_result</code> 会用 <code>ray.data.from_items</code> 构造 Ray Dataset；<code>materialized</code> 会先落地再走 staged loader。</p>
+<p>默认 executor 支持 <code>materialized</code> 和 <code>client_result</code>；<code>materialized_remote</code> 只支持 <code>executor_type: ray</code>。Ray 的 <code>client_result</code> 会用 <code>ray.data.from_items</code> 构造 Ray Dataset；<code>materialized</code> 会先落地再走 staged loader；<code>materialized_remote</code> 不调用本地 staging/copy，TQS 输出按 Parquet 物化到 HDFS 后由 Ray HDFS loader 读取。</p>
+<p><code>materialized_remote</code> 会把以下 HDFS 读取参数转发给 Ray HDFS loader：<code>filesystem</code>、<code>webhdfs</code>、<code>columns</code>、<code>concurrency</code>、<code>override_num_blocks</code>、<code>ray_remote_args</code>、<code>limit</code>、<code>skip_zero_row_group_files</code>、<code>on_bad_files</code>、<code>load_kwargs</code>。如需重跑或恢复，请直接把已物化路径配置为 <code>source: hdfs</code> / <code>path: hdfs://...</code>；<code>ray_data_checkpoint.enabled: true</code> 不支持 <code>source: tqs</code>。</p>
 <h2 id="hive-loader">Hive Loader</h2>
 <p>Hive loader 只支持 Ray 模式，并依赖内部 byted-ray。</p>
 <pre><code class="language-yaml">executor_type: ray
