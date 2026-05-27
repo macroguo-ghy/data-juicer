@@ -138,7 +138,8 @@ class OperatorExecutionCallbackClient:
     def report_record_success(
         self,
         *,
-        record_key: str,
+        record_key: str | None,
+        fallback_record_key: str | None = None,
         input_data: Any | None = None,
         output_data: Any | None = None,
         properties: dict[str, Any] | None = None,
@@ -151,6 +152,7 @@ class OperatorExecutionCallbackClient:
             finished_at = current_finished_time_millis(started_at)
         return self.report_record(
             record_key=record_key,
+            fallback_record_key=fallback_record_key,
             status=OperatorExecutionStatus.SUCCESS,
             input_data=input_data,
             output_data=output_data,
@@ -162,7 +164,8 @@ class OperatorExecutionCallbackClient:
     def report_record_failure(
         self,
         *,
-        record_key: str,
+        record_key: str | None,
+        fallback_record_key: str | None = None,
         input_data: Any | None = None,
         output_data: Any | None = None,
         error_message: str | None = None,
@@ -176,6 +179,7 @@ class OperatorExecutionCallbackClient:
             finished_at = current_finished_time_millis(started_at)
         return self.report_record(
             record_key=record_key,
+            fallback_record_key=fallback_record_key,
             status=OperatorExecutionStatus.FAILED,
             input_data=input_data,
             output_data=output_data,
@@ -188,7 +192,8 @@ class OperatorExecutionCallbackClient:
     def report_record(
         self,
         *,
-        record_key: str,
+        record_key: str | None,
+        fallback_record_key: str | None = None,
         status: OperatorExecutionStatus | int,
         input_data: Any | None = None,
         output_data: Any | None = None,
@@ -206,7 +211,7 @@ class OperatorExecutionCallbackClient:
             return {}
         payload = {
             "operatorExecutionId": self._get_operator_execution_id(),
-            "recordKey": self._get_required_value(record_key, "record_key"),
+            "recordKey": self._resolve_record_key(record_key, fallback_record_key),
             "status": int(status),
         }
         self._add_optional_value(payload, "inputData", input_data)
@@ -328,6 +333,15 @@ class OperatorExecutionCallbackClient:
         if value in (None, ""):
             raise ValueError(f"{name} must be provided")
         return value
+
+    @staticmethod
+    def _resolve_record_key(record_key: Any, fallback_record_key: Any) -> Any:
+        if record_key not in (None, ""):
+            return record_key
+        return OperatorExecutionCallbackClient._get_required_value(
+            fallback_record_key,
+            "fallback_record_key",
+        )
 
     @staticmethod
     def _to_json_safe_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:

@@ -229,6 +229,38 @@ class OperatorExecutionCallbackClientTest(unittest.TestCase):
         )
 
     @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
+    def test_report_record_success_accepts_fallback_record_key(self, mock_client_cls):
+        fake_client = FakeHttpClient({
+            "ok": True,
+            "status_code": 200,
+            "data": {"code": 0, "data": {"success": True}},
+            "text": None,
+            "error": None,
+        })
+        mock_client_cls.return_value = fake_client
+        client = OperatorExecutionCallbackClient(self._ctx(), operator_execution_id=10001)
+
+        client.report_record_success(
+            record_key=None,
+            fallback_record_key="adc-record-fallback",
+            input_data={"text": "input"},
+            output_data={"text": "output"},
+        )
+
+        self.assertEqual(
+            fake_client.requests,
+            [{
+                "json_body": {
+                    "operatorExecutionId": 10001,
+                    "recordKey": "adc-record-fallback",
+                    "status": 2,
+                    "inputData": {"text": "input"},
+                    "outputData": {"text": "output"},
+                }
+            }],
+        )
+
+    @patch("data_juicer.utils.operator_execution_callback_utils.HttpClient")
     def test_report_record_success_passes_optional_record_log_id_header(self, mock_client_cls):
         fake_client = FakeHttpClient({
             "ok": True,
