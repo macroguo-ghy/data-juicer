@@ -208,12 +208,16 @@ class HttpMapper(Mapper):
 
     def _report_record_success(self, input_sample, output_sample, started_at):
         try:
-            self._get_operator_execution_callback_client().report_record_success(
-                record_key=self._get_record_key(output_sample),
-                input_data=input_sample,
-                output_data=copy.deepcopy(output_sample),
-                started_at=started_at,
-            )
+            output_record_key = self._maybe_get_record_key(output_sample)
+            callback_kwargs = {
+                "record_key": output_record_key,
+                "input_data": input_sample,
+                "output_data": copy.deepcopy(output_sample),
+                "started_at": started_at,
+            }
+            if output_record_key is None:
+                callback_kwargs["fallback_record_key"] = self._get_record_key(input_sample)
+            self._get_operator_execution_callback_client().report_record_success(**callback_kwargs)
         except Exception as exc:
             logger.warning("Failed to report record success callback: {}", exc)
 
@@ -234,6 +238,13 @@ class HttpMapper(Mapper):
         if not sample.get(RECORD_KEY_FIELD):
             raise ValueError(f"sample.{RECORD_KEY_FIELD} must be provided")
         return sample[RECORD_KEY_FIELD]
+
+    @staticmethod
+    def _maybe_get_record_key(sample):
+        if not isinstance(sample, dict):
+            return None
+        value = sample.get(RECORD_KEY_FIELD)
+        return value if value not in (None, "") else None
 
     @staticmethod
     def _extract_error_message(result):

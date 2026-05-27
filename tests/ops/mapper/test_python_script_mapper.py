@@ -141,6 +141,35 @@ class PythonScriptMapperTest(unittest.TestCase):
 
         self.assertEqual(result["value"], 2)
 
+    def test_deleted_output_record_key_uses_input_record_key_for_success_callback(self):
+        op = PythonScriptMapper(
+            python_code=(
+                "def process(sample, context):\n"
+                f"    sample.pop('{RECORD_KEY_FIELD}', None)\n"
+                "    sample['value'] = sample['value'] + 1\n"
+                "    return sample\n"
+            ),
+            ctx=self._ctx(),
+            auto_op_parallelism=False,
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "value": 1,
+        })
+
+        self.assertEqual(result, {"value": 2})
+        self.mock_callback.report_record_success.assert_called_once_with(
+            record_key=None,
+            fallback_record_key="record-1",
+            input_data={
+                RECORD_KEY_FIELD: "record-1",
+                "value": 1,
+            },
+            output_data={"value": 2},
+            started_at=ANY,
+        )
+
     def test_missing_ctx_does_not_block_script_or_report_callbacks(self):
         op = PythonScriptMapper(
             python_code=(
