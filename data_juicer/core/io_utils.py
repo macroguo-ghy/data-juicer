@@ -1228,6 +1228,118 @@ def build_arrow_schema_from_config(schema_config):
     return pa.schema(fields)
 
 
+def _should_serialize_complex_export_value(value: Any) -> bool:
+    return isinstance(value, (dict, list, tuple, set))
+
+
+def _normalize_complex_export_value_for_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_complex_export_value_for_json(nested_value)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_complex_export_value_for_json(nested_value) for nested_value in value]
+    if isinstance(value, set):
+        return [
+            _normalize_complex_export_value_for_json(nested_value)
+            for nested_value in sorted(value, key=lambda item: str(item))
+        ]
+    return value
+
+
+def _serialize_complex_export_value(value: Any, ensure_ascii: bool = False) -> str:
+    return json.dumps(
+        _normalize_complex_export_value_for_json(value),
+        ensure_ascii=ensure_ascii,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
+def _is_complex_arrow_type(data_type) -> bool:
+    import pyarrow as pa
+
+    return any(
+        predicate(data_type)
+        for predicate in (
+            pa.types.is_list,
+            pa.types.is_large_list,
+            pa.types.is_fixed_size_list,
+            pa.types.is_list_view,
+            pa.types.is_large_list_view,
+            pa.types.is_struct,
+            pa.types.is_map,
+        )
+    )
+
+
+def _complex_arrow_field_names_to_serialize(schema) -> set[str]:
+    return {field.name for field in schema if _is_complex_arrow_type(field.type)}
+
+
+def _serialize_complex_fields_in_arrow_table(table, columns_to_serialize=None):
+    import pyarrow as pa
+
+    dynamic_detection = columns_to_serialize is None
+    columns_to_serialize = set(columns_to_serialize or ())
+    arrays = []
+    fields = []
+    modified = False
+    for field_index, field in enumerate(table.schema):
+        should_serialize = field.name in columns_to_serialize
+        values = None
+        if not should_serialize and dynamic_detection:
+            field_values = table.column(field_index).to_pylist()
+            if any(_should_serialize_complex_export_value(value) for value in field_values if value is not None):
+                should_serialize = True
+                values = field_values
+        if should_serialize:
+            modified = True
+            if values is None:
+                values = table.column(field_index).to_pylist()
+            arrays.append(
+                pa.array(
+                    [
+                        None if value is None else _serialize_complex_export_value(value, ensure_ascii=False)
+                        for value in values
+                    ],
+                    type=pa.string(),
+                )
+            )
+            fields.append(pa.field(field.name, pa.string(), nullable=field.nullable))
+            continue
+        arrays.append(table.column(field_index))
+        fields.append(field)
+    if not modified:
+        return table
+    return pa.Table.from_arrays(arrays, schema=pa.schema(fields))
+
+
+def _serialize_complex_fields_for_ray_dataset(dataset):
+    map_batches = getattr(dataset.__class__, "map_batches", None)
+    if not callable(map_batches):
+        return dataset
+    columns_to_serialize = None
+    try:
+        schema = dataset.schema(fetch_if_missing=False)
+    except TypeError:
+        try:
+            schema = dataset.schema()
+        except Exception:
+            schema = None
+    except Exception:
+        schema = None
+    base_schema = getattr(schema, "base_schema", schema)
+    if base_schema is not None:
+        columns_to_serialize = _complex_arrow_field_names_to_serialize(base_schema)
+
+    def serialize_batch(table):
+        return _serialize_complex_fields_in_arrow_table(table, columns_to_serialize)
+
+    return dataset.map_batches(serialize_batch, batch_format="pyarrow")
+
+
 def _as_arrow_schema(schema, *, source):
     import pyarrow as pa
 
@@ -2061,6 +2173,8 @@ def write_ray_dataset_to_magnus(dataset, table_name: str, **kwargs):
         else:
             _validate_magnus_partition_overwrite(dataset, partition_columns, partition_values)
     explicit_schema = build_arrow_schema_from_config(schema_config)
+    if infer_schema_on_create and explicit_schema is None and bool(kwargs.get("serialize_complex_fields", False)):
+        dataset = _serialize_complex_fields_for_ray_dataset(dataset)
     if explicit_schema is not None:
         dataset = _ensure_empty_ray_dataset_has_schema(dataset, explicit_schema, preserve_lazy=preserve_lazy)
     if create_table_if_not_exists:
