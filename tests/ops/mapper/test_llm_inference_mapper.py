@@ -669,6 +669,20 @@ process:
 
         self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
 
+    def test_variable_mapping_rejects_duplicate_alias_after_normalization(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "variable_mapping contains duplicate alias after normalization: user_query",
+        ):
+            LLMInferenceMapper(
+                user_prompt="用户问题：{{ user_query }}",
+                variable_mapping={
+                    "user_query": "客户问题A",
+                    " user_query ": "客户问题B",
+                },
+                ctx=self._ctx(),
+            )
+
     def test_sample_root_takes_precedence_over_sample_field(self):
         op = LLMInferenceMapper(
             user_prompt='历史对话：{{ sample["context/memory/chat_history"] }}',

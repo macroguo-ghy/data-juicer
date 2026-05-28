@@ -228,6 +228,8 @@ class LLMInferenceMapper(Mapper):
                 raise ValueError("variable_mapping key sample is reserved")
             if not isinstance(source_field, str) or not source_field:
                 raise ValueError("variable_mapping values must be non-empty strings")
+            if alias in normalized:
+                raise ValueError(f"variable_mapping contains duplicate alias after normalization: {alias}")
             normalized[alias] = source_field
         return normalized
 
