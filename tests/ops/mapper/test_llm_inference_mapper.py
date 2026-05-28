@@ -528,6 +528,20 @@ process:
 
         self.assertEqual(payload["userPrompt"], "历史对话：用户：ROI 为什么下降？")
 
+    def test_sample_root_takes_precedence_over_sample_field(self):
+        op = LLMInferenceMapper(
+            user_prompt='历史对话：{{ sample["context/memory/chat_history"] }}',
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "sample": "普通字段 sample 不作为 Jinja 根变量",
+            "context/memory/chat_history": "用户：ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "历史对话：用户：ROI 为什么下降？")
+
     def test_prompt_template_missing_nested_field_raises_clear_error(self):
         op = LLMInferenceMapper(
             prompt_template="用户：{{ input.user_query }}",
