@@ -1,6 +1,7 @@
 import base64
 import inspect
 import json
+import math
 import os
 import posixpath
 import uuid
@@ -8,6 +9,7 @@ from functools import partial
 
 from loguru import logger
 
+from data_juicer.core.fanout_compact import normalize_fanout_target_compacts
 from data_juicer.core.io_utils import _is_ray_data_checkpoint_enabled, get_pyarrow_filesystem
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 from data_juicer.utils.file_utils import Sizes, byte_size_to_size_str
@@ -143,6 +145,190 @@ class _AppendFilenameProvider(FilenameProvider):
         raise TypeError("Unexpected FilenameProvider row callback signature.")
 
 
+class _FanoutCompactBuffer:
+    def __init__(self, *, datasink, target, task_index: int):
+        self.datasink = datasink
+        self.target = target
+        self.task_index = task_index
+        self.compact = target["compact"]
+        self.flush_index = 0
+        self.tables = []
+        self.jsonl_lines = []
+        self.schema = None
+        self.rows = 0
+        self.bytes = 0
+        self.stats = {
+            "files": 0,
+            "flushes": 0,
+            "schema_mismatch_flushes": 0,
+        }
+        self.warned_schema_mismatch = False
+        self.warned_large_row = False
+
+    def append(self, table) -> dict[str, int]:
+        if table.num_rows == 0:
+            return self._empty_result()
+        if self.target["type"] == "jsonl":
+            return self._append_jsonl(table)
+        return self._append_parquet(table)
+
+    def flush(self) -> dict[str, int]:
+        if self.rows == 0:
+            return self._empty_result()
+
+        rows = self.rows
+        output_path = posixpath.join(self.target["path"], self._filename())
+        if self.target["type"] == "jsonl":
+            self.datasink._write_jsonl_lines(self.target["filesystem"], output_path, self.jsonl_lines)
+        else:
+            table = self.tables[0] if len(self.tables) == 1 else self._concat_tables(self.tables)
+            self.datasink._write_table(self.target, table, output_path)
+        metadata = self.datasink._summarize_written_file(self.target, output_path)
+        self.stats["files"] += metadata["output_files"]
+        self.stats["flushes"] += 1
+        self.flush_index += 1
+        self._reset()
+        return {
+            "rows": rows,
+            "files": metadata["output_files"],
+            "bytes": metadata["output_bytes"],
+        }
+
+    def compact_summary(self) -> dict[str, int]:
+        return dict(self.stats)
+
+    def _append_parquet(self, table) -> dict[str, int]:
+        result = self._empty_result()
+        for table_slice in self._iter_table_slices(table):
+            result = self._merge_results(result, self._append_parquet_slice(table_slice))
+        return result
+
+    def _append_parquet_slice(self, table) -> dict[str, int]:
+        result = self._empty_result()
+        if self.schema is not None and not table.schema.equals(self.schema, check_metadata=False):
+            if self.rows:
+                result = self._merge_results(result, self.flush())
+            self.stats["schema_mismatch_flushes"] += 1
+            self._warn_schema_mismatch_once()
+
+        table_bytes = self._table_nbytes(table)
+        if table.num_rows == 1 and table_bytes > self.compact["max_buffer_bytes"]:
+            self._warn_large_row_once(table_bytes)
+        if self.rows and self.bytes + table_bytes > self.compact["max_buffer_bytes"]:
+            result = self._merge_results(result, self.flush())
+
+        self.tables.append(table)
+        self.schema = table.schema
+        self.rows += table.num_rows
+        self.bytes += table_bytes
+        if self._should_flush():
+            result = self._merge_results(result, self.flush())
+        return result
+
+    def _append_jsonl(self, table) -> dict[str, int]:
+        result = self._empty_result()
+        ensure_ascii = self.target.get("extra_args", {}).get(
+            "force_ascii",
+            self.target.get("extra_args", {}).get("ensure_ascii", False),
+        )
+        for row in table.to_pylist():
+            line = (json.dumps(row, ensure_ascii=ensure_ascii, default=_json_default) + "\n").encode("utf-8")
+            line_bytes = len(line)
+            if line_bytes > self.compact["max_buffer_bytes"]:
+                self._warn_large_row_once(line_bytes)
+            if self.rows and self.bytes + line_bytes > self.compact["max_buffer_bytes"]:
+                result = self._merge_results(result, self.flush())
+            self.jsonl_lines.append(line)
+            self.rows += 1
+            self.bytes += line_bytes
+            if self._should_flush():
+                result = self._merge_results(result, self.flush())
+        return result
+
+    def _iter_table_slices(self, table):
+        max_buffer_bytes = self.compact["max_buffer_bytes"]
+        table_bytes = self._table_nbytes(table)
+        if table_bytes <= max_buffer_bytes or table.num_rows <= 1:
+            yield table
+            return
+
+        avg_row_bytes = max(1, math.ceil(table_bytes / table.num_rows))
+        rows_per_slice = max(1, min(table.num_rows, max_buffer_bytes // avg_row_bytes))
+        start = 0
+        while start < table.num_rows:
+            row_count = min(rows_per_slice, table.num_rows - start)
+            table_slice = table.slice(start, row_count)
+            while row_count > 1 and self._table_nbytes(table_slice) > max_buffer_bytes:
+                row_count = max(1, row_count // 2)
+                table_slice = table.slice(start, row_count)
+            yield table_slice
+            start += row_count
+
+    def _filename(self) -> str:
+        extension = "jsonl" if self.target["type"] == "jsonl" else self.target["type"]
+        return (
+            f"part-{self.target['index']}-{self.datasink.write_uuid}-"
+            f"{self.task_index}-compact-{self.flush_index}.{extension}"
+        )
+
+    def _should_flush(self) -> bool:
+        return (
+            self.bytes >= self.compact["target_bytes_per_file"]
+            or self.rows >= self.compact["target_rows_per_file"]
+        )
+
+    def _reset(self) -> None:
+        self.tables = []
+        self.jsonl_lines = []
+        self.schema = None
+        self.rows = 0
+        self.bytes = 0
+
+    def _warn_schema_mismatch_once(self) -> None:
+        if self.warned_schema_mismatch:
+            return
+        self.warned_schema_mismatch = True
+        logger.warning(
+            "Ray fan-out compact target {} saw incompatible Arrow schemas; "
+            "flushed the current compact buffer before continuing.",
+            self.target["original_uri"],
+        )
+
+    def _warn_large_row_once(self, row_bytes: int) -> None:
+        if self.warned_large_row:
+            return
+        self.warned_large_row = True
+        logger.warning(
+            "Ray fan-out compact target {} has a single row larger than max_buffer_bytes "
+            "({} > {}); writing that row as a single compact file.",
+            self.target["original_uri"],
+            row_bytes,
+            self.compact["max_buffer_bytes"],
+        )
+
+    @staticmethod
+    def _table_nbytes(table) -> int:
+        return int(getattr(table, "nbytes", 0) or 0)
+
+    @staticmethod
+    def _concat_tables(tables):
+        import pyarrow as pa
+
+        return pa.concat_tables(tables)
+
+    @staticmethod
+    def _empty_result() -> dict[str, int]:
+        return {"rows": 0, "files": 0, "bytes": 0}
+
+    @staticmethod
+    def _merge_results(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+        return {
+            "rows": left["rows"] + right["rows"],
+            "files": left["files"] + right["files"],
+            "bytes": left["bytes"] + right["bytes"],
+        }
+
+
 class RayHdfsFanoutDatasink(Datasink):
     """A Ray datasink that writes one input dataset to multiple file sinks."""
 
@@ -150,25 +336,36 @@ class RayHdfsFanoutDatasink(Datasink):
         self.targets = []
         self.columns = columns
         self.write_uuid = uuid.uuid4().hex
+        targets = [dict(target) for target in targets]
+        normalize_fanout_target_compacts(targets)
+        compact_configs = [target["compact"] for target in targets if "compact" in target]
+        self.compact_config = compact_configs[0] if compact_configs else None
         for index, target in enumerate(targets):
             condition = target.get("condition", target.get("filter_condition", ""))
             from data_juicer.ops.filter.general_field_filter import compile_filter_condition
 
-            self.targets.append(
-                {
-                    **target,
-                    "index": index,
-                    "condition": condition,
-                    "compiled_condition": compile_filter_condition(condition),
-                    "mode": target.get("mode") or "error_if_exists",
-                    "extra_args": dict(target.get("extra_args") or {}),
-                    "created_dir": False,
-                }
-            )
+            writer_target = {
+                **target,
+                "index": index,
+                "condition": condition,
+                "compiled_condition": compile_filter_condition(condition),
+                "mode": target.get("mode") or "error_if_exists",
+                "extra_args": dict(target.get("extra_args") or {}),
+                "created_dir": False,
+            }
+            if "compact" in target:
+                writer_target["compact"] = target["compact"]
+            self.targets.append(writer_target)
 
     @property
     def supports_distributed_writes(self) -> bool:
         return True
+
+    @property
+    def min_rows_per_write(self):
+        if not self.compact_config:
+            return None
+        return self.compact_config["target_rows_per_file"]
 
     def get_name(self) -> str:
         return "FileFanout"
@@ -210,6 +407,15 @@ class RayHdfsFanoutDatasink(Datasink):
         partial_rows = {target["index"]: 0 for target in self.targets}
         partial_files = {target["index"]: 0 for target in self.targets}
         partial_bytes = {target["index"]: 0 for target in self.targets}
+        compact_buffers = {
+            target["index"]: _FanoutCompactBuffer(
+                datasink=self,
+                target=target,
+                task_index=getattr(ctx, "task_idx", 0),
+            )
+            for target in self.targets
+            if target.get("compact")
+        }
         try:
             for block_index, block in enumerate(blocks):
                 table = self._block_to_table(block)
@@ -218,27 +424,90 @@ class RayHdfsFanoutDatasink(Datasink):
                     if filtered_table.num_rows == 0:
                         continue
                     filtered_table = self._select_export_columns(filtered_table, target)
+                    target_index = target["index"]
+                    if target.get("compact"):
+                        write_delta = compact_buffers[target_index].append(filtered_table)
+                        self._apply_write_delta(
+                            target_index,
+                            write_delta,
+                            results,
+                            partial_rows,
+                            partial_files,
+                            partial_bytes,
+                        )
+                        continue
                     filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
                     output_path = posixpath.join(target["path"], filename)
                     self._write_table(target, filtered_table, output_path)
                     metadata = self._summarize_written_file(target, output_path)
-                    target_index = target["index"]
                     rows = filtered_table.num_rows
                     results[target_index] += rows
                     partial_rows[target_index] += rows
                     partial_files[target_index] += metadata["output_files"]
                     partial_bytes[target_index] += metadata["output_bytes"]
+            for target_index, compact_buffer in compact_buffers.items():
+                write_delta = compact_buffer.flush()
+                self._apply_write_delta(
+                    target_index,
+                    write_delta,
+                    results,
+                    partial_rows,
+                    partial_files,
+                    partial_bytes,
+                )
+            if compact_buffers:
+                results["_compact"] = {
+                    target_index: compact_buffer.compact_summary()
+                    for target_index, compact_buffer in compact_buffers.items()
+                }
             return results
         finally:
-            self._record_partial_write_stats(partial_rows, partial_files, partial_bytes)
+            self._record_partial_write_stats(
+                partial_rows,
+                partial_files,
+                partial_bytes,
+                {
+                    target_index: compact_buffer.compact_summary()
+                    for target_index, compact_buffer in compact_buffers.items()
+                },
+            )
+
+    @staticmethod
+    def _apply_write_delta(target_index, write_delta, results, partial_rows, partial_files, partial_bytes):
+        rows = int(write_delta.get("rows", 0) or 0)
+        files = int(write_delta.get("files", 0) or 0)
+        bytes_written = int(write_delta.get("bytes", 0) or 0)
+        if rows:
+            results[target_index] += rows
+            partial_rows[target_index] += rows
+        if files:
+            partial_files[target_index] += files
+        if bytes_written:
+            partial_bytes[target_index] += bytes_written
 
     def on_write_complete(self, write_result):
         from pyarrow.fs import FileType
 
         row_counts = {target["index"]: 0 for target in self.targets}
+        compact_counts = {
+            target["index"]: self._new_compact_stats()
+            for target in self.targets
+            if target.get("compact")
+        }
         for write_return in getattr(write_result, "write_returns", []) or []:
-            for target_index, count in (write_return or {}).items():
-                row_counts[target_index] = row_counts.get(target_index, 0) + count
+            if not isinstance(write_return, dict):
+                continue
+            self._merge_compact_write_return(compact_counts, write_return.get("_compact"))
+            for target_index, count in write_return.items():
+                if target_index == "_compact":
+                    continue
+                coerced_index = self._coerce_target_index(target_index)
+                if coerced_index is None:
+                    continue
+                if isinstance(count, dict):
+                    self._merge_compact_write_return(compact_counts, count.get("compact"))
+                    count = count.get("rows", 0)
+                row_counts[coerced_index] = row_counts.get(coerced_index, 0) + int(count or 0)
 
         for target in self.targets:
             if not target.get("created_dir") or row_counts.get(target["index"], 0) != 0:
@@ -250,13 +519,14 @@ class RayHdfsFanoutDatasink(Datasink):
         target_summaries = []
         for target in self.targets:
             metadata = summarize_filesystem_path(target["filesystem"], target["path"])
-            target_summaries.append(
-                {
-                    "path": target["original_uri"],
-                    "rows": row_counts.get(target["index"], 0),
-                    **metadata,
-                }
-            )
+            target_summary = {
+                "path": target["original_uri"],
+                "rows": row_counts.get(target["index"], 0),
+                **metadata,
+            }
+            if target.get("compact"):
+                target_summary["compact"] = self._compact_summary(compact_counts.get(target["index"]))
+            target_summaries.append(target_summary)
         summary = {
             "output_rows": sum(target["rows"] for target in target_summaries),
             "output_files": sum(target["output_files"] for target in target_summaries),
@@ -266,19 +536,55 @@ class RayHdfsFanoutDatasink(Datasink):
         self.last_write_summary = summary
         return summary
 
+    @staticmethod
+    def _new_compact_stats():
+        return {
+            "files": 0,
+            "flushes": 0,
+            "schema_mismatch_flushes": 0,
+        }
+
+    @classmethod
+    def _compact_summary(cls, compact_stats):
+        stats = cls._new_compact_stats()
+        if isinstance(compact_stats, dict):
+            for key in stats:
+                stats[key] = int(compact_stats.get(key, 0) or 0)
+        return {"enabled": True, **stats}
+
+    @classmethod
+    def _merge_compact_write_return(cls, compact_counts, compact_return):
+        if not isinstance(compact_return, dict):
+            return
+        for target_index, stats in compact_return.items():
+            coerced_index = cls._coerce_target_index(target_index)
+            if coerced_index is None or not isinstance(stats, dict):
+                continue
+            target_stats = compact_counts.setdefault(coerced_index, cls._new_compact_stats())
+            for key in target_stats:
+                target_stats[key] += int(stats.get(key, 0) or 0)
+
+    @staticmethod
+    def _coerce_target_index(target_index):
+        try:
+            return int(target_index)
+        except (TypeError, ValueError):
+            return None
+
     def partial_write_summary(self):
         stats = snapshot_task_kv(namespace=EXPORT_WRITE_STATS_NAMESPACE) or {}
         target_summaries = []
         for target in self.targets:
             metadata = self._safe_summarize_target(target)
             target_index = target["index"]
-            target_summaries.append(
-                {
-                    "path": target["original_uri"],
-                    "rows": self._optional_int(stats.get(self._stats_key("targets", target_index, "rows"))),
-                    **metadata,
-                }
-            )
+            target_summary = {
+                "path": target["original_uri"],
+                "rows": self._optional_int(stats.get(self._stats_key("targets", target_index, "rows"))),
+                **metadata,
+            }
+            if target.get("compact"):
+                target_summary["compact"] = self._partial_compact_summary(stats, target_index)
+            target_summaries.append(target_summary)
 
         output_rows = self._optional_int(stats.get(self._stats_key("output_rows")))
         output_files = self._sum_optional_values(target["output_files"] for target in target_summaries)
@@ -291,8 +597,18 @@ class RayHdfsFanoutDatasink(Datasink):
             "targets": target_summaries,
         }
 
-    def _record_partial_write_stats(self, partial_rows, partial_files, partial_bytes):
+    def _partial_compact_summary(self, stats, target_index):
+        compact_stats = self._new_compact_stats()
+        for key in compact_stats:
+            value = self._optional_int(stats.get(self._stats_key("targets", target_index, "compact", key)))
+            if value is None:
+                value = 0
+            compact_stats[key] = value
+        return {"enabled": True, **compact_stats}
+
+    def _record_partial_write_stats(self, partial_rows, partial_files, partial_bytes, partial_compact_stats=None):
         deltas = {}
+        partial_compact_stats = partial_compact_stats or {}
         for target in self.targets:
             target_index = target["index"]
             rows = partial_rows.get(target_index, 0)
@@ -309,6 +625,12 @@ class RayHdfsFanoutDatasink(Datasink):
                     deltas.get(self._stats_key("output_bytes"), 0) + bytes_written
                 )
                 deltas[self._stats_key("targets", target_index, "output_bytes")] = bytes_written
+            compact_stats = partial_compact_stats.get(target_index)
+            if compact_stats:
+                for key in ["files", "flushes", "schema_mismatch_flushes"]:
+                    value = int(compact_stats.get(key, 0) or 0)
+                    if value:
+                        deltas[self._stats_key("targets", target_index, "compact", key)] = value
         if not deltas:
             return
         try:
@@ -421,6 +743,12 @@ class RayHdfsFanoutDatasink(Datasink):
             for row in table.to_pylist():
                 line = json.dumps(row, ensure_ascii=ensure_ascii, default=_json_default)
                 file.write((line + "\n").encode("utf-8"))
+
+    @staticmethod
+    def _write_jsonl_lines(filesystem, output_path: str, lines):
+        with filesystem.open_output_stream(output_path) as file:
+            for line in lines:
+                file.write(line)
 
 
 class RayExporter:

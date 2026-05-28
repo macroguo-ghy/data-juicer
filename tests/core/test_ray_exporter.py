@@ -265,8 +265,18 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
     def _ctx(self, task_idx=0):
         return type("Ctx", (), {"task_idx": task_idx})()
 
-    def _target(self, path, *, filesystem=None, export_type="jsonl", mode="error_if_exists", condition="", extra_args=None):
-        return {
+    def _target(
+        self,
+        path,
+        *,
+        filesystem=None,
+        export_type="jsonl",
+        mode="error_if_exists",
+        condition="",
+        extra_args=None,
+        compact=None,
+    ):
+        target = {
             "path": path,
             "original_uri": path,
             "filesystem": filesystem or LocalFileSystem(),
@@ -275,6 +285,25 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             "condition": condition,
             "extra_args": extra_args or {},
         }
+        if compact is not None:
+            target["compact"] = compact
+        return target
+
+    def _data_files(self, output_dir, suffix):
+        return sorted(
+            os.path.join(output_dir, name)
+            for name in os.listdir(output_dir)
+            if name.endswith(suffix)
+        )
+
+    def _compact_config(self, *, bytes_per_file=1024 * 1024, rows_per_file=100, max_buffer_bytes=None):
+        compact = {
+            "target_bytes_per_file": bytes_per_file,
+            "target_rows_per_file": rows_per_file,
+        }
+        if max_buffer_bytes is not None:
+            compact["max_buffer_bytes"] = max_buffer_bytes
+        return compact
 
     def test_fanout_parquet_writes_matching_rows_to_each_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -619,6 +648,165 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             self.assertEqual(summary["output_files"], 1)
             self.assertGreater(summary["output_bytes"], 0)
             self.assertEqual(summary["targets"][0]["rows"], 2)
+
+    def test_fanout_parquet_compact_merges_blocks_and_reports_summary(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact_parquet")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        compact=self._compact_config(rows_per_file=10),
+                    )
+                ],
+                columns=["id", "text"],
+            )
+            blocks = [
+                pa.table({"id": [1], "text": ["one"]}),
+                pa.table({"id": [2], "text": ["two"]}),
+                pa.table({"id": [3], "text": ["three"]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            self.assertEqual(datasink.min_rows_per_write, 10)
+            write_return = datasink.write(blocks, self._ctx(task_idx=7))
+            summary = datasink.on_write_complete(type("WriteResult", (), {"write_returns": [write_return]})())
+
+            files = self._data_files(output_dir, ".parquet")
+            self.assertEqual(len(files), 1)
+            self.assertIn("-7-compact-0.parquet", os.path.basename(files[0]))
+            rows = pq.read_table(output_dir).to_pylist()
+            self.assertEqual([row["id"] for row in rows], [1, 2, 3])
+            self.assertEqual(summary["targets"][0]["rows"], 3)
+            self.assertEqual(summary["targets"][0]["compact"]["enabled"], True)
+            self.assertEqual(summary["targets"][0]["compact"]["files"], 1)
+            self.assertEqual(summary["targets"][0]["compact"]["flushes"], 1)
+            self.assertEqual(summary["targets"][0]["compact"]["schema_mismatch_flushes"], 0)
+
+    def test_fanout_jsonl_compact_merges_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact_jsonl")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="jsonl",
+                        compact=self._compact_config(rows_per_file=10),
+                    )
+                ],
+                columns=["id", "text"],
+            )
+            blocks = [
+                pa.table({"id": [1], "text": ["one"]}),
+                pa.table({"id": [2], "text": ["two"]}),
+                pa.table({"id": [3], "text": ["three"]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx(task_idx=2))
+            datasink.on_write_complete(type("WriteResult", (), {"write_returns": [write_return]})())
+
+            files = self._data_files(output_dir, ".jsonl")
+            self.assertEqual(len(files), 1)
+            self.assertIn("-2-compact-0.jsonl", os.path.basename(files[0]))
+            with open(files[0], encoding="utf-8") as reader:
+                rows = [json.loads(line) for line in reader]
+            self.assertEqual([row["id"] for row in rows], [1, 2, 3])
+
+    def test_fanout_compact_target_can_mix_with_direct_target(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            compact_dir = os.path.join(tmp_dir, "compact")
+            direct_dir = os.path.join(tmp_dir, "direct")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        compact_dir,
+                        export_type="jsonl",
+                        compact=self._compact_config(rows_per_file=10),
+                    ),
+                    self._target(direct_dir, export_type="jsonl"),
+                ],
+                columns=["id"],
+            )
+            blocks = [
+                pa.table({"id": [1]}),
+                pa.table({"id": [2]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            datasink.write(blocks, self._ctx())
+
+            self.assertEqual(len(self._data_files(compact_dir, ".jsonl")), 1)
+            self.assertEqual(len(self._data_files(direct_dir, ".jsonl")), 2)
+
+    def test_fanout_compact_flushes_when_rows_or_bytes_threshold_reached(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rows_dir = os.path.join(tmp_dir, "rows")
+            rows_datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        rows_dir,
+                        export_type="jsonl",
+                        compact=self._compact_config(bytes_per_file=1024 * 1024, rows_per_file=2),
+                    )
+                ],
+                columns=["id"],
+            )
+            row_blocks = [
+                pa.table({"id": [1]}),
+                pa.table({"id": [2]}),
+                pa.table({"id": [3]}),
+            ]
+            rows_datasink.on_write_start(row_blocks[0].schema)
+            rows_datasink.write(row_blocks, self._ctx())
+
+            bytes_dir = os.path.join(tmp_dir, "bytes")
+            bytes_datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        bytes_dir,
+                        export_type="jsonl",
+                        compact=self._compact_config(bytes_per_file=20, rows_per_file=100, max_buffer_bytes=40),
+                    )
+                ],
+                columns=["id", "text"],
+            )
+            byte_blocks = [
+                pa.table({"id": [1], "text": ["x" * 32]}),
+                pa.table({"id": [2], "text": ["y" * 32]}),
+            ]
+            bytes_datasink.on_write_start(byte_blocks[0].schema)
+            bytes_datasink.write(byte_blocks, self._ctx())
+
+            self.assertEqual(len(self._data_files(rows_dir, ".jsonl")), 2)
+            self.assertEqual(len(self._data_files(bytes_dir, ".jsonl")), 2)
+
+    def test_fanout_parquet_compact_schema_mismatch_flushes_and_counts(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "schema_mismatch")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        compact=self._compact_config(rows_per_file=100),
+                    )
+                ],
+                columns=["id"],
+            )
+            blocks = [
+                pa.table({"id": pa.array([1], type=pa.int64())}),
+                pa.table({"id": pa.array(["2"], type=pa.string())}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx())
+            summary = datasink.on_write_complete(type("WriteResult", (), {"write_returns": [write_return]})())
+
+            self.assertEqual(len(self._data_files(output_dir, ".parquet")), 2)
+            self.assertEqual(summary["targets"][0]["compact"]["files"], 2)
+            self.assertEqual(summary["targets"][0]["compact"]["schema_mismatch_flushes"], 1)
 
     def test_fanout_unknown_export_type_fails_fast(self):
         datasink = RayHdfsFanoutDatasink(

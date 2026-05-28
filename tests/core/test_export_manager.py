@@ -300,6 +300,62 @@ class ExportManagerTest(unittest.TestCase):
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_passes_top_level_compact_to_datasink(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "parquet",
+                        "compact": {
+                            "target_bytes_per_file": 1024,
+                            "target_rows_per_file": 100,
+                        },
+                        "extra_args": {
+                            "columns": ["id", "videos"],
+                            "compression": "zstd",
+                        },
+                    },
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_b",
+                        "type": "parquet",
+                        "extra_args": {"columns": ["id", "md5"]},
+                    },
+                ],
+                "extra_args": {"concurrency": 3},
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.side_effect = [
+            (fake_filesystem, "/path/output_a"),
+            (fake_filesystem, "/path/output_b"),
+        ]
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["id", "videos", "md5"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["id", "videos", "md5"])
+
+        dataset.write_datasink.assert_called_once_with(datasink, ray_remote_args=None, concurrency=3)
+        _, kwargs = mock_fanout_datasink.call_args
+        compact = kwargs["targets"][0]["compact"]
+        self.assertEqual(compact["target_bytes_per_file"], 1024)
+        self.assertEqual(compact["target_rows_per_file"], 100)
+        self.assertEqual(compact["max_buffer_bytes"], 2048)
+        self.assertEqual(kwargs["targets"][0]["extra_args"], {"compression": "zstd"})
+        self.assertNotIn("compact", kwargs["targets"][0]["extra_args"])
+        self.assertNotIn("compact", kwargs["targets"][1])
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
     def test_ray_hdfs_multi_target_export_propagates_action_args_and_unknown_columns(
         self,
         mock_get_pyarrow_filesystem,
@@ -654,6 +710,32 @@ class ExportManagerTest(unittest.TestCase):
                     {"target": "hdfs", "path": "hdfs://cluster/path/output_b", "type": "parquet"},
                 ],
             }, "same `target`"),
+            ({
+                "targets": [
+                    {
+                        "target": "local",
+                        "path": "./outputs/a",
+                        "type": "jsonl",
+                        "compact": {"target_bytes_per_file": 1024, "target_rows_per_file": 100},
+                    },
+                    {
+                        "target": "local",
+                        "path": "./outputs/b",
+                        "type": "jsonl",
+                        "compact": {"target_bytes_per_file": 2048, "target_rows_per_file": 100},
+                    },
+                ],
+            }, "compact"),
+            ({
+                "targets": [
+                    {
+                        "target": "local",
+                        "path": "./outputs/a",
+                        "type": "jsonl",
+                        "extra_args": {"compact": {"target_bytes_per_file": 1024}},
+                    },
+                ],
+            }, "top level"),
         ]
 
         for export_cfg, expected_error in cases:

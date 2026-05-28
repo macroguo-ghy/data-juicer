@@ -7,6 +7,7 @@ import pyarrow as pa
 from loguru import logger
 
 from data_juicer.core.exporter import Exporter
+from data_juicer.core.fanout_compact import normalize_fanout_target_compacts
 from data_juicer.core.io_utils import (
     append_csv_to_lark_sheet,
     copy_local_to_uri,
@@ -300,18 +301,19 @@ class ExportManager:
             if target_concurrency is not None:
                 target_concurrency_values.append(target_concurrency)
             filesystem, writer_path = self._fanout_target_filesystem_and_path(target)
-            targets.append(
-                {
-                    "path": writer_path,
-                    "original_uri": target["path"],
-                    "filesystem": filesystem,
-                    "type": target["type"],
-                    "mode": target.get("mode") or "error_if_exists",
-                    "condition": target.get("filter_condition") or target.get("condition") or "",
-                    "columns": target_columns,
-                    "extra_args": target_extra_args,
-                }
-            )
+            writer_target = {
+                "path": writer_path,
+                "original_uri": target["path"],
+                "filesystem": filesystem,
+                "type": target["type"],
+                "mode": target.get("mode") or "error_if_exists",
+                "condition": target.get("filter_condition") or target.get("condition") or "",
+                "columns": target_columns,
+                "extra_args": target_extra_args,
+            }
+            if "compact" in target:
+                writer_target["compact"] = target["compact"]
+            targets.append(writer_target)
 
         action_args = merge_dicts(self.export_cfg.get("extra_args"), {})
         action_concurrency = self._resolve_file_targets_write_concurrency(
@@ -406,13 +408,19 @@ class ExportManager:
         target_summaries = []
         for target in targets:
             metadata = summarize_filesystem_path(target["filesystem"], target["path"])
-            target_summaries.append(
-                {
-                    "path": target["original_uri"],
-                    "rows": None,
-                    **metadata,
+            target_summary = {
+                "path": target["original_uri"],
+                "rows": None,
+                **metadata,
+            }
+            if target.get("compact"):
+                target_summary["compact"] = {
+                    "enabled": True,
+                    "files": metadata["output_files"],
+                    "flushes": None,
+                    "schema_mismatch_flushes": None,
                 }
-            )
+            target_summaries.append(target_summary)
         return {
             "output_rows": None,
             "output_files": sum(target["output_files"] for target in target_summaries),
@@ -500,6 +508,7 @@ class ExportManager:
             if target_path in paths:
                 raise ValueError("`export.targets` paths must be unique.")
             paths.add(target_path)
+        normalize_fanout_target_compacts(self.export_targets)
 
     _validate_hdfs_targets_for_export = _validate_file_targets_for_export
 

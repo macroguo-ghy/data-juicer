@@ -26,6 +26,7 @@ from jsonargparse._typehints import ActionTypeHint
 from jsonargparse.typing import ClosedUnitInterval, NonNegativeInt, PositiveInt
 from loguru import logger
 
+from data_juicer.core.fanout_compact import normalize_fanout_target_compacts
 from data_juicer.core.task_notification import validate_notification_hooks_config
 from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
@@ -1077,6 +1078,7 @@ def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
             raise ValueError("`export.targets` paths must be unique.")
         seen_paths.add(path)
         targets[index] = target_cfg
+    normalize_fanout_target_compacts(targets)
 
 
 def _suffix_from_export_path(path):

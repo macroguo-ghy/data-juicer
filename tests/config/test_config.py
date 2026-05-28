@@ -660,6 +660,136 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_targets_accepts_compact_config(self):
+        config_data = {
+            'project_name': 'structured_export_targets_compact',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_a',
+                        'type': 'parquet',
+                        'mode': 'overwrite',
+                        'compact': {
+                            'target_bytes_per_file': 64 * 1024 * 1024,
+                            'target_rows_per_file': 200000,
+                        },
+                    },
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_b',
+                        'type': 'parquet',
+                        'mode': 'overwrite',
+                    },
+                ],
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            compact = cfg.export.targets[0].compact
+            self.assertEqual(compact.target_bytes_per_file, 64 * 1024 * 1024)
+            self.assertEqual(compact.target_rows_per_file, 200000)
+            self.assertEqual(compact.max_buffer_bytes, 128 * 1024 * 1024)
+            self.assertFalse(hasattr(cfg.export.targets[1], 'compact'))
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_invalid_compact_config(self):
+        base_target = {
+            'target': 'hdfs',
+            'path': 'hdfs://cluster/path/output_a',
+            'type': 'parquet',
+        }
+        cases = [
+            ({'compact': True}, 'compact'),
+            ({'compact': {'target_bytes_per_file': 1024}}, 'target_rows_per_file'),
+            ({'compact': {'target_rows_per_file': 100}}, 'target_bytes_per_file'),
+            ({'compact': {'target_bytes_per_file': 0, 'target_rows_per_file': 100}}, 'positive integer'),
+            ({'compact': {'target_bytes_per_file': 1024, 'target_rows_per_file': False}}, 'positive integer'),
+            ({
+                'compact': {
+                    'target_bytes_per_file': 1024,
+                    'target_rows_per_file': 100,
+                    'max_buffer_bytes': 512,
+                },
+            }, 'max_buffer_bytes'),
+            ({
+                'compact': {
+                    'target_bytes_per_file': 1024,
+                    'target_rows_per_file': 100,
+                    'enabled': True,
+                },
+            }, 'enabled'),
+            ({'extra_args': {'compact': {'target_bytes_per_file': 1024}}}, 'top level'),
+        ]
+
+        for override, expected_error in cases:
+            target = {**base_target, **override}
+            config_data = {
+                'project_name': 'structured_export_targets_bad_compact',
+                'executor_type': 'ray',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'export': {'targets': [target]},
+                'process': [],
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_targets_rejects_mismatched_compact_configs(self):
+        config_data = {
+            'project_name': 'structured_export_targets_mismatched_compact',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/a',
+                        'type': 'jsonl',
+                        'compact': {
+                            'target_bytes_per_file': 1024,
+                            'target_rows_per_file': 100,
+                        },
+                    },
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/b',
+                        'type': 'jsonl',
+                        'compact': {
+                            'target_bytes_per_file': 2048,
+                            'target_rows_per_file': 100,
+                        },
+                    },
+                ],
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            with self.assertRaisesRegex(ValueError, 'compact'):
+                init_configs(args=['--config', temp_config], load_configs_only=True)
+        finally:
+            os.unlink(temp_config)
+
     def test_structured_export_targets_accepts_ray_hdfs_parquet_targets(self):
         config_data = {
             'project_name': 'structured_export_targets',
