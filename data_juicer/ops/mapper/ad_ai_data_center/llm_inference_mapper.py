@@ -601,10 +601,19 @@ class _SamplePromptRenderer:
     def _apply_variable_mapping(self, context: dict[str, Any]) -> None:
         for alias, source_field in self.variable_mapping.items():
             try:
-                value = self.sample[source_field]
+                value = self._resolve_mapping_source(context, source_field)
             except KeyError:
                 raise KeyError(f"variable_mapping.{alias} -> {source_field}") from None
             context[alias] = self._wrap_value(value, source_field)
+
+    def _resolve_mapping_source(self, context: Mapping[str, Any], source_field: str):
+        if source_field in self.sample:
+            return self.sample[source_field]
+        return self._resolve_path(
+            context,
+            self._parse_path(source_field),
+            source_field,
+        )
 
     def _rewrite_legacy_array_paths(self, template: str, context: Mapping[str, Any]) -> str:
         legacy_context = {}

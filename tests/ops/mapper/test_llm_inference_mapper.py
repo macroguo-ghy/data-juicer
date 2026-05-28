@@ -564,6 +564,47 @@ process:
         self.assertEqual(payload["systemPrompt"], "历史：用户：ROI 为什么下降？")
         self.assertEqual(payload["userPrompt"], "用户问题：怎么优化？")
 
+    def test_variable_mapping_supports_nested_source_path(self):
+        op = LLMInferenceMapper(
+            user_prompt="历史：{{ chat_history }}",
+            variable_mapping={
+                "chat_history": "context.memory.chat_history",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "context": {
+                "memory": {
+                    "chat_history": "用户：ROI 为什么下降？",
+                },
+            },
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "历史：用户：ROI 为什么下降？")
+
+    def test_variable_mapping_exact_source_field_takes_precedence_over_nested_path(self):
+        op = LLMInferenceMapper(
+            user_prompt="历史：{{ chat_history }}",
+            variable_mapping={
+                "chat_history": "context.memory.chat_history",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "context.memory.chat_history": "顶层字段",
+            "context": {
+                "memory": {
+                    "chat_history": "嵌套字段",
+                },
+            },
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "历史：顶层字段")
+
     def test_prompt_template_supports_variable_mapping(self):
         op = LLMInferenceMapper(
             prompt_template="用户问题：{{ user_query }}",
