@@ -614,6 +614,27 @@ process:
                 RECORD_KEY_FIELD: "record-1",
             })
 
+    def test_variable_mapping_alias_must_be_jinja_variable_name(self):
+        invalid_aliases = [
+            "user-query",
+            "1query",
+            "user query",
+        ]
+
+        for alias in invalid_aliases:
+            with self.subTest(alias=alias):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "variable_mapping keys must be valid Jinja variable names",
+                ):
+                    LLMInferenceMapper(
+                        user_prompt="用户问题：{{ user_query }}",
+                        variable_mapping={
+                            alias: "客户问题",
+                        },
+                        ctx=self._ctx(),
+                    )
+
     def test_sample_root_takes_precedence_over_sample_field(self):
         op = LLMInferenceMapper(
             user_prompt='历史对话：{{ sample["context/memory/chat_history"] }}',

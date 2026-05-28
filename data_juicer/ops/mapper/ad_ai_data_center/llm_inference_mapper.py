@@ -29,6 +29,7 @@ TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 SUBMIT_PATH = "/openapi/synthesis/llm-inference/submit"
 RESULT_PATH = "/openapi/synthesis/llm-inference/result"
 DEFAULT_SYSTEM_PROMPT = "你是一个数据合成助手。"
+JINJA_VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -218,6 +219,8 @@ class LLMInferenceMapper(Mapper):
         for alias, source_field in variable_mapping.items():
             if not isinstance(alias, str) or not alias:
                 raise ValueError("variable_mapping keys must be non-empty strings")
+            if JINJA_VARIABLE_NAME_PATTERN.fullmatch(alias) is None:
+                raise ValueError("variable_mapping keys must be valid Jinja variable names")
             if alias == "sample":
                 raise ValueError("variable_mapping key sample is reserved")
             if not isinstance(source_field, str) or not source_field:
