@@ -118,6 +118,12 @@ process:
       bytes_key: "videos"
       md5_key: "md5"
       valid_count_key: "valid_video_count"
+  - field_drop_mapper:
+      batch_size: 50
+      num_proc: 1024
+      num_cpus: 1
+      fields:
+        - "videos"
   - ray_field_dedup_pipeline:
       batch_size: 50
       num_proc: 1024
@@ -128,10 +134,21 @@ process:
       dedup_set_num: 512
       actor_get_timeout: 600
       actor_get_retry_times: 2
+  - download_file_mapper:
+      batch_size: 50
+      num_proc: 1024
+      num_cpus: 1
+      download_field: "urls"
+      save_field: "videos"
+      timeout: 2
+      retry_times: 3
+      max_concurrent: 1
+      filter_non_url: true
+      resume_download: true
 
 export:
   extra_args:
-    concurrency: 1
+    concurrency: 128
   targets:
     - target: "hdfs"
       type: "parquet"
