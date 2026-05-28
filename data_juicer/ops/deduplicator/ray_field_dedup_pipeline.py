@@ -5,10 +5,16 @@ from typing import Any, Union
 import pyarrow as pa
 
 from data_juicer.core.data import NestedDataset
+from data_juicer.core.task_notification import RuntimeStatsCollector
 from data_juicer.ops.condition_utils import RowCondition
+from data_juicer.utils.metrics_utils import emit_dedup_rows
 
 from ..base_op import OPERATORS, Pipeline
-from .ray_basic_deduplicator import ActorBackend
+from .ray_basic_deduplicator import (
+    DEFAULT_ACTOR_GET_RETRY_TIMES,
+    DEFAULT_ACTOR_GET_TIMEOUT,
+    ActorBackend,
+)
 
 OP_NAME = "ray_field_dedup_pipeline"
 
@@ -21,6 +27,8 @@ class RayFieldDedupPipeline(Pipeline):
         self,
         field_key: str,
         dedup_set_num: Union[int, str] = "auto",
+        actor_get_timeout: float | None = DEFAULT_ACTOR_GET_TIMEOUT,
+        actor_get_retry_times: int = DEFAULT_ACTOR_GET_RETRY_TIMES,
         condition: str = "",
         id_key: str | None = None,
         *args,
@@ -30,6 +38,8 @@ class RayFieldDedupPipeline(Pipeline):
         Initialization method.
         :param field_key: field used for exact deduplication. Nested paths use dot separators.
         :param dedup_set_num: number of Ray dedup actors, or "auto".
+        :param actor_get_timeout: max seconds to wait for a Ray actor result, or None to wait forever.
+        :param actor_get_retry_times: number of times to wait on the same actor result before failing.
         :param condition: row condition for deduplication. Non-matching rows pass through.
         :param id_key: optional stable row id for idempotent task retry decisions.
         :param args: extra args.
@@ -44,7 +54,11 @@ class RayFieldDedupPipeline(Pipeline):
         self._condition = RowCondition(condition)
         self.id_key = id_key
         self._id_path = id_key.split(".") if id_key else None
-        self.backend = ActorBackend(dedup_set_num)
+        self.backend = ActorBackend(
+            dedup_set_num,
+            actor_get_timeout=actor_get_timeout,
+            actor_get_retry_times=actor_get_retry_times,
+        )
 
     def run(self, dataset, *, exporter=None, tracer=None):
         if isinstance(dataset, NestedDataset):
@@ -122,9 +136,40 @@ class RayFieldDedupPipeline(Pipeline):
                 self.backend.is_unique(hash_value, row_id)
                 for hash_value, row_id in zip(eligible_hashes, eligible_row_ids)
             ]
+        self._emit_dedup_rows(len(eligible_indices), eligible_keep)
         for index, should_keep in zip(eligible_indices, eligible_keep):
             keep[index] = should_keep
         return keep
+
+    def _emit_dedup_rows(self, eligible_count: int, eligible_keep: list[bool]) -> None:
+        unique_count = sum(bool(should_keep) for should_keep in eligible_keep)
+        duplicate_count = eligible_count - unique_count
+        tags = {"backend": "ray_actor"}
+        emit_dedup_rows(
+            op_name=self._name,
+            field_key=self.field_key,
+            event="eligible",
+            count=eligible_count,
+            extra_tags=tags,
+        )
+        emit_dedup_rows(
+            op_name=self._name,
+            field_key=self.field_key,
+            event="unique",
+            count=unique_count,
+            extra_tags=tags,
+        )
+        emit_dedup_rows(
+            op_name=self._name,
+            field_key=self.field_key,
+            event="duplicate",
+            count=duplicate_count,
+            extra_tags=tags,
+        )
+        collector = RuntimeStatsCollector()
+        collector.increment("dedup.eligible_rows", eligible_count)
+        collector.increment("dedup.unique_rows", unique_count)
+        collector.increment("dedup.duplicate_rows", duplicate_count)
 
     def calculate_hash(self, sample: dict[str, Any]) -> str:
         value = self._get_field_value(sample)

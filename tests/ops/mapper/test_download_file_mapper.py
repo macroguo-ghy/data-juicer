@@ -291,6 +291,41 @@ class DownloadFileMapperTest(DataJuicerTestCaseBase):
         self.assertEqual(results[0][2], "failed")
         self.assertEqual(results[0][4], None)
 
+    def test_download_metrics_cover_success_failure_bytes_and_latency(self):
+        async def fake_download(_session, url, _save_path, **_kwargs):
+            if url.endswith("failed.png"):
+                raise RuntimeError("download failed")
+            return object(), b"image-bytes"
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            retry_times=1,
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=fake_download), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_qps"
+        ) as emit_qps, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_bytes"
+        ) as emit_bytes, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_latency_ms"
+        ) as emit_latency:
+            results = op.download_files_async(
+                ["http://example.com/ok.png", "http://example.com/failed.png"],
+                [True, True],
+            )
+
+        self.assertEqual([result[2] for result in results], ["success", "failed"])
+        self.assertEqual([call.kwargs["status"] for call in emit_qps.call_args_list], ["success", "failed"])
+        self.assertTrue(all(call.kwargs["op_name"] == "download_file_mapper" for call in emit_qps.call_args_list))
+        self.assertTrue(all(call.kwargs["scheme"] == "http" for call in emit_qps.call_args_list))
+        self.assertTrue(all(call.kwargs["save_mode"] == "memory" for call in emit_qps.call_args_list))
+        self.assertEqual(emit_bytes.call_count, 1)
+        self.assertEqual(emit_bytes.call_args.kwargs["byte_count"], len(b"image-bytes"))
+        self.assertEqual(emit_latency.call_count, 2)
+        for call in emit_qps.call_args_list + emit_bytes.call_args_list + emit_latency.call_args_list:
+            self.assertNotIn("url", call.kwargs)
+
     def test_failed_download_logs_are_aggregated_per_worker(self):
         async def failing_download(*args, **kwargs):
             raise RuntimeError("403, message='Forbidden', url='http://example.com/image.png'")

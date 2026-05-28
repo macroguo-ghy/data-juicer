@@ -7,6 +7,7 @@ from typing import Any
 import pyarrow as pa
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.utils.constant import DEFAULT_PREFIX
 
 OP_NAME = "json_object_mapper"
 
@@ -38,11 +39,18 @@ class JsonObjectMapper(Mapper):
         keys = list(sample.keys()) if self.include_all else list(self.include_keys)
         payload = {}
         for key in keys:
-            if key == self.output_key or key in self.exclude_keys:
+            if self._should_skip_key(key):
                 continue
             payload[key] = self._jsonable(sample.get(key))
         sample[self.output_key] = json.dumps(payload, ensure_ascii=False, default=str)
         return sample
+
+    def _should_skip_key(self, key: str) -> bool:
+        return (
+            key == self.output_key
+            or key in self.exclude_keys
+            or (self.include_all and key.startswith(DEFAULT_PREFIX))
+        )
 
     def process_batched(self, samples):
         input_schema = samples.schema if isinstance(samples, pa.Table) else None

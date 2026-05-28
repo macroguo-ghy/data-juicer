@@ -385,6 +385,19 @@ class AwemePackUrlMapperTest(unittest.TestCase):
             self.assertEqual(call.kwargs["target"], "sd://aweme.pack.url?cluster=boe")
             self.assertEqual(call.kwargs["method"], "PackImage")
 
+    def test_pack_image_uses_qps_limiter_before_each_rpc(self):
+        op = AwemePackUrlMapper(qps=2, auto_op_parallelism=False, num_proc=1)
+        op._client = _FakePackUrlClient({"uri-a": ["url-a"], "uri-b": ["url-b"]})
+        op._api_thrift = _FakeAwemePackUrlThrift
+        limiter_acquires = []
+        op._rpc_qps_limiter = types.SimpleNamespace(acquire=lambda: limiter_acquires.append("acquire"))
+
+        self.assertEqual(op._resolve_urls(["uri-a", "uri-b"]), ["url-a", "url-b"])
+
+        self.assertEqual(limiter_acquires, ["acquire", "acquire"])
+        with self.assertRaisesRegex(ValueError, "qps"):
+            AwemePackUrlMapper(qps=0, auto_op_parallelism=False, num_proc=1)
+
     def test_empty_uris_do_not_create_rpc_and_batch_processing_adds_urls(self):
         op = AwemePackUrlMapper(auto_op_parallelism=False, num_proc=1)
 

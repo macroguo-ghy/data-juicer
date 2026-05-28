@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ray Notification Hooks 配置说明</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --soft: #eef3f8;
+      --soft-2: #f5f7fa;
+      --text: #1f2933;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --green: #0f766e;
+      --amber: #b45309;
+      --red: #b42318;
+      --code-bg: #111827;
+      --code-text: #e5e7eb;
+      --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.68;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      overflow: auto;
+      padding: 26px 18px;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+    }
+
+    .sidebar h2 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    .sidebar p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .nav a {
+      display: block;
+      padding: 7px 9px;
+      border-radius: 6px;
+      color: #344054;
+      font-size: 13px;
+    }
+
+    .nav a:hover {
+      background: var(--soft);
+      text-decoration: none;
+    }
+
+    .page {
+      min-width: 0;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.10), rgba(15, 118, 110, 0.07)), var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero-inner,
+    .content {
+      width: min(1120px, calc(100vw - 56px));
+      margin: 0 auto;
+    }
+
+    .hero-inner {
+      padding: 42px 0 30px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(30px, 5vw, 46px);
+      line-height: 1.16;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 800px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.72);
+      color: #344054;
+      font-size: 13px;
+    }
+
+    .content {
+      padding: 32px 0 56px;
+    }
+
+    section {
+      margin: 0 0 26px;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      line-height: 1.3;
+      scroll-margin-top: 22px;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 18px;
+      line-height: 1.35;
+      scroll-margin-top: 22px;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul,
+    ol {
+      padding-left: 22px;
+      margin: 10px 0;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .code-block {
+      margin: 14px 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #1f2937;
+      background: var(--code-bg);
+    }
+
+    .code-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      color: #cbd5e1;
+      background: #0b1220;
+      border-bottom: 1px solid #243244;
+      font-size: 12px;
+    }
+
+    .copy-btn {
+      min-height: 28px;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 3px 9px;
+      background: #172033;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+    }
+
+    .copy-btn:hover {
+      border-color: #64748b;
+      background: #1f2937;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      color: var(--code-text);
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .fact {
+      min-height: 112px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft-2);
+    }
+
+    .fact strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 15px;
+    }
+
+    .fact p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .callout {
+      margin: 14px 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      background: #eff6ff;
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+
+    .callout.danger {
+      border-left-color: var(--red);
+      background: #fef3f2;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 14px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      background: #fff;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: 0;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    th {
+      background: var(--soft);
+      color: #344054;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+
+    .status-list div {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft-2);
+    }
+
+    .status-list b {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .action {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: #344054;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+    }
+
+    .action.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .action:hover {
+      border-color: var(--accent);
+      text-decoration: none;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        display: block;
+      }
+
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero-inner,
+      .content {
+        width: min(100% - 28px, 1120px);
+      }
+
+      section {
+        padding: 20px 16px;
+      }
+
+      .grid,
+      .status-list {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        min-width: 660px;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .sidebar,
+      .toolbar,
+      .copy-btn {
+        display: none;
+      }
+
+      .hero {
+        background: #fff;
+      }
+
+      .hero-inner,
+      .content {
+        width: auto;
+        margin: 0;
+      }
+
+      section {
+        break-inside: avoid;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Navigation</h2>
+      <p>RayExecutor 任务周期通知配置速查。</p>
+      <nav class="nav" aria-label="页面导航">
+        <a href="#conclusion">Conclusion</a>
+        <a href="#quick-start">最小配置</a>
+        <a href="#fields">字段说明</a>
+        <a href="#runtime">运行时行为</a>
+        <a href="#card">飞书卡片变量</a>
+        <a href="#stats">自定义统计</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#inference">Inference</a>
+        <a href="#risk">Risk</a>
+        <a href="#export">Export</a>
+      </nav>
+    </aside>
+
+    <main class="page">
+      <header class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Data-Juicer RayExecutor</p>
+          <h1>Notification Hooks 配置说明</h1>
+          <p class="subtitle">
+            说明如何通过顶层 <code>notification_hooks</code> 给 Ray 任务发送周期飞书进度和成功/失败终态通知。
+            本页以当前代码实现为准，重点覆盖配置字段、卡片变量、snapshot 口径和排障方式。
+          </p>
+          <div class="meta-row" aria-label="文档元信息">
+            <span class="pill">适用执行器：RayExecutor</span>
+            <span class="pill">Hook 类型：adc_lark_message</span>
+            <span class="pill">最小周期：30s</span>
+            <span class="pill">不会为通知触发额外 Ray Data action</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section id="conclusion">
+          <h2>Conclusion</h2>
+          <div class="grid">
+            <div class="fact">
+              <strong>配置入口</strong>
+              <p>在 YAML 顶层配置 <code>notification_hooks</code>。它与 <code>export.after_export_hook</code> 独立，后者仍只处理 export 后同步。</p>
+            </div>
+            <div class="fact">
+              <strong>发送时机</strong>
+              <p><code>interval</code> 存在时发送 heartbeat；RayExecutor 结束时按 <code>on_success</code> 或 <code>on_failure</code> 发送终态通知。</p>
+            </div>
+            <div class="fact">
+              <strong>统计来源</strong>
+              <p>通知只读取 driver snapshot、export summary 和 runtime stats actor；不执行 <code>dataset.count()</code> 或 <code>materialize()</code>。</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="scope">
+          <h2>Scope</h2>
+          <p>当前第一版只覆盖 <code>executor_type: ray</code> 的 RayExecutor。默认 executor、非 ADC 的发送通道、Grafana/RayUI 主动查询统计不在本功能范围内。</p>
+          <div class="callout">
+            <strong>配置原则：</strong>
+            任务提交系统应把接收人写入 <code>ctx.userAccount</code>；Data-Juicer 不做提交人身份解析。
+          </div>
+        </section>
+
+        <section id="quick-start">
+          <h2>最小配置</h2>
+          <p>周期通知和终态通知都打开时，可以使用下面的配置骨架。<code>interval</code> 省略或写成 <code>null</code> 时，只发送成功/失败终态消息。</p>
+          <div class="code-block">
+            <div class="code-head">
+              <span>notification_hooks.yaml</span>
+              <button class="copy-btn" type="button" data-copy="yaml-basic">复制</button>
+            </div>
+            <pre><code id="yaml-basic">executor_type: ray
+project_name: ray-notification-hook-e2e
+
+notification_hooks:
+  - type: adc_lark_message
+    enabled: true
+    interval: 30s          # 可选：30s、10min、1h；省略/null 表示只发终态
+    on_success: true       # 成功终态是否发送
+    on_failure: true       # 失败终态是否发送
+    fail_on_error: false   # heartbeat 失败只 warning；终态失败是否反向影响任务
+    ctx:
+      userAccount: "guohongyu.7"
+      apiBase: "https://ai-data-center.bytedance.net/api"
+      x-tt-env: "ppe_sirius3"  # 可选，PPE 调试时使用
+      x-use-ppe: "1"           # 可选，PPE 调试时使用
+    template_id: "AAqtelosmXDl1"
+    custom_fields:
+      biz: "ecom_video"
+      ray_ui_url: "https://ray.example.bytedance.net/jobs/..."
+      driver_log_url: "https://log.example.bytedance.net/..."
+      output_url: "hdfs://cluster/path/to/output"
+    custom_stats:
+      - key: "dedup.eligible_rows"
+        label: "可参与去重行数"
+      - key: "dedup.unique_rows"
+        label: "唯一行数"
+      - key: "dedup.duplicate_rows"
+        label: "重复行数"</code></pre>
+          </div>
+          <div class="callout warning">
+            <strong>不要新增 <code>interval_seconds</code>。</strong>
+            对外配置只接受 <code>interval</code> 字符串；代码在运行时解析为秒。
+          </div>
+        </section>
+
+        <section id="fields">
+          <h2>字段说明</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>字段</th>
+                  <th>必填</th>
+                  <th>示例</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>type</code></td>
+                  <td>是</td>
+                  <td><code>adc_lark_message</code></td>
+                  <td>当前只支持 ADC 飞书模板卡片发送。</td>
+                </tr>
+                <tr>
+                  <td><code>enabled</code></td>
+                  <td>否</td>
+                  <td><code>true</code></td>
+                  <td>为 <code>false</code> 时跳过该 hook，且不校验其发送字段。</td>
+                </tr>
+                <tr>
+                  <td><code>interval</code></td>
+                  <td>否</td>
+                  <td><code>30s</code>、<code>10min</code>、<code>1h</code></td>
+                  <td>heartbeat 周期。最小值为 <code>30s</code>；省略或 <code>null</code> 表示只发终态。</td>
+                </tr>
+                <tr>
+                  <td><code>on_success</code></td>
+                  <td>否</td>
+                  <td><code>true</code></td>
+                  <td>成功终态是否发送。默认按发送处理。</td>
+                </tr>
+                <tr>
+                  <td><code>on_failure</code></td>
+                  <td>否</td>
+                  <td><code>true</code></td>
+                  <td>失败终态是否发送。默认按发送处理。</td>
+                </tr>
+                <tr>
+                  <td><code>fail_on_error</code></td>
+                  <td>否</td>
+                  <td><code>false</code></td>
+                  <td>终态通知发送失败时是否抛出。heartbeat 失败始终只记录 warning。</td>
+                </tr>
+                <tr>
+                  <td><code>ctx.userAccount</code></td>
+                  <td>是</td>
+                  <td><code>guohongyu.7</code></td>
+                  <td>ADC OpenAPI 的接收人账号，同时会作为请求头 <code>User-Account</code>。</td>
+                </tr>
+                <tr>
+                  <td><code>ctx.apiBase</code></td>
+                  <td>是</td>
+                  <td><code>https://ai-data-center.bytedance.net/api</code></td>
+                  <td>ADC API base。最终 endpoint 为 <code>/openapi/lark/message/template-card/send-to-user</code>。</td>
+                </tr>
+                <tr>
+                  <td><code>ctx.x-tt-env</code>、<code>ctx.x-use-ppe</code></td>
+                  <td>否</td>
+                  <td><code>ppe_sirius3</code>、<code>1</code></td>
+                  <td>PPE 调试头。配置后会透传到 ADC 请求 headers。</td>
+                </tr>
+                <tr>
+                  <td><code>template_id</code></td>
+                  <td>是</td>
+                  <td><code>AAqtelosmXDl1</code></td>
+                  <td>飞书模板卡片 ID。卡片侧变量名需要与本页变量表一致。</td>
+                </tr>
+                <tr>
+                  <td><code>custom_fields</code></td>
+                  <td>否</td>
+                  <td><code>biz</code>、<code>ray_ui_url</code></td>
+                  <td>透传到模板变量。常用于业务标识和按钮链接。</td>
+                </tr>
+                <tr>
+                  <td><code>custom_stats</code></td>
+                  <td>否</td>
+                  <td><code>dedup.duplicate_rows</code></td>
+                  <td>从 runtime stats actor 中筛选需要展示的统计项；未配置时 snapshot 包含 actor 中所有 stats。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>interval 校验</h3>
+          <p><code>interval</code> 在 config 初始化阶段校验，格式必须是正整数加单位，单位仅支持 <code>s</code>、<code>min</code>、<code>h</code>。</p>
+          <div class="status-list">
+            <div><b>合法</b><code>30s</code>、<code>10min</code>、<code>1h</code>、<code>null</code>、省略</div>
+            <div><b>非法</b><code>0s</code>、<code>abc</code>、<code>10</code>、<code>-1h</code>、低于 <code>30s</code> 的值</div>
+          </div>
+        </section>
+
+        <section id="runtime">
+          <h2>运行时行为</h2>
+          <ol>
+            <li>RayExecutor 进入 <code>run()</code> 后创建 <code>TaskNotificationManager</code> 并启动 heartbeat timer。</li>
+            <li>任务阶段会依次更新为 <code>load</code>、<code>process</code>、<code>export</code>。</li>
+            <li>heartbeat 读取当前 snapshot，写入 <code>notification_snapshot.json</code>，并发送事件 <code>heartbeat</code>。</li>
+            <li>任务成功后发送事件 <code>success</code>，失败后发送事件 <code>failure</code>，并把错误摘要写入 snapshot。</li>
+            <li>如果存在 <code>job_summary.json</code>，通知 snapshot 会同步写入 <code>notification_snapshot</code> 字段。</li>
+          </ol>
+
+          <h3>snapshot 字段</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>字段</th>
+                  <th>来源</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>job_id</code></td><td><code>cfg.job_id</code></td><td>任务 ID，可能由提交系统注入。</td></tr>
+                <tr><td><code>project_name</code></td><td><code>cfg.project_name</code></td><td>项目或算子名称，建议配置为可读名称。</td></tr>
+                <tr><td><code>executor_type</code></td><td><code>cfg.executor_type</code></td><td>当前版本预期为 <code>ray</code>。</td></tr>
+                <tr><td><code>status</code></td><td>manager 状态</td><td><code>running</code>、<code>success</code> 或 <code>failure</code>。</td></tr>
+                <tr><td><code>phase</code></td><td>RayExecutor 阶段</td><td><code>initializing</code>、<code>load</code>、<code>process</code>、<code>export</code>、<code>finished</code>、<code>failed</code>。</td></tr>
+                <tr><td><code>elapsed_seconds</code></td><td>driver 时间</td><td>从 manager 初始化到当前 snapshot 的耗时。</td></tr>
+                <tr><td><code>export_path</code></td><td><code>cfg.export_path</code></td><td>配置中的导出路径。</td></tr>
+                <tr><td><code>output_rows</code></td><td>export summary</td><td>只有 exporter 已知时才填充；未知时为 <code>null</code>。</td></tr>
+                <tr><td><code>output_files</code></td><td>export summary / 文件元数据</td><td>导出完成后可从已知结果或文件元数据得到。</td></tr>
+                <tr><td><code>output_bytes</code></td><td>export summary / 文件元数据</td><td>导出完成后可从已知结果或文件元数据得到。</td></tr>
+                <tr><td><code>custom_stats</code></td><td>runtime stats actor</td><td>由 Ray worker 侧累加，driver 周期读取。</td></tr>
+                <tr><td><code>error_summary</code></td><td>异常摘要</td><td>失败终态时填充，最长 500 字符。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout">
+            <strong>性能边界：</strong>
+            通知模块只读取已有状态，不为了行数统计触发 <code>dataset.count()</code> 或 <code>materialize()</code>。如果某个统计无法从 exporter 或文件元数据得到，文案会显示 <code>unknown</code>。
+          </div>
+        </section>
+
+        <section id="card">
+          <h2>飞书卡片变量</h2>
+          <p>发送 payload 使用 ADC <code>send-to-user</code> OpenAPI，核心结构如下：</p>
+          <div class="code-block">
+            <div class="code-head">
+              <span>ADC request body</span>
+              <button class="copy-btn" type="button" data-copy="request-body">复制</button>
+            </div>
+            <pre><code id="request-body">{
+  "userEmailOrAccount": "guohongyu.7",
+  "templateId": "AAqtelosmXDl1",
+  "templateVariable": {
+    "event": "heartbeat | success | failure",
+    "project_name": "ray-notification-hook-e2e",
+    "job_id": "notification_hooks_20260527182431",
+    "status_text": "进行中",
+    "phase_text": "export",
+    "phase_progress": "load ✓ -> process ✓ -> export 进行中",
+    "elapsed_text": "50s",
+    "output_rows_text": "unknown",
+    "output_files_text": "2",
+    "output_bytes_text": "128 B",
+    "error_summary_text": "无"
+  }
+}</code></pre>
+          </div>
+
+          <h3>推荐变量</h3>
+          <p>卡片模板建议优先绑定 snake_case 文本变量，避免 CardKit 把 URL object 或复杂对象渲染成 JSON 字符串。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>卡片变量</th>
+                  <th>推荐用途</th>
+                  <th>示例值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>project_name</code></td><td>项目</td><td><code>ray-notification-hook-e2e</code></td></tr>
+                <tr><td><code>job_id</code></td><td>任务 ID</td><td><code>notification_hooks_20260527182431</code></td></tr>
+                <tr><td><code>user</code></td><td>用户</td><td><code>guohongyu.7</code></td></tr>
+                <tr><td><code>status_text</code></td><td>状态角标</td><td><code>进行中</code>、<code>成功</code>、<code>失败</code></td></tr>
+                <tr><td><code>phase_text</code></td><td>当前阶段</td><td><code>load</code>、<code>process</code>、<code>export</code></td></tr>
+                <tr><td><code>phase_progress</code></td><td>阶段进度</td><td><code>load ✓ -> process ✓ -> export 进行中</code></td></tr>
+                <tr><td><code>elapsed_text</code></td><td>已运行</td><td><code>50s</code>、<code>10min 5s</code></td></tr>
+                <tr><td><code>export_path_text</code></td><td>输出路径</td><td><code>hdfs://cluster/path/output</code></td></tr>
+                <tr><td><code>output_rows_text</code></td><td>输出行数</td><td><code>1000</code> 或 <code>unknown</code></td></tr>
+                <tr><td><code>output_files_text</code></td><td>输出文件数</td><td><code>2</code> 或 <code>unknown</code></td></tr>
+                <tr><td><code>output_bytes_text</code></td><td>输出大小</td><td><code>128 B</code>、<code>1.2 MB</code></td></tr>
+                <tr><td><code>error_summary_text</code></td><td>错误信息</td><td><code>无</code> 或 <code>RuntimeError: ...</code></td></tr>
+                <tr><td><code>ray_ui_url_text</code></td><td>按钮 URL</td><td><code>https://ray.example...</code></td></tr>
+                <tr><td><code>driver_log_url_text</code></td><td>按钮 URL</td><td><code>https://log.example...</code></td></tr>
+                <tr><td><code>output_url_text</code></td><td>按钮 URL</td><td><code>hdfs://cluster/path/output</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>CardKit 变量声明</h3>
+          <p>在线卡片和本地 <code>.card</code> 文件中的变量声明应使用 CardKit 导出的字段结构。文本变量示例：</p>
+          <div class="code-block">
+            <div class="code-head">
+              <span>card-variable.json</span>
+              <button class="copy-btn" type="button" data-copy="card-variable">复制</button>
+            </div>
+            <pre><code id="card-variable">{
+  "type": "text",
+  "apiName": "project_name",
+  "name": "项目",
+  "desc": "Data-Juicer project_name",
+  "mockData": "ray-notification-hook-e2e"
+}</code></pre>
+          </div>
+          <div class="callout danger">
+            <strong>常见错误：</strong>
+            如果所有字段都显示成同一个 URL、或者把 <code>{"url": "...", "pc_url": "..."}</code> 作为正文渲染，通常是卡片组件绑定了 URL object 变量，或变量声明不是 CardKit 当前格式。正文和按钮 URL 建议绑定 <code>*_text</code> 变量。
+          </div>
+        </section>
+
+        <section id="stats">
+          <h2>自定义统计</h2>
+          <p><code>custom_stats</code> 配置的是从 runtime stats actor 中读取的 key。Ray worker 侧可以通过 <code>RuntimeStatsCollector.increment()</code> 累加，driver 侧 snapshot 会读取 actor 快照。</p>
+
+          <h3>当前 dedup pipeline 写入的统计</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>key</th>
+                  <th>含义</th>
+                  <th>模板变量别名</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>dedup.eligible_rows</code></td>
+                  <td>可参与去重的行数</td>
+                  <td><code>dedup_eligible_rows_text</code>、<code>dedupEligibleRowsText</code></td>
+                </tr>
+                <tr>
+                  <td><code>dedup.unique_rows</code></td>
+                  <td>唯一行数</td>
+                  <td><code>dedup_unique_rows_text</code>、<code>dedupUniqueRowsText</code></td>
+                </tr>
+                <tr>
+                  <td><code>dedup.duplicate_rows</code></td>
+                  <td>重复行数</td>
+                  <td><code>dedup_duplicate_rows_text</code>、<code>dedupDuplicateRowsText</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="troubleshooting">
+          <h2>排障速查</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>现象</th>
+                  <th>优先检查</th>
+                  <th>处理方式</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>没有周期通知</td>
+                  <td><code>interval</code> 是否省略或为 <code>null</code></td>
+                  <td>需要 heartbeat 时显式配置 <code>interval: 30s</code> 或更长周期。</td>
+                </tr>
+                <tr>
+                  <td>配置初始化报错</td>
+                  <td><code>interval</code> 格式、<code>type</code> 是否正确</td>
+                  <td>使用 <code>30s</code>、<code>10min</code>、<code>1h</code>；<code>type</code> 写 <code>adc_lark_message</code>。</td>
+                </tr>
+                <tr>
+                  <td>任务因为终态通知失败而失败</td>
+                  <td><code>fail_on_error</code></td>
+                  <td>非强一致通知场景建议设置 <code>false</code>。</td>
+                </tr>
+                <tr>
+                  <td>输出行数显示 unknown</td>
+                  <td>exporter 是否提供 <code>last_export_summary.output_rows</code></td>
+                  <td>这是允许状态；通知不会为行数额外触发 Ray Data action。</td>
+                </tr>
+                <tr>
+                  <td>卡片字段显示 JSON 或重复 URL</td>
+                  <td>卡片变量声明和组件绑定</td>
+                  <td>正文使用 <code>*_text</code> 变量；变量声明使用 <code>type/apiName/name/desc/mockData</code>。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="evidence">
+          <h2>Evidence</h2>
+          <p>本页依据以下当前仓库文件整理：</p>
+          <ul>
+            <li><code>data_juicer/core/task_notification.py</code>：hook 类型、ADC endpoint、模板变量、snapshot 写盘、interval 校验。</li>
+            <li><code>data_juicer/core/executor/ray_executor.py</code>：RayExecutor 阶段更新、heartbeat 启动、成功/失败终态发送。</li>
+            <li><code>data_juicer/ops/deduplicator/ray_field_dedup_pipeline.py</code>：dedup 自定义统计写入。</li>
+            <li><code>tests/core/test_task_notification.py</code>：ADC payload、headers、失败策略、snapshot 文件测试。</li>
+            <li><code>tests/config/test_config.py</code>：<code>interval</code> 字符串解析和非法格式测试。</li>
+            <li><code>tests/core/executor/test_ray_executor.py</code>：成功/失败终态、阶段更新、不会调用 <code>count()</code> / <code>materialize()</code> 的回归测试。</li>
+          </ul>
+        </section>
+
+        <section id="inference">
+          <h2>Inference</h2>
+          <p>以下是从代码行为推导出的配置建议：</p>
+          <ul>
+            <li>线上卡片正文尽量使用 <code>*_text</code> 变量，因为这些变量已经过格式化，能避免 <code>null</code> 和 URL object 的展示问题。</li>
+            <li>当任务规模较大时，<code>interval</code> 不应设置得太短；当前最小值是 <code>30s</code>，生产任务可按通知噪声选择 <code>10min</code> 或 <code>1h</code>。</li>
+            <li>如果通知只作为观测能力，建议保持 <code>fail_on_error: false</code>，避免飞书或 ADC 短暂异常影响 Ray 主任务。</li>
+          </ul>
+        </section>
+
+        <section id="risk">
+          <h2>Risk</h2>
+          <ul>
+            <li><code>output_rows</code> 可能为 <code>null</code>。这是为了避免通知模块触发额外 Ray Data action。</li>
+            <li>heartbeat 是近实时 driver snapshot，终态通知在 export 完成后才会补充可获得的输出统计。</li>
+            <li>外部卡片模板由飞书平台管理，模板变量发布后才会影响实际消息渲染。</li>
+            <li>远端 <code>notification_snapshot.json</code> / <code>job_summary.json</code> 读取可能受平台 token 或 GDPR/ZTI 权限限制；这不代表本地 snapshot 写入逻辑失败。</li>
+          </ul>
+        </section>
+
+        <section id="export">
+          <h2>Export</h2>
+          <p>本页是单文件 HTML，可以直接提交到仓库并在浏览器打开。配置片段可通过代码块右上角按钮复制，也可打印为 PDF 用于评审。</p>
+          <div class="toolbar">
+            <button class="action primary" type="button" onclick="window.print()">打印 / 导出 PDF</button>
+            <a class="action" href="#quick-start">回到最小配置</a>
+            <a class="action" href="#card">查看卡片变量</a>
+          </div>
+          <p class="small">文档路径：<code>docs/RayNotificationHooks_ZH.html</code></p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const copyButtons = document.querySelectorAll("[data-copy]");
+    copyButtons.forEach((button) => {
+      button.addEventListener("click", async () => {
+        const target = document.getElementById(button.dataset.copy);
+        if (!target) {
+          return;
+        }
+        const text = target.innerText;
+        try {
+          await navigator.clipboard.writeText(text);
+          const previous = button.textContent;
+          button.textContent = "已复制";
+          window.setTimeout(() => {
+            button.textContent = previous;
+          }, 1200);
+        } catch (error) {
+          const range = document.createRange();
+          range.selectNodeContents(target);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

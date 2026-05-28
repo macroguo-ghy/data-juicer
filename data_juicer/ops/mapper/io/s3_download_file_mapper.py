@@ -2,12 +2,19 @@ import asyncio
 import copy
 import os
 import os.path as osp
+import time
 from typing import List, Union
+from urllib.parse import urlparse
 
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.utils.lazy_loader import LazyLoader
+from data_juicer.utils.metrics_utils import (
+    emit_download_bytes,
+    emit_download_latency_ms,
+    emit_download_qps,
+)
 from data_juicer.utils.s3_utils import get_aws_credentials
 
 boto3 = LazyLoader("boto3")
@@ -215,10 +222,10 @@ class S3DownloadFileMapper(Mapper):
             return_content=False,
             **kwargs,
         ) -> dict:
+            started_at = time.monotonic()
+            status, response, content, save_path = "success", None, None, None
             async with semaphore:
                 try:
-                    status, response, content, save_path = "success", None, None, None
-
                     # Handle S3 URLs (synchronous operation in async context)
                     if self._is_s3_url(url):
                         if save_dir:
@@ -259,6 +266,17 @@ class S3DownloadFileMapper(Mapper):
                     response = str(e)
                     save_path = None
                     content = None
+
+                finally:
+                    self._emit_download_metrics(
+                        url=url,
+                        status=status,
+                        save_dir=save_dir,
+                        return_content=return_content,
+                        content=content,
+                        save_path=save_path,
+                        started_at=started_at,
+                    )
 
                 return idx, save_path, status, response, content
 
@@ -301,6 +319,73 @@ class S3DownloadFileMapper(Mapper):
                     reconstructed.append(None)
 
         return reconstructed
+
+    def _emit_download_metrics(
+        self,
+        *,
+        url,
+        status: str,
+        save_dir,
+        return_content: bool,
+        content,
+        save_path,
+        started_at: float,
+    ) -> None:
+        scheme = self._download_scheme(url)
+        save_mode = self._download_save_mode(save_dir, return_content)
+        latency_ms = max(0.0, (time.monotonic() - started_at) * 1000.0)
+        emit_download_qps(
+            op_name=self._name,
+            scheme=scheme,
+            status=status,
+            save_mode=save_mode,
+        )
+        byte_count = self._download_byte_count(content, save_path)
+        if status == "success" and byte_count is not None:
+            emit_download_bytes(
+                op_name=self._name,
+                scheme=scheme,
+                byte_count=byte_count,
+                save_mode=save_mode,
+            )
+        emit_download_latency_ms(
+            op_name=self._name,
+            scheme=scheme,
+            status=status,
+            latency_ms=latency_ms,
+            save_mode=save_mode,
+        )
+
+    @staticmethod
+    def _download_scheme(url) -> str:
+        if not isinstance(url, str):
+            return "unknown"
+        scheme = urlparse(url.strip()).scheme.lower()
+        return scheme or "file"
+
+    @staticmethod
+    def _download_save_mode(save_dir, return_content: bool) -> str:
+        if save_dir and return_content:
+            return "file_and_memory"
+        if save_dir:
+            return "file"
+        if return_content:
+            return "memory"
+        return "noop"
+
+    @staticmethod
+    def _download_byte_count(content, save_path) -> int | None:
+        if content is not None:
+            try:
+                return len(content)
+            except TypeError:
+                return None
+        if save_path and osp.isfile(save_path):
+            try:
+                return osp.getsize(save_path)
+            except OSError:
+                return None
+        return None
 
     def _create_save_field_struct(self, nested_urls, save_field_contents=None) -> List[Union[bytes, List[bytes]]]:
         """Create save field structure for output."""

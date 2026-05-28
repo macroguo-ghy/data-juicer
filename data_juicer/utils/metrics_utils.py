@@ -12,9 +12,13 @@ from data_juicer.utils.constant import (
 
 METRICS_PREFIX = "ad.ai.data_forge"
 RPC_QPS_METRIC = "rpc.qps"
+DOWNLOAD_QPS_METRIC = "download.qps"
+DOWNLOAD_BYTES_METRIC = "download.bytes"
+DOWNLOAD_LATENCY_MS_METRIC = "download.latency_ms"
 VLM_QPS_METRIC = "vlm.qps"
 VLM_RATE_LIMIT_EVENT_METRIC = "vlm.rate_limit.event"
 VLM_RATE_LIMIT_VALUE_METRIC = "vlm.rate_limit.value"
+DEDUP_ROWS_METRIC = "dedup.rows"
 UNKNOWN_TAG_VALUE = "unknown"
 
 _metrics_client = None
@@ -76,6 +80,68 @@ def emit_vlm_qps(
     )
 
 
+def emit_download_qps(
+    *,
+    op_name: str,
+    scheme: str,
+    status: str,
+    save_mode: str,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    _emit_qps(
+        DOWNLOAD_QPS_METRIC,
+        {
+            "op_name": op_name,
+            "scheme": scheme,
+            "status": status,
+            "save_mode": save_mode,
+            **(extra_tags or {}),
+        },
+    )
+
+
+def emit_download_bytes(
+    *,
+    op_name: str,
+    scheme: str,
+    byte_count: int | float,
+    save_mode: str,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    _emit_store(
+        DOWNLOAD_BYTES_METRIC,
+        float(byte_count),
+        {
+            "op_name": op_name,
+            "scheme": scheme,
+            "save_mode": save_mode,
+            **(extra_tags or {}),
+        },
+    )
+
+
+def emit_download_latency_ms(
+    *,
+    op_name: str,
+    scheme: str,
+    status: str,
+    latency_ms: int | float,
+    save_mode: str,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    _emit_store(
+        DOWNLOAD_LATENCY_MS_METRIC,
+        float(latency_ms),
+        {
+            "op_name": op_name,
+            "scheme": scheme,
+            "status": status,
+            "save_mode": save_mode,
+            **(extra_tags or {}),
+        },
+    )
+
+
 def emit_vlm_rate_limit_event(
     *,
     event: str,
@@ -122,16 +188,38 @@ def emit_vlm_rate_limit_value(
     )
 
 
+def emit_dedup_rows(
+    *,
+    op_name: str,
+    field_key: str,
+    event: str,
+    count: int,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    if count <= 0:
+        return
+    _emit_rate_counter(
+        DEDUP_ROWS_METRIC,
+        {
+            "op_name": op_name,
+            "field_key": field_key,
+            "event": event,
+            **(extra_tags or {}),
+        },
+        value=count,
+    )
+
+
 def _emit_qps(metric_name: str, tags: dict[str, Any]) -> None:
     _emit_rate_counter(metric_name, tags)
 
 
-def _emit_rate_counter(metric_name: str, tags: dict[str, Any]) -> None:
+def _emit_rate_counter(metric_name: str, tags: dict[str, Any], value: int | float = 1) -> None:
     client = _get_metrics_client()
     if client is None:
         return
     try:
-        client.emit_rate_counter(metric_name, 1, tags=_normalize_tags({**tags, **metrics_context_tags()}))
+        client.emit_rate_counter(metric_name, value, tags=_normalize_tags({**tags, **metrics_context_tags()}))
     except Exception as err:  # noqa: BLE001
         _log_metrics_warning_once(f"Failed to emit metrics via bytedance.metrics: {err}")
 

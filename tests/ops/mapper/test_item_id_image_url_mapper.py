@@ -194,6 +194,20 @@ class ItemIdImageUrlMapperTest(unittest.TestCase):
             self.assertEqual(call.kwargs["op_name"], "item_id_image_url_mapper")
             self.assertEqual(call.kwargs["target"], "item_id_image_url")
 
+    def test_item_rpc_uses_qps_limiter_before_each_fallback_attempt(self):
+        attr_rpc = FakeItemRpc([["image-a"]])
+        info_rpc = FakeItemRpc([RuntimeError("item-info failed")])
+        op = _op_with_clients(attr_rpc, info_rpc, qps=2)
+        limiter_acquires = []
+        op._rpc_qps_limiter = SimpleNamespace(acquire=lambda: limiter_acquires.append("acquire"))
+
+        row = op.process_single({"item_id": "456"})
+
+        self.assertEqual(row["item_image_urls"], ["image-a"])
+        self.assertEqual(limiter_acquires, ["acquire", "acquire"])
+        with self.assertRaisesRegex(ValueError, "qps"):
+            ItemIdImageUrlMapper(qps=0)
+
     def test_process_single_outputs_empty_list_when_rpc_empty_or_item_id_missing(self):
         empty_row = _op_with_clients(FakeItemRpc([None]), FakeItemRpc([[]])).process_single({"item_id": 1})
         missing_id_row = _op_with_clients(FakeItemRpc([["unused"]]), FakeItemRpc([["unused"]])).process_single(

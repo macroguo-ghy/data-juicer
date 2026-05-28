@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.ops.mapper.rpc_rate_limiter import RpcQpsRateLimiter, validate_qps
 from data_juicer.utils.metrics_utils import emit_rpc_qps
 
 OP_NAME = "item_id_image_url_mapper"
@@ -37,6 +38,7 @@ class ItemIdImageUrlMapper(Mapper):
         output_url_field: str = "item_image_urls",
         image_url_prefix: str | None = None,
         require_http_url: bool = False,
+        qps: int | None = None,
         *args,
         **kwargs,
     ):
@@ -46,19 +48,27 @@ class ItemIdImageUrlMapper(Mapper):
         :param output_url_field: field to store resolved item image URLs.
         :param image_url_prefix: optional prefix for non-HTTP image URI values.
         :param require_http_url: drop non-HTTP URI values when no prefix is set.
+        :param qps: Ray job-level item image RPC request QPS limit.
         """
+        validate_qps(qps)
         kwargs["image_key"] = output_url_field
         super().__init__(*args, **kwargs)
         self.id_field = id_field
         self.output_url_field = output_url_field
         self.image_url_prefix = image_url_prefix
         self.require_http_url = require_http_url
+        self.qps = qps
+        self._rpc_qps_limiter = RpcQpsRateLimiter(qps, self._rate_limiter_key())
         self._rpc_clients = None
 
     def __getstate__(self):
         state = dict(self.__dict__)
         state["_rpc_clients"] = None
         return state
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        self._rpc_qps_limiter.setup_ray_actor()
+        return super().run(dataset, exporter=exporter, tracer=tracer)
 
     def process_single(self, sample):
         urls = self._resolve_item_image_urls(sample.get(self.id_field))
@@ -72,6 +82,7 @@ class ItemIdImageUrlMapper(Mapper):
         rpc1, rpc2 = self._get_rpc_clients()
         for method, rpc in (("ItemImageInfoRPC", rpc2), ("ItemImageAttrRPC", rpc1)):
             try:
+                self._rpc_qps_limiter.acquire()
                 urls = rpc(item_id)
             except Exception:  # noqa: BLE001
                 emit_rpc_qps(
@@ -91,6 +102,9 @@ class ItemIdImageUrlMapper(Mapper):
             if urls:
                 return list(urls)
         return None
+
+    def _rate_limiter_key(self) -> str:
+        return f"{OP_NAME}:item_id_image_url"
 
     def _get_rpc_clients(self):
         if self._rpc_clients is None:

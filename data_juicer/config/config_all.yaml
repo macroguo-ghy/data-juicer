@@ -80,6 +80,7 @@ ray_address: auto                                           # the address of the
 ray_collect_real_metrics: false                             # whether RayExecutor eagerly materializes and counts the processed Ray Dataset before export to collect real metrics. Disabled by default to preserve lazy streaming execution. Cannot be true when export.max_rows is set.
 ray_materialize_after_each_op: false                        # whether RayExecutor materializes Ray Data after each operator and calls the operator after_operator_finished hook. Disabled by default to preserve lazy pipeline optimization.
 ray_dry_run_plan: false                                     # whether RayExecutor only builds and prints the Ray Data logical/physical plan, then skips materialization and export.
+notification_hooks: []                                      # RayExecutor task notification hooks. First version supports type=adc_lark_message with interval strings such as 30s, 10min, or 1h; null interval sends terminal success/failure only.
 
 # partition configuration (for ray_partitioned executor)
 partition:
