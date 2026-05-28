@@ -93,6 +93,8 @@ class AdcLarkMessageNotificationHook:
         snapshot_dict = snapshot.to_dict()
         custom_fields = dict(self.hook_cfg.get("custom_fields") or {})
         custom_stats = dict(snapshot.custom_stats or {})
+        custom_stats_for_template = self._custom_stats_for_template(custom_stats)
+        custom_stats_text = _format_custom_stats_text(custom_stats_for_template)
         elapsed_text = _format_duration(snapshot.elapsed_seconds)
         output_bytes_text = _format_bytes(snapshot.output_bytes)
         output_rows_text = _format_optional_value(snapshot.output_rows)
@@ -191,8 +193,12 @@ class AdcLarkMessageNotificationHook:
                 "output_bytes_text": output_bytes_text,
             },
             "customFields": custom_fields,
-            "customStats": self._custom_stats_for_template(snapshot.custom_stats),
+            "customStats": custom_stats_for_template,
+            "custom_stats": custom_stats_for_template,
             "customStatsMap": custom_stats,
+            "custom_stats_map": custom_stats,
+            "customStatsText": custom_stats_text,
+            "custom_stats_text": custom_stats_text,
             "snapshot": snapshot_dict,
         }
         for key, value in custom_stats.items():
@@ -210,18 +216,31 @@ class AdcLarkMessageNotificationHook:
     def _custom_stats_for_template(self, stats: dict[str, Any]) -> list[dict[str, Any]]:
         configured_stats = self.hook_cfg.get("custom_stats") or []
         output = []
+        seen = set()
         for item in configured_stats:
             if isinstance(item, str):
                 key = item
                 label = item
+                group = None
             elif isinstance(item, dict):
                 key = item.get("key")
                 label = item.get("label") or key
+                group = item.get("group") or item.get("category")
             else:
                 continue
             if not key:
                 continue
-            output.append({"key": key, "label": label, "value": stats.get(key)})
+            seen.add(key)
+            value = stats.get(key)
+            stat = {"key": key, "label": label, "value": value}
+            if group:
+                stat["group"] = group
+            output.append(stat)
+        for key in sorted(stats):
+            if key in seen:
+                continue
+            value = stats.get(key)
+            output.append({"key": key, "label": key, "value": value})
         return output
 
     def _base_headers(self) -> dict[str, str]:
@@ -374,11 +393,11 @@ class TaskNotificationManager:
         return export_summary
 
     def _selected_custom_stats(self) -> dict[str, Any]:
-        stats = self.stats_collector.snapshot()
+        stats = dict(self.stats_collector.snapshot() or {})
         configured = self._configured_custom_stat_items()
         if not configured:
             return stats
-        selected = {}
+        selected = dict(stats)
         for item in configured:
             key = item.get("key")
             if not key:
@@ -389,7 +408,7 @@ class TaskNotificationManager:
                     stats.get(item.get("denominator") or item.get("denominator_key"), 0),
                     item,
                 )
-            else:
+            elif key not in selected:
                 selected[key] = stats.get(key, 0)
         return selected
 
@@ -576,6 +595,23 @@ def _format_optional_value(value: Any) -> str:
     if value is None:
         return "unknown"
     return str(value)
+
+
+def _format_custom_stats_text(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "暂无"
+    lines = []
+    current_group = None
+    for item in items:
+        group = item.get("group")
+        if group and group != current_group:
+            if lines:
+                lines.append("")
+            lines.append(f"**{group}**")
+            current_group = group
+        label = item.get("label") or item.get("key") or "stat"
+        lines.append(f"• {label}：{_format_optional_value(item.get('value'))}")
+    return "\n".join(lines)
 
 
 def _is_ratio_custom_stat(item: dict[str, Any]) -> bool:

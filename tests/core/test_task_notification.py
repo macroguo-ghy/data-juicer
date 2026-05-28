@@ -276,7 +276,7 @@ class TaskNotificationTest(unittest.TestCase):
             self.assertEqual(snapshot["status"], "success")
             self.assertEqual(snapshot["phase"], "finished")
             self.assertEqual(snapshot["output_rows"], 4)
-            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4})
+            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4, "other": 9})
 
     def test_manager_snapshot_uses_live_export_summary_provider(self):
         cfg = SimpleNamespace(
@@ -327,15 +327,71 @@ class TaskNotificationTest(unittest.TestCase):
 
             with open(os.path.join(tmp_dir, "notification_snapshot.json"), "r", encoding="utf-8") as file:
                 snapshot = json.load(file)
-            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 0})
+            self.assertEqual(
+                snapshot["custom_stats"],
+                {
+                    "dedup.eligible_rows": 160,
+                    "dedup.unique_rows": 160,
+                    "dedup.duplicate_rows": 0,
+                },
+            )
             variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
-            self.assertEqual(variables["customStatsMap"], {"dedup.duplicate_rows": 0})
+            self.assertEqual(
+                variables["customStatsMap"],
+                {
+                    "dedup.eligible_rows": 160,
+                    "dedup.unique_rows": 160,
+                    "dedup.duplicate_rows": 0,
+                },
+            )
             self.assertEqual(variables["dedup_duplicate_rows"], 0)
             self.assertEqual(variables["dedup_duplicate_rows_text"], "0")
+            self.assertIn("• duplicate rows：0", variables["custom_stats_text"])
+            self.assertIn("• dedup.eligible_rows：160", variables["custom_stats_text"])
+            self.assertIn("• dedup.unique_rows：160", variables["custom_stats_text"])
             self.assertEqual(
                 variables["customStats"],
-                [{"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 0}],
+                [
+                    {"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 0},
+                    {"key": "dedup.eligible_rows", "label": "dedup.eligible_rows", "value": 160},
+                    {"key": "dedup.unique_rows", "label": "dedup.unique_rows", "value": 160},
+                ],
             )
+
+    @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
+    def test_custom_stats_text_includes_unconfigured_runtime_kvs(self):
+        cfg = SimpleNamespace(
+            notification_hooks=[self._hook_cfg(interval=None)],
+            job_id="job-1",
+            project_name="project",
+            executor_type="ray",
+            export_path="hdfs://cluster/output",
+            work_dir="/unused",
+        )
+        collector = RuntimeStatsCollector()
+        collector.snapshot = MagicMock(
+            return_value={
+                "dedup.duplicate_rows": 3,
+                "download.bytes": 2048,
+            }
+        )
+        manager = TaskNotificationManager(cfg, stats_collector=collector)
+
+        manager.finish(success=True)
+
+        variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+        self.assertEqual(variables["customStatsMap"], {"dedup.duplicate_rows": 3, "download.bytes": 2048})
+        self.assertEqual(variables["custom_stats_map"], variables["customStatsMap"])
+        self.assertEqual(variables["customStatsText"], variables["custom_stats_text"])
+        self.assertIn("• duplicate rows：3", variables["custom_stats_text"])
+        self.assertIn("• download.bytes：2048", variables["custom_stats_text"])
+        self.assertEqual(
+            variables["customStats"],
+            [
+                {"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 3},
+                {"key": "download.bytes", "label": "download.bytes", "value": 2048},
+            ],
+        )
 
     @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
     def test_manager_computes_ratio_custom_stats(self):
@@ -377,6 +433,9 @@ class TaskNotificationTest(unittest.TestCase):
         self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failure_rate"], "15.00%")
         self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate"], "15.00%")
         self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate_text"], "15.00%")
+        self.assertIn("• RPC 失败次数：3", variables["custom_stats_text"])
+        self.assertIn("• RPC 失败率：15.00%", variables["custom_stats_text"])
+        self.assertIn("• rpc.video_url_rpc_mapper.total_count：20", variables["custom_stats_text"])
         self.assertEqual(
             variables["customStats"],
             [
@@ -385,6 +444,11 @@ class TaskNotificationTest(unittest.TestCase):
                     "key": "rpc.video_url_rpc_mapper.failure_rate",
                     "label": "RPC 失败率",
                     "value": "15.00%",
+                },
+                {
+                    "key": "rpc.video_url_rpc_mapper.total_count",
+                    "label": "rpc.video_url_rpc_mapper.total_count",
+                    "value": 20,
                 },
             ],
         )

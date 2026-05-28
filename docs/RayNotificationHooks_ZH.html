@@ -554,7 +554,7 @@ notification_hooks:
       ray_ui_url: "https://ray.example.bytedance.net/jobs/..."
       driver_log_url: "https://log.example.bytedance.net/..."
       output_url: "hdfs://cluster/path/to/output"
-    custom_stats:
+    custom_stats:          # 可选：控制展示名、顺序和派生 ratio；未配置的新 runtime KV 会自动追加到 custom_stats_text
       - key: "dedup.eligible_rows"
         label: "可参与去重行数"
       - key: "dedup.unique_rows"
@@ -730,6 +730,7 @@ notification_hooks:
     "output_rows_text": "unknown",
     "output_files_text": "2",
     "output_bytes_text": "128 B",
+    "custom_stats_text": "• 可参与去重行数：100\n• dedup.new_metric：20",
     "error_summary_text": "无"
   }
 }</code></pre>
@@ -758,6 +759,7 @@ notification_hooks:
                 <tr><td><code>output_rows_text</code></td><td>输出行数</td><td><code>1000</code> 或 <code>unknown</code></td></tr>
                 <tr><td><code>output_files_text</code></td><td>输出文件数</td><td><code>2</code> 或 <code>unknown</code></td></tr>
                 <tr><td><code>output_bytes_text</code></td><td>输出大小</td><td><code>128 B</code>、<code>1.2 MB</code></td></tr>
+                <tr><td><code>custom_stats_text</code></td><td>自定义统计 Markdown 文本</td><td><code>• 可参与去重行数：100</code></td></tr>
                 <tr><td><code>error_summary_text</code></td><td>错误信息</td><td><code>无</code> 或 <code>RuntimeError: ...</code></td></tr>
                 <tr><td><code>ray_ui_url_text</code></td><td>按钮 URL</td><td><code>https://ray.example...</code></td></tr>
                 <tr><td><code>driver_log_url_text</code></td><td>按钮 URL</td><td><code>https://log.example...</code></td></tr>
@@ -789,7 +791,9 @@ notification_hooks:
 
         <section id="stats">
           <h2>自定义统计</h2>
-          <p><code>custom_stats</code> 配置的是从 runtime stats actor 中读取的 key。Ray worker 侧可以通过 <code>RuntimeStatsCollector.increment()</code> 累加，driver 侧 snapshot 会读取 actor 快照。</p>
+          <p>Ray worker 侧可以通过 <code>RuntimeStatsCollector.increment()</code> 写入 runtime stats actor，driver 侧 snapshot 会读取 actor 快照并生成 <code>custom_stats_text</code>。卡片模板只需要绑定 <code>custom_stats_text</code>，后续新增统计 KV 不需要再改卡片模板。</p>
+
+          <p><code>custom_stats</code> 配置现在只用于展示名、展示顺序和派生 ratio；未出现在 <code>custom_stats</code> 里的 runtime KV 会按 key 排序追加到 <code>custom_stats_text</code> 和 <code>customStats</code>。如果完全不配置 <code>custom_stats</code>，会展示 actor 中的全部 KV。</p>
 
           <h3>当前 dedup pipeline 写入的统计</h3>
           <div class="table-wrap">
@@ -798,24 +802,24 @@ notification_hooks:
                 <tr>
                   <th>key</th>
                   <th>含义</th>
-                  <th>模板变量别名</th>
+                  <th>展示方式</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <td><code>dedup.eligible_rows</code></td>
                   <td>可参与去重的行数</td>
-                  <td><code>dedup_eligible_rows_text</code>、<code>dedupEligibleRowsText</code></td>
+                  <td>优先用 <code>custom_stats.label</code>，否则直接显示 key。</td>
                 </tr>
                 <tr>
                   <td><code>dedup.unique_rows</code></td>
                   <td>唯一行数</td>
-                  <td><code>dedup_unique_rows_text</code>、<code>dedupUniqueRowsText</code></td>
+                  <td>写入后自动出现在 <code>custom_stats_text</code>。</td>
                 </tr>
                 <tr>
                   <td><code>dedup.duplicate_rows</code></td>
                   <td>重复行数</td>
-                  <td><code>dedup_duplicate_rows_text</code>、<code>dedupDuplicateRowsText</code></td>
+                  <td>旧的 <code>*_text</code> 变量仍保留兼容，但新模板不应逐项绑定。</td>
                 </tr>
               </tbody>
             </table>
