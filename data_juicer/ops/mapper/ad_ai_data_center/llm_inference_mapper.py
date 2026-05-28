@@ -51,6 +51,7 @@ class LLMInferenceMapper(Mapper):
         repartition_num_blocks: int | None = None,
         system_prompt: str | None = None,
         user_prompt: str | None = None,
+        variable_mapping: dict[str, str] | None = None,
         *args,
         **kwargs,
     ):
@@ -72,6 +73,8 @@ class LLMInferenceMapper(Mapper):
         :param retry_attempts: HTTP retry attempts for submit/result requests.
         :param repartition_num_blocks: Ray Dataset block count before inference.
             None means num_proc * 4 when num_proc is positive.
+        :param variable_mapping: Jinja variable alias mapping. Keys are prompt
+            variable names and values are source sample field names.
         :param args: extra args.
         :param kwargs: extra args.
         """
@@ -98,6 +101,7 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("repartition_num_blocks must be a positive integer")
         if retry_attempts < 0:
             raise ValueError("retry_attempts must be non-negative")
+        self._validate_variable_mapping(variable_mapping)
 
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
@@ -113,6 +117,7 @@ class LLMInferenceMapper(Mapper):
         self.timeout = timeout
         self.repartition_num_blocks = repartition_num_blocks
         self.retry_attempts = retry_attempts
+        self.variable_mapping = variable_mapping or {}
         self._operator_execution_callback_client = None
 
     def run(self, dataset, *, exporter=None, tracer=None):
@@ -204,6 +209,20 @@ class LLMInferenceMapper(Mapper):
                 "one of user_prompt, prompt, prompt_template, or prompt_field must be provided"
             )
 
+    @staticmethod
+    def _validate_variable_mapping(variable_mapping: dict[str, str] | None):
+        if variable_mapping is None:
+            return
+        if not isinstance(variable_mapping, dict):
+            raise ValueError("variable_mapping must be a dictionary")
+        for alias, source_field in variable_mapping.items():
+            if not isinstance(alias, str) or not alias:
+                raise ValueError("variable_mapping keys must be non-empty strings")
+            if alias == "sample":
+                raise ValueError("variable_mapping key sample is reserved")
+            if not isinstance(source_field, str) or not source_field:
+                raise ValueError("variable_mapping values must be non-empty strings")
+
     def before_operator_started(self, dataset=None, context=None):
         try:
             self._get_operator_execution_callback_client()
@@ -224,7 +243,12 @@ class LLMInferenceMapper(Mapper):
 
     def _build_prompt_payload(self, sample: dict[str, Any]) -> dict[str, Any]:
         if self.user_prompt is not None:
-            user_prompt = self._render_prompt_text(self.user_prompt, sample, "user_prompt")
+            user_prompt = self._render_prompt_text(
+                self.user_prompt,
+                sample,
+                "user_prompt",
+                self.variable_mapping,
+            )
             if not user_prompt.strip():
                 raise ValueError("user_prompt must be a non-empty string")
             return self._build_submit_payload(
@@ -251,15 +275,21 @@ class LLMInferenceMapper(Mapper):
             self.system_prompt,
             sample,
             "system_prompt",
+            self.variable_mapping,
         )
         if not system_prompt.strip():
             return DEFAULT_SYSTEM_PROMPT
         return system_prompt
 
     @staticmethod
-    def _render_prompt_text(template: str, sample: dict[str, Any], field_name: str) -> str:
+    def _render_prompt_text(
+        template: str,
+        sample: dict[str, Any],
+        field_name: str,
+        variable_mapping: dict[str, str] | None = None,
+    ) -> str:
         try:
-            value = _SamplePromptRenderer(sample).render(template)
+            value = _SamplePromptRenderer(sample, variable_mapping).render(template)
         except KeyError as exc:
             missing_field = exc.args[0]
             raise ValueError(f"{field_name} missing field: {missing_field}") from exc
@@ -272,7 +302,7 @@ class LLMInferenceMapper(Mapper):
             prompt = sample.get(self.prompt_field)
         elif self.prompt_template:
             try:
-                prompt = _SamplePromptRenderer(sample).render(self.prompt_template)
+                prompt = _SamplePromptRenderer(sample, self.variable_mapping).render(self.prompt_template)
             except KeyError as exc:
                 missing_field = exc.args[0]
                 raise ValueError(f"prompt_template missing field: {missing_field}") from exc
@@ -525,12 +555,14 @@ class _SamplePromptRenderer:
         r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\*\]|\[\])?)*)\s*}}"
     )
 
-    def __init__(self, sample: dict[str, Any]):
+    def __init__(self, sample: dict[str, Any], variable_mapping: dict[str, str] | None = None):
         self.sample = sample
+        self.variable_mapping = variable_mapping or {}
 
     def render(self, template: str) -> str:
         context = self._wrap_value(self.sample, "")
         context["sample"] = self._wrap_value(self.sample, "")
+        self._apply_variable_mapping(context)
         render_template = self._rewrite_legacy_array_paths(template, context)
         env = Environment(
             autoescape=False,
@@ -544,6 +576,14 @@ class _SamplePromptRenderer:
             raise
         except UndefinedError as exc:
             raise KeyError(self._extract_undefined_name(str(exc))) from exc
+
+    def _apply_variable_mapping(self, context: dict[str, Any]) -> None:
+        for alias, source_field in self.variable_mapping.items():
+            try:
+                value = self.sample[source_field]
+            except KeyError:
+                raise KeyError(f"variable_mapping.{alias} -> {source_field}") from None
+            context[alias] = self._wrap_value(value, source_field)
 
     def _rewrite_legacy_array_paths(self, template: str, context: Mapping[str, Any]) -> str:
         legacy_context = {}
