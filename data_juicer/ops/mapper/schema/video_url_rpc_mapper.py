@@ -8,13 +8,14 @@ import os
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pyarrow as pa
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
 from data_juicer.ops.condition_utils import RowCondition
+from data_juicer.ops.mapper.rpc_rate_limiter import RpcQpsRateLimiter, validate_qps
 from data_juicer.utils.metrics_utils import emit_rpc_qps
 
 OP_NAME = "video_url_rpc_mapper"
@@ -22,6 +23,9 @@ OP_NAME = "video_url_rpc_mapper"
 AUTH_PREFIX_V1 = "VARCH1-HMAC-SHA1"
 DEFAULT_SIGN_TTL = 3600
 DEFAULT_EULER_CALLER = "ad.ai.data_forge_merlin"
+DEFAULT_MAX_VIDS_PER_REQUEST = 20
+MAX_VIDS_PER_REQUEST = 60
+ALLOWED_URL_TYPES = {6, 7, 8, 9, 10, 11}
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -42,14 +46,31 @@ class VideoUrlRpcMapper(Mapper):
         cluster: str = "aweme",
         caller: str = DEFAULT_EULER_CALLER,
         outside_url: bool = False,
+        url_type: int | None = None,
+        ssl: bool | None = None,
+        cdn_type: int | None = None,
         ttl: int | None = None,
+        indate: int | None = None,
         need_ori: bool = True,
+        max_vids_per_request: int = DEFAULT_MAX_VIDS_PER_REQUEST,
+        qps: int | None = None,
         timeout: float = 5.0,
         retry_times: int = 3,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if max_vids_per_request <= 0 or max_vids_per_request > MAX_VIDS_PER_REQUEST:
+            raise ValueError(f"max_vids_per_request must be between 1 and {MAX_VIDS_PER_REQUEST}")
+        resolved_url_type = url_type if url_type is not None else (6 if outside_url else 9)
+        if resolved_url_type not in ALLOWED_URL_TYPES:
+            raise ValueError(f"url_type must be one of {sorted(ALLOWED_URL_TYPES)}")
+        if ttl is not None and indate is not None and ttl != indate:
+            raise ValueError("ttl and indate cannot both be set to different values; use indate")
+        resolved_indate = indate if indate is not None else ttl
+        if resolved_indate is not None and resolved_indate <= 0:
+            raise ValueError("indate must be positive when set")
+        validate_qps(qps)
         self.vid_key = vid_key
         self.output_key = output_key
         self.condition = condition
@@ -61,11 +82,18 @@ class VideoUrlRpcMapper(Mapper):
         self.cluster = cluster
         self.caller = caller
         self.outside_url = outside_url
+        self.url_type = resolved_url_type
+        self.ssl = ssl if ssl is not None else resolved_url_type in (6, 7, 11)
+        self.cdn_type = cdn_type
         self.ttl = ttl
+        self.indate = resolved_indate
         self.need_ori = need_ori
+        self.max_vids_per_request = max_vids_per_request
+        self.qps = qps
         self.timeout = timeout
         self.retry_times = retry_times
         self.method = "MGetPlayInfosV2"
+        self._rpc_qps_limiter = RpcQpsRateLimiter(qps, self._rate_limiter_key())
         self._client = None
         self._api_thrift = None
         self._logged_first_batch = False
@@ -76,6 +104,10 @@ class VideoUrlRpcMapper(Mapper):
         state["_client"] = None
         state["_api_thrift"] = None
         return state
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        self._rpc_qps_limiter.setup_ray_actor()
+        return super().run(dataset, exporter=exporter, tracer=tracer)
 
     def process_single(self, sample):
         if not self._condition.matches(sample):
@@ -94,11 +126,31 @@ class VideoUrlRpcMapper(Mapper):
         self._log_first_batch(rows)
         started_at = time.monotonic()
         stats = Counter()
-        output_rows = []
-        for row in rows:
-            output_row, row_stats = self._process_single_with_stats(row)
-            output_rows.append(output_row)
-            stats.update(row_stats)
+        output_rows = [dict(row) for row in rows]
+        pending: list[tuple[int, str]] = []
+        for idx, row in enumerate(output_rows):
+            if not self._condition.matches(row):
+                row[self.output_key] = []
+                stats.update({"condition_skipped": 1})
+                continue
+            stats.update({"condition_matched": 1})
+            vid = row.get(self.vid_key)
+            if vid is None or str(vid).strip() == "":
+                row[self.output_key] = []
+                stats.update({"status_empty_vid": 1})
+                continue
+            pending.append((idx, str(vid)))
+
+        for start in range(0, len(pending), self.max_vids_per_request):
+            chunk = pending[start : start + self.max_vids_per_request]
+            url_map, status_map, attempts = self._resolve_urls_batch_with_status([vid for _, vid in chunk])
+            stats["rpc_attempts"] += attempts
+            for row_idx, vid in chunk:
+                urls = url_map.get(vid, [])
+                output_rows[row_idx][self.output_key] = urls
+                status = status_map.get(vid, "error")
+                stats[f"status_{status}"] += 1
+                stats["urls"] += len(urls)
         self._log_batch_summary(stats, time.monotonic() - started_at)
         if return_arrow:
             return self._rows_to_table(output_rows, input_schema)
@@ -123,34 +175,49 @@ class VideoUrlRpcMapper(Mapper):
     def _resolve_urls_with_status(self, vid: Any) -> tuple[list[str], str, int]:
         if vid is None or str(vid).strip() == "":
             return [], "empty_vid", 0
+        vid = str(vid)
+        url_map, status_map, attempts = self._resolve_urls_batch_with_status([vid])
+        return url_map.get(vid, []), status_map.get(vid, "error"), attempts
+
+    def _resolve_urls_batch_with_status(self, vids: Sequence[str]) -> tuple[dict[str, list[str]], dict[str, str], int]:
+        vids = [str(vid) for vid in vids if str(vid).strip()]
+        if not vids:
+            return {}, {}, 0
         attempts = max(1, self.retry_times)
         last_err = None
         for attempt in range(1, attempts + 1):
             try:
-                urls = self._resolve_url_once(str(vid))
-                return urls, "success" if urls else "empty_result", attempt
+                url_map = self._resolve_urls_batch_once(vids)
+                status_map = {vid: "success" if url_map.get(vid) else "empty_result" for vid in vids}
+                return url_map, status_map, attempt
             except Exception as err:
                 last_err = err
                 continue
         self._log_rpc_failure(last_err, attempts)
-        return [], "error", attempts
+        return {vid: [] for vid in vids}, {vid: "error" for vid in vids}, attempts
 
     def _resolve_url_once(self, vid: str) -> list[str]:
+        return self._resolve_urls_batch_once([vid]).get(vid, [])
+
+    def _resolve_urls_batch_once(self, vids: Sequence[str]) -> dict[str, list[str]]:
         client, api_thrift = self._get_client_and_thrift()
-        req = self._build_request(api_thrift, vid)
+        req = self._build_request(api_thrift, list(vids))
         try:
+            self._rpc_qps_limiter.acquire()
             resp = client.MGetPlayInfosV2(req)
-            video_info = self._get_video_info(resp, vid)
-            if video_info is None:
-                urls = []
-            else:
+            urls_by_vid = {}
+            for vid in vids:
+                video_info = self._get_video_info(resp, vid)
+                if video_info is None:
+                    urls_by_vid[vid] = []
+                    continue
                 url = getattr(video_info, "MainUrl", None)
-                urls = [url] if url else []
+                urls_by_vid[vid] = [url] if url else []
         except Exception:
             emit_rpc_qps(op_name=self._name, target=self._target(), method=self.method, status="error")
             raise
         emit_rpc_qps(op_name=self._name, target=self._target(), method=self.method, status="success")
-        return urls
+        return urls_by_vid
 
     def _get_client_and_thrift(self):
         if self._client is None or self._api_thrift is None:
@@ -180,15 +247,16 @@ class VideoUrlRpcMapper(Mapper):
             client.use(env_middleware)
         return client, api_thrift
 
-    def _build_request(self, api_thrift, vid: str):
+    def _build_request(self, api_thrift, vids: str | Sequence[str]):
         req = api_thrift.MGetPlayInfosV2Request()
-        req.VIDs = [vid]
+        req.VIDs = [vids] if isinstance(vids, str) else list(vids)
         req.FilterParams = api_thrift.FilterParams(
             NeedDefinition=self._definition_value(api_thrift, self.quality_preference)
         )
-        req.UrlParams = api_thrift.UrlParams(UrlType=6 if self.outside_url else 9)
-        if self.ttl is not None:
-            req.UrlParams.Indate = self.ttl
+        req.UrlParams = api_thrift.UrlParams(UrlType=self.url_type)
+        self._set_optional_thrift_field(req.UrlParams, "SSL", self.ssl)
+        self._set_optional_thrift_field(req.UrlParams, "CdnType", self.cdn_type)
+        self._set_optional_thrift_field(req.UrlParams, "Indate", self.indate)
         req.NeedOriginalVideoInfo = self.need_ori
         req.Identity = api_thrift.Identity(
             IdentityInfo=sign_rpc_request(
@@ -203,6 +271,17 @@ class VideoUrlRpcMapper(Mapper):
     @staticmethod
     def _expand_env(value: str) -> str:
         return os.path.expandvars(value) if isinstance(value, str) else value
+
+    @staticmethod
+    def _set_optional_thrift_field(obj, name: str, value: Any) -> None:
+        if value is None:
+            return
+        thrift_spec = getattr(obj, "thrift_spec", None)
+        if thrift_spec is not None:
+            field_names = {spec[1] for spec in thrift_spec.values() if spec is not None}
+            if name not in field_names:
+                return
+        setattr(obj, name, value)
 
     @staticmethod
     def _definition_value(api_thrift, quality_preference: str):
@@ -242,6 +321,9 @@ class VideoUrlRpcMapper(Mapper):
     def _target(self) -> str:
         return f"sd://{self.psm}?cluster={self.cluster}"
 
+    def _rate_limiter_key(self) -> str:
+        return f"{self._target()}:{self.method}"
+
     def _log_first_batch(self, rows: list[dict[str, Any]]) -> None:
         if self._logged_first_batch:
             return
@@ -249,7 +331,8 @@ class VideoUrlRpcMapper(Mapper):
         empty_vid = sum(1 for row in rows if row.get(self.vid_key) is None or str(row.get(self.vid_key)).strip() == "")
         logger.info(
             "VideoUrlRpcMapper first worker batch: pid={}, rows={}, condition_matched={}, empty_vid_rows={}, "
-            "psm={}, cluster={}, method={}, quality_preference={}, retry_times={}, timeout={}",
+            "psm={}, cluster={}, method={}, quality_preference={}, max_vids_per_request={}, qps={}, "
+            "url_type={}, retry_times={}, timeout={}",
             os.getpid(),
             len(rows),
             matched,
@@ -258,6 +341,9 @@ class VideoUrlRpcMapper(Mapper):
             self.cluster,
             self.method,
             self.quality_preference,
+            self.max_vids_per_request,
+            self.qps,
+            self.url_type,
             self.retry_times,
             self.timeout,
         )

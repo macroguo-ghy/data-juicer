@@ -739,6 +739,69 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_notification_hooks_accept_interval_strings_without_interval_seconds_interface(self):
+        for interval in ('30s', '10min', '1h', None):
+            with self.subTest(interval=interval):
+                hook_cfg = {
+                    'type': 'adc_lark_message',
+                    'enabled': True,
+                    'ctx': {
+                        'userAccount': 'submitter',
+                        'apiBase': 'https://ai-data-center.bytedance.net/api',
+                    },
+                    'template_id': 'template-id',
+                }
+                if interval is not None:
+                    hook_cfg['interval'] = interval
+                config_data = {
+                    'project_name': 'notification_hooks_interval',
+                    'executor_type': 'ray',
+                    'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                    'notification_hooks': [hook_cfg],
+                    'process': [],
+                }
+
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.safe_dump(config_data, f)
+                    temp_config = f.name
+
+                try:
+                    cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+                    self.assertEqual(cfg.notification_hooks[0].interval, interval)
+                    self.assertFalse(hasattr(cfg.notification_hooks[0], 'interval_seconds'))
+                finally:
+                    os.unlink(temp_config)
+
+    def test_notification_hooks_reject_invalid_interval_strings(self):
+        for interval in ('0s', 'abc', '10', '-1h'):
+            with self.subTest(interval=interval):
+                config_data = {
+                    'project_name': 'notification_hooks_bad_interval',
+                    'executor_type': 'ray',
+                    'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                    'notification_hooks': [{
+                        'type': 'adc_lark_message',
+                        'enabled': True,
+                        'interval': interval,
+                        'ctx': {
+                            'userAccount': 'submitter',
+                            'apiBase': 'https://ai-data-center.bytedance.net/api',
+                        },
+                        'template_id': 'template-id',
+                    }],
+                    'process': [],
+                }
+
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.safe_dump(config_data, f)
+                    temp_config = f.name
+
+                try:
+                    with self.assertRaisesRegex(ValueError, 'notification_hooks.*interval'):
+                        init_configs(args=['--config', temp_config], load_configs_only=True)
+                finally:
+                    os.unlink(temp_config)
+
     def test_structured_export_targets_rejects_target_conflict(self):
         config_data = {
             'project_name': 'structured_export_targets_conflict',

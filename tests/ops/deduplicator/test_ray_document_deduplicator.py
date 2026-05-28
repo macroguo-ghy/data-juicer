@@ -1,5 +1,7 @@
 import pickle
+import types
 import unittest
+from unittest.mock import Mock, patch
 
 from data_juicer.core.data import NestedDataset as Dataset
 
@@ -24,6 +26,43 @@ class _FakeRemoteDedupSet:
         actor = _FakeDedupActor(len(cls.created))
         cls.created.append(actor)
         return actor
+
+
+class _FakeRemoteMethod:
+    def __init__(self, actor, method_name):
+        self.actor = actor
+        self.method_name = method_name
+
+    def remote(self, keys, row_ids):
+        ref = {
+            "actor_id": self.actor.actor_id,
+            "method": self.method_name,
+            "keys": list(keys),
+            "row_ids": list(row_ids),
+        }
+        self.actor.calls.append(ref)
+        return ref
+
+
+class _FakeBatchDedupActor:
+    def __init__(self, actor_id):
+        self.actor_id = actor_id
+        self.calls = []
+        self.is_unique_many = _FakeRemoteMethod(self, "is_unique_many")
+
+
+class _FakeBatchRemoteDedupSet:
+    created = []
+
+    @classmethod
+    def remote(cls):
+        actor = _FakeBatchDedupActor(len(cls.created))
+        cls.created.append(actor)
+        return actor
+
+
+class ActorUnavailableError(Exception):
+    pass
 
 
 class RayDocumentDeduplicatorTest(DataJuicerTestCaseBase):
@@ -104,6 +143,92 @@ class RayDocumentDeduplicatorTest(DataJuicerTestCaseBase):
                 [actor.actor_id for actor in task_backend._dedup_sets],
                 [0, 1, 2],
             )
+
+    def test_actor_backend_retries_same_future_after_get_timeout(self):
+        _FakeBatchRemoteDedupSet.created = []
+        backend = ActorBackend(
+            dedup_set_num=1,
+            RemoteDedupSet=_FakeBatchRemoteDedupSet,
+            actor_get_timeout=600,
+            actor_get_retry_times=2,
+        )
+
+        ray_get = Mock(side_effect=[TimeoutError("first wait timed out"), [True, False]])
+        with patch(
+            "data_juicer.ops.deduplicator.ray_basic_deduplicator.ray",
+            types.SimpleNamespace(get=ray_get),
+        ):
+            decisions = backend.is_unique_many(["a", "b"], ["row-a", "row-b"])
+
+        self.assertEqual(decisions, [True, False])
+        self.assertEqual(ray_get.call_count, 2)
+        self.assertEqual(ray_get.call_args_list[0].kwargs["timeout"], 600)
+        self.assertEqual(ray_get.call_args_list[1].kwargs["timeout"], 600)
+        self.assertIs(ray_get.call_args_list[0].args[0], ray_get.call_args_list[1].args[0])
+        self.assertEqual(len(_FakeBatchRemoteDedupSet.created[0].calls), 1)
+
+    def test_actor_backend_retries_same_future_after_actor_unavailable(self):
+        _FakeBatchRemoteDedupSet.created = []
+        backend = ActorBackend(
+            dedup_set_num=1,
+            RemoteDedupSet=_FakeBatchRemoteDedupSet,
+            actor_get_timeout=600,
+            actor_get_retry_times=2,
+        )
+
+        ray_get = Mock(side_effect=[ActorUnavailableError("temporarily unavailable"), [True, False]])
+        with patch(
+            "data_juicer.ops.deduplicator.ray_basic_deduplicator.ray",
+            types.SimpleNamespace(get=ray_get),
+        ):
+            decisions = backend.is_unique_many(["a", "b"], ["row-a", "row-b"])
+
+        self.assertEqual(decisions, [True, False])
+        self.assertEqual(ray_get.call_count, 2)
+        self.assertEqual(ray_get.call_args_list[0].kwargs["timeout"], 600)
+        self.assertEqual(ray_get.call_args_list[1].kwargs["timeout"], 600)
+        self.assertIs(ray_get.call_args_list[0].args[0], ray_get.call_args_list[1].args[0])
+        self.assertEqual(len(_FakeBatchRemoteDedupSet.created[0].calls), 1)
+
+    def test_actor_backend_raises_clear_error_after_get_timeouts(self):
+        _FakeBatchRemoteDedupSet.created = []
+        backend = ActorBackend(
+            dedup_set_num=1,
+            RemoteDedupSet=_FakeBatchRemoteDedupSet,
+            actor_get_timeout=600,
+            actor_get_retry_times=2,
+        )
+
+        ray_get = Mock(side_effect=TimeoutError("still waiting"))
+        with patch(
+            "data_juicer.ops.deduplicator.ray_basic_deduplicator.ray",
+            types.SimpleNamespace(get=ray_get),
+        ):
+            with self.assertRaisesRegex(
+                TimeoutError,
+                "Ray dedup actor call timed out.*shard_id=0.*rows=2.*attempts=2",
+            ):
+                backend.is_unique_many(["a", "b"], ["row-a", "row-b"])
+
+    def test_actor_backend_wraps_non_timeout_actor_errors(self):
+        _FakeBatchRemoteDedupSet.created = []
+        backend = ActorBackend(
+            dedup_set_num=1,
+            RemoteDedupSet=_FakeBatchRemoteDedupSet,
+            actor_get_timeout=600,
+            actor_get_retry_times=2,
+        )
+
+        ray_get = Mock(side_effect=RuntimeError("actor died"))
+        with patch(
+            "data_juicer.ops.deduplicator.ray_basic_deduplicator.ray",
+            types.SimpleNamespace(get=ray_get),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Ray dedup actor call failed.*shard_id=0.*actor died",
+            ):
+                backend.is_unique_many(["a"], ["row-a"])
 
     @TEST_TAG("ray")
     def test_global_deduplication_across_ray_blocks(self):

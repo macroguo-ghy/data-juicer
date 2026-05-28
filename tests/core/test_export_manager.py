@@ -340,6 +340,251 @@ class ExportManagerTest(unittest.TestCase):
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_accepts_target_concurrency_alias(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "parquet",
+                        "extra_args": {
+                            "columns": ["id", "videos"],
+                            "concurrency": 2,
+                        },
+                    },
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_b",
+                        "type": "parquet",
+                        "extra_args": {
+                            "columns": ["id", "extra"],
+                            "concurrency": 2,
+                        },
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.side_effect = [
+            (fake_filesystem, "/path/output_a"),
+            (fake_filesystem, "/path/output_b"),
+        ]
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["id", "videos", "extra"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["id", "videos", "extra"])
+
+        dataset.write_datasink.assert_called_once_with(datasink, ray_remote_args=None, concurrency=2)
+        _, kwargs = mock_fanout_datasink.call_args
+        self.assertEqual(kwargs["targets"][0]["columns"], ["id", "videos"])
+        self.assertEqual(kwargs["targets"][0]["extra_args"], {})
+        self.assertEqual(kwargs["targets"][1]["columns"], ["id", "extra"])
+        self.assertEqual(kwargs["targets"][1]["extra_args"], {})
+
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_rejects_conflicting_target_concurrency(
+        self,
+        mock_get_pyarrow_filesystem,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "parquet",
+                        "extra_args": {"concurrency": 1},
+                    },
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_b",
+                        "type": "parquet",
+                        "extra_args": {"concurrency": 2},
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.side_effect = [
+            (fake_filesystem, "/path/output_a"),
+            (fake_filesystem, "/path/output_b"),
+        ]
+        dataset = RayLikeDataset(["id"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(ValueError, "export.targets\\[\\]\\.extra_args\\.concurrency"):
+            manager.export(dataset, columns=["id"])
+
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_rejects_top_level_and_target_concurrency_conflict(
+        self,
+        mock_get_pyarrow_filesystem,
+    ):
+        cfg = self._make_cfg(
+            {
+                "extra_args": {"concurrency": 1},
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "parquet",
+                        "extra_args": {"concurrency": 2},
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        dataset = RayLikeDataset(["id"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+
+        with self.assertRaisesRegex(ValueError, "export.extra_args.concurrency"):
+            manager.export(dataset, columns=["id"])
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_stores_fanout_summary(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "jsonl",
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["text"])
+        dataset.write_datasink = MagicMock(
+            return_value={
+                "output_rows": 3,
+                "output_files": 1,
+                "output_bytes": 42,
+            }
+        )
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["text"])
+
+        self.assertEqual(manager.last_export_summary["output_rows"], 3)
+        self.assertEqual(manager.last_export_summary["output_files"], 1)
+        self.assertEqual(manager.last_export_summary["output_bytes"], 42)
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_stores_partial_summary_on_failure(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "jsonl",
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        datasink = MagicMock()
+        datasink.partial_write_summary.return_value = {
+            "partial": True,
+            "output_rows": 2,
+            "output_files": 1,
+            "output_bytes": 42,
+            "targets": [
+                {
+                    "path": "hdfs://cluster/path/output_a",
+                    "rows": 2,
+                    "output_files": 1,
+                    "output_bytes": 42,
+                }
+            ],
+        }
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["text"])
+        dataset.write_datasink = MagicMock(side_effect=RuntimeError("write failed"))
+
+        manager = ExportManager(cfg, executor_type="ray")
+        with self.assertRaisesRegex(RuntimeError, "write failed"):
+            manager.export(dataset, columns=["text"])
+
+        self.assertEqual(manager.last_export_summary["output_rows"], 2)
+        self.assertEqual(manager.last_export_summary["output_files"], 1)
+        self.assertEqual(manager.last_export_summary["output_bytes"], 42)
+        self.assertTrue(manager.last_export_summary["partial"])
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_current_export_summary_reads_active_fanout(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "jsonl",
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        datasink = MagicMock()
+        datasink.partial_write_summary.return_value = {
+            "partial": True,
+            "output_rows": 5,
+            "output_files": 1,
+            "output_bytes": 64,
+        }
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["text"])
+        observed = []
+
+        manager = ExportManager(cfg, executor_type="ray")
+
+        def write_datasink(*args, **kwargs):
+            observed.append(manager.current_export_summary())
+            return {"output_rows": 6, "output_files": 2, "output_bytes": 80}
+
+        dataset.write_datasink = MagicMock(side_effect=write_datasink)
+        manager.export(dataset, columns=["text"])
+
+        self.assertEqual(observed[0]["output_rows"], 5)
+        self.assertTrue(observed[0]["partial"])
+        self.assertEqual(manager.current_export_summary()["output_rows"], 6)
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
     def test_ray_local_multi_target_export_uses_local_filesystem(
         self,
         mock_get_pyarrow_filesystem,

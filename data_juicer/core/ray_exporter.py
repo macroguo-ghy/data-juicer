@@ -12,7 +12,10 @@ from data_juicer.core.io_utils import _is_ray_data_checkpoint_enabled, get_pyarr
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 from data_juicer.utils.file_utils import Sizes, byte_size_to_size_str
 from data_juicer.utils.model_utils import filter_arguments
+from data_juicer.utils.ray_task_kv_store import incr_task_kv, snapshot_task_kv
 from data_juicer.utils.webdataset_utils import reconstruct_custom_webdataset_format
+
+EXPORT_WRITE_STATS_NAMESPACE = "export_write_stats"
 
 
 def _dataset_columns_no_fetch(dataset):
@@ -52,6 +55,26 @@ def _json_default(value):
     if callable(isoformat):
         return isoformat()
     return str(value)
+
+
+def summarize_filesystem_path(filesystem, path: str) -> dict[str, int]:
+    from pyarrow.fs import FileSelector, FileType
+
+    info = filesystem.get_file_info(path)
+    if info.type is FileType.NotFound:
+        return {"output_files": 0, "output_bytes": 0}
+    if info.type is FileType.File:
+        return {"output_files": 1, "output_bytes": int(info.size or 0)}
+    if info.type is not FileType.Directory:
+        return {"output_files": 0, "output_bytes": 0}
+
+    selector = FileSelector(path, recursive=True)
+    file_infos = filesystem.get_file_info(selector)
+    files = [file_info for file_info in file_infos if file_info.type is FileType.File]
+    return {
+        "output_files": len(files),
+        "output_bytes": sum(int(file_info.size or 0) for file_info in files),
+    }
 
 
 try:
@@ -184,18 +207,30 @@ class RayHdfsFanoutDatasink(Datasink):
 
     def write(self, blocks, ctx):
         results = {target["index"]: 0 for target in self.targets}
-        for block_index, block in enumerate(blocks):
-            table = self._block_to_table(block)
-            for target in self.targets:
-                filtered_table = self._filter_table_for_target(table, target)
-                if filtered_table.num_rows == 0:
-                    continue
-                filtered_table = self._select_export_columns(filtered_table, target)
-                filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
-                output_path = posixpath.join(target["path"], filename)
-                self._write_table(target, filtered_table, output_path)
-                results[target["index"]] += filtered_table.num_rows
-        return results
+        partial_rows = {target["index"]: 0 for target in self.targets}
+        partial_files = {target["index"]: 0 for target in self.targets}
+        partial_bytes = {target["index"]: 0 for target in self.targets}
+        try:
+            for block_index, block in enumerate(blocks):
+                table = self._block_to_table(block)
+                for target in self.targets:
+                    filtered_table = self._filter_table_for_target(table, target)
+                    if filtered_table.num_rows == 0:
+                        continue
+                    filtered_table = self._select_export_columns(filtered_table, target)
+                    filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
+                    output_path = posixpath.join(target["path"], filename)
+                    self._write_table(target, filtered_table, output_path)
+                    metadata = self._summarize_written_file(target, output_path)
+                    target_index = target["index"]
+                    rows = filtered_table.num_rows
+                    results[target_index] += rows
+                    partial_rows[target_index] += rows
+                    partial_files[target_index] += metadata["output_files"]
+                    partial_bytes[target_index] += metadata["output_bytes"]
+            return results
+        finally:
+            self._record_partial_write_stats(partial_rows, partial_files, partial_bytes)
 
     def on_write_complete(self, write_result):
         from pyarrow.fs import FileType
@@ -211,6 +246,111 @@ class RayHdfsFanoutDatasink(Datasink):
             filesystem = target["filesystem"]
             if filesystem.get_file_info(target["path"]).type is not FileType.NotFound:
                 filesystem.delete_dir(target["path"])
+
+        target_summaries = []
+        for target in self.targets:
+            metadata = summarize_filesystem_path(target["filesystem"], target["path"])
+            target_summaries.append(
+                {
+                    "path": target["original_uri"],
+                    "rows": row_counts.get(target["index"], 0),
+                    **metadata,
+                }
+            )
+        summary = {
+            "output_rows": sum(target["rows"] for target in target_summaries),
+            "output_files": sum(target["output_files"] for target in target_summaries),
+            "output_bytes": sum(target["output_bytes"] for target in target_summaries),
+            "targets": target_summaries,
+        }
+        self.last_write_summary = summary
+        return summary
+
+    def partial_write_summary(self):
+        stats = snapshot_task_kv(namespace=EXPORT_WRITE_STATS_NAMESPACE) or {}
+        target_summaries = []
+        for target in self.targets:
+            metadata = self._safe_summarize_target(target)
+            target_index = target["index"]
+            target_summaries.append(
+                {
+                    "path": target["original_uri"],
+                    "rows": self._optional_int(stats.get(self._stats_key("targets", target_index, "rows"))),
+                    **metadata,
+                }
+            )
+
+        output_rows = self._optional_int(stats.get(self._stats_key("output_rows")))
+        output_files = self._sum_optional_values(target["output_files"] for target in target_summaries)
+        output_bytes = self._sum_optional_values(target["output_bytes"] for target in target_summaries)
+        return {
+            "partial": True,
+            "output_rows": output_rows,
+            "output_files": output_files,
+            "output_bytes": output_bytes,
+            "targets": target_summaries,
+        }
+
+    def _record_partial_write_stats(self, partial_rows, partial_files, partial_bytes):
+        deltas = {}
+        for target in self.targets:
+            target_index = target["index"]
+            rows = partial_rows.get(target_index, 0)
+            files = partial_files.get(target_index, 0)
+            bytes_written = partial_bytes.get(target_index, 0)
+            if rows:
+                deltas[self._stats_key("output_rows")] = deltas.get(self._stats_key("output_rows"), 0) + rows
+                deltas[self._stats_key("targets", target_index, "rows")] = rows
+            if files:
+                deltas[self._stats_key("output_files")] = deltas.get(self._stats_key("output_files"), 0) + files
+                deltas[self._stats_key("targets", target_index, "output_files")] = files
+            if bytes_written:
+                deltas[self._stats_key("output_bytes")] = (
+                    deltas.get(self._stats_key("output_bytes"), 0) + bytes_written
+                )
+                deltas[self._stats_key("targets", target_index, "output_bytes")] = bytes_written
+        if not deltas:
+            return
+        try:
+            for key, delta in deltas.items():
+                incr_task_kv(key, delta, namespace=EXPORT_WRITE_STATS_NAMESPACE, wait=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to record partial Ray fan-out export stats: {}", exc)
+
+    def _stats_key(self, *parts) -> str:
+        return ".".join(["fanout", self.write_uuid, *(str(part) for part in parts)])
+
+    @staticmethod
+    def _summarize_written_file(target, output_path: str) -> dict[str, int]:
+        try:
+            return summarize_filesystem_path(target["filesystem"], output_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect written file metadata for {}: {}", output_path, exc)
+            return {"output_files": 1, "output_bytes": 0}
+
+    @staticmethod
+    def _optional_int(value):
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _sum_optional_values(values):
+        values = list(values)
+        if any(value is None for value in values):
+            return None
+        return sum(values)
+
+    @staticmethod
+    def _safe_summarize_target(target):
+        try:
+            return summarize_filesystem_path(target["filesystem"], target["path"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect partial fan-out export metadata for {}: {}", target["original_uri"], exc)
+            return {"output_files": None, "output_bytes": None}
 
     @staticmethod
     def _block_to_table(block):

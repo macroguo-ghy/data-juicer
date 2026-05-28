@@ -91,13 +91,14 @@ class JsonObjectMapperTest(unittest.TestCase):
         row = JsonObjectMapper(
             output_key="extra",
             include_all=True,
-            exclude_keys=["date", "__dj__stats__", "__dj__source_file__"],
+            exclude_keys=["date"],
         ).process_single(
             {
                 "item_id": 1,
                 "date": "20260525",
                 "__dj__stats__": {"x": 1},
                 "__dj__source_file__": "part-0",
+                "__dj__custom__": "internal",
                 "payload": {"a": [1]},
                 "raw": b"abc",
             }
@@ -109,6 +110,16 @@ class JsonObjectMapperTest(unittest.TestCase):
         self.assertEqual(extra["raw"], "abc")
         self.assertNotIn("date", extra)
         self.assertNotIn("__dj__stats__", extra)
+        self.assertNotIn("__dj__source_file__", extra)
+        self.assertNotIn("__dj__custom__", extra)
+
+    def test_include_keys_can_explicitly_include_internal_keys(self):
+        row = JsonObjectMapper(
+            output_key="extra",
+            include_keys=["__dj__stats__", "item_id"],
+        ).process_single({"item_id": 1, "__dj__stats__": {"x": 1}})
+
+        self.assertEqual(json.loads(row["extra"]), {"__dj__stats__": {"x": 1}, "item_id": 1})
 
     def test_arrow_batch_jsonifies_scalar_bytes_list_and_dict(self):
         table = pa.table(
@@ -303,6 +314,49 @@ class VideoUrlRpcMapperTest(unittest.TestCase):
         self.assertEqual(req.Identity.IdentityInfo, "signed")
         self.assertEqual(sign.call_args.args[:2], ("ak-env", "sk-env"))
 
+    def test_build_request_uses_doc_url_params_for_batched_vids(self):
+        mapper = VideoUrlRpcMapper(
+            ak="ak",
+            sk="sk",
+            url_type=8,
+            ssl=True,
+            cdn_type=2,
+            indate=3600,
+            max_vids_per_request=20,
+        )
+        api_thrift = types.SimpleNamespace(
+            MGetPlayInfosV2Request=lambda: types.SimpleNamespace(),
+            FilterParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            UrlParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            Identity=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            VideoDefinition=types.SimpleNamespace(V720P="720p"),
+        )
+
+        with patch(
+            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.sign_rpc_request",
+            return_value="signed",
+        ):
+            req = mapper._build_request(api_thrift, ["vid-a", "vid-b"])
+
+        self.assertEqual(req.VIDs, ["vid-a", "vid-b"])
+        self.assertEqual(req.UrlParams.UrlType, 8)
+        self.assertTrue(req.UrlParams.SSL)
+        self.assertEqual(req.UrlParams.CdnType, 2)
+        self.assertEqual(req.UrlParams.Indate, 3600)
+
+    def test_constructor_validates_video_rpc_limits(self):
+        self.assertEqual(VideoUrlRpcMapper().max_vids_per_request, 20)
+        with self.assertRaisesRegex(ValueError, "max_vids_per_request"):
+            VideoUrlRpcMapper(max_vids_per_request=0)
+        with self.assertRaisesRegex(ValueError, "max_vids_per_request"):
+            VideoUrlRpcMapper(max_vids_per_request=61)
+        with self.assertRaisesRegex(ValueError, "url_type"):
+            VideoUrlRpcMapper(url_type=5)
+        with self.assertRaisesRegex(ValueError, "qps"):
+            VideoUrlRpcMapper(qps=0)
+        with self.assertRaisesRegex(ValueError, "indate"):
+            VideoUrlRpcMapper(ttl=1, indate=2)
+
     def test_builds_720p_signed_request_and_extracts_url(self):
         created = []
 
@@ -344,6 +398,62 @@ class VideoUrlRpcMapperTest(unittest.TestCase):
         self.assertEqual(req.FilterParams.NeedDefinition, mapper._api_thrift.VideoDefinition.V720P)
         self.assertIn("VARCH1-HMAC-SHA1:ak:", req.Identity.IdentityInfo)
         self.assertEqual(sign.call_args.args[3], "ad.ai.data_forge_merlin")
+
+    def test_batched_processing_uses_v2_batch_size_and_qps_limiter(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def MGetPlayInfosV2(self, req):
+                self.calls.append(list(req.VIDs))
+                video_infos = {}
+                for vid in req.VIDs:
+                    meta = types.SimpleNamespace(Width=1280, Definition="720p", EncodedType="transcoded")
+                    video = types.SimpleNamespace(MainUrl=f"http://video/{vid}", VideoMeta=meta)
+                    video_infos[vid] = types.SimpleNamespace(
+                        Status=10,
+                        OriginalVideoInfo=None,
+                        VideoInfos=[video],
+                    )
+                return types.SimpleNamespace(VideoInfos=video_infos)
+
+        api_thrift = types.SimpleNamespace(
+            MGetPlayInfosV2Request=lambda: types.SimpleNamespace(),
+            FilterParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            UrlParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            Identity=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            VideoDefinition=types.SimpleNamespace(V720P="720p"),
+        )
+        limiter_acquires = []
+        client = FakeClient()
+        mapper = VideoUrlRpcMapper(
+            vid_key="vid",
+            output_key="urls",
+            max_vids_per_request=2,
+            qps=10,
+        )
+        mapper._client = client
+        mapper._api_thrift = api_thrift
+        mapper._rpc_qps_limiter = types.SimpleNamespace(acquire=lambda: limiter_acquires.append("acquire"))
+
+        with patch(
+            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.sign_rpc_request",
+            return_value="signed",
+        ), patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.emit_rpc_qps"):
+            output = mapper.process_batched({"vid": ["vid-a", "vid-b", "", "vid-c", "vid-d"]})
+
+        self.assertEqual(client.calls, [["vid-a", "vid-b"], ["vid-c", "vid-d"]])
+        self.assertEqual(limiter_acquires, ["acquire", "acquire"])
+        self.assertEqual(
+            output["urls"],
+            [
+                ["http://video/vid-a"],
+                ["http://video/vid-b"],
+                [],
+                ["http://video/vid-c"],
+                ["http://video/vid-d"],
+            ],
+        )
 
     def test_condition_false_does_not_create_client(self):
         with patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.VideoUrlRpcMapper._create_client_and_thrift") as create:
@@ -432,14 +542,19 @@ class VideoUrlRpcMapperTest(unittest.TestCase):
             "item_duration": [10, 20, 30],
         }
 
-        with patch.object(VideoUrlRpcMapper, "_resolve_url_once", side_effect=[["http://video"], RuntimeError("secret")]), patch(
-            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.emit_rpc_qps",
-        ), patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.logger") as logger:
+        with patch.object(
+            VideoUrlRpcMapper,
+            "_resolve_urls_batch_once",
+            side_effect=[{"vid-ok": ["http://video"]}, RuntimeError("secret")],
+        ), patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.emit_rpc_qps"), patch(
+            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.logger"
+        ) as logger:
             mapper = VideoUrlRpcMapper(
                 vid_key="vid",
                 output_key="urls",
                 condition="item_duration <= 60",
                 retry_times=1,
+                max_vids_per_request=1,
             )
             output = mapper.process_batched(rows)
 
@@ -577,11 +692,25 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
         ])
 
     def test_ecom_video_hdfs_parquet_configs_use_targets_and_new_ops(self):
-        config_names = [
-            "ecom_video_item_video_hdfs_parquet.yaml",
-            "ecom_video_item_video_hdfs_parquet_demo_test.yaml",
-        ]
-        for config_name in config_names:
+        expected_tuning = {
+            "ecom_video_item_video_hdfs_parquet.yaml": {
+                "override_num_blocks": 4096,
+                "num_proc": 1024,
+                "dedup_set_num": 512,
+                "actor_get_timeout": 600,
+                "actor_get_retry_times": 2,
+                "max_vids_per_request": 20,
+            },
+            "ecom_video_item_video_hdfs_parquet_demo_test.yaml": {
+                "override_num_blocks": 32,
+                "num_proc": 8,
+                "dedup_set_num": 16,
+                "actor_get_timeout": 600,
+                "actor_get_retry_times": 2,
+                "max_vids_per_request": 20,
+            },
+        }
+        for config_name, tuning in expected_tuning.items():
             with self.subTest(config_name=config_name):
                 path = os.path.join(
                     os.getcwd(),
@@ -594,36 +723,69 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
 
                 cfg = init_configs(args=["--config", path], load_configs_only=True)
                 ops = load_ops(cfg.process)
+                op_classes = [op.__class__.__name__ for op in ops]
+                dataset_config = cfg.dataset["configs"][0] if isinstance(cfg.dataset, dict) else cfg.dataset.configs[0]
 
                 self.assertFalse(cfg.ray_data_checkpoint.enabled)
+                self.assertEqual(dataset_config["override_num_blocks"], tuning["override_num_blocks"])
                 self.assertEqual(
-                    [op.__class__.__name__ for op in ops],
+                    op_classes,
                     [
                         "JsonObjectMapper",
                         "FieldAssignMapper",
                         "VideoUrlRpcMapper",
                         "DownloadFileMapper",
                         "BytesExactDedupMapper",
-                        "FieldDropMapper",
                         "RayFieldDedupPipeline",
-                        "DownloadFileMapper",
-                        "BytesExactDedupMapper",
                     ],
                 )
+                self.assertEqual(op_classes.count("DownloadFileMapper"), 1)
+                self.assertEqual(op_classes.count("BytesExactDedupMapper"), 1)
+                self.assertNotIn("FieldDropMapper", op_classes)
+                self.assertEqual(ops[0].batch_size, 200)
+                self.assertEqual(ops[0].num_proc, tuning["num_proc"])
+                self.assertEqual(ops[1].batch_size, 200)
+                self.assertEqual(ops[1].num_proc, tuning["num_proc"])
+                for op in ops[2:]:
+                    self.assertEqual(op.batch_size, 50)
+                    self.assertEqual(op.num_proc, tuning["num_proc"])
+                    self.assertEqual(op.num_cpus, 1)
                 self.assertEqual(ops[2].condition, "item_duration <= 60")
                 self.assertEqual(ops[2].vid_key, "vid")
                 self.assertEqual(ops[2].quality_preference, "720p")
+                self.assertEqual(ops[2].max_vids_per_request, tuning["max_vids_per_request"])
+                self.assertEqual(ops[2].qps, 50000)
                 self.assertTrue(ops[3].resume_download)
+                self.assertEqual(ops[3].download_field, "urls")
+                self.assertEqual(ops[3].save_field, "videos")
+                self.assertEqual(ops[3].max_concurrent, 1)
                 self.assertEqual(ops[4].bytes_key, "videos")
-                self.assertEqual(ops[5].fields, ["videos"])
-                self.assertEqual(ops[6].condition, "item_duration <= 60 and valid_video_count > 0")
-                self.assertEqual(ops[6].field_key, "md5")
-                self.assertEqual(ops[6].id_key, "id")
-                self.assertTrue(ops[7].resume_download)
-                self.assertEqual(ops[7].download_field, "urls")
-                self.assertEqual(ops[7].save_field, "videos")
-                self.assertEqual(ops[8].condition, "item_duration <= 60")
-                self.assertEqual(ops[8].bytes_key, "videos")
+                self.assertEqual(ops[5].condition, "item_duration <= 60 and valid_video_count > 0")
+                self.assertEqual(ops[5].field_key, "md5")
+                self.assertEqual(ops[5].id_key, "id")
+                self.assertEqual(ops[5].backend._dedup_set_num_config, tuning["dedup_set_num"])
+                self.assertEqual(ops[5].backend.actor_get_timeout, tuning["actor_get_timeout"])
+                self.assertEqual(ops[5].backend.actor_get_retry_times, tuning["actor_get_retry_times"])
+                notification_hooks = cfg.notification_hooks
+                if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
+                    self.assertEqual(len(notification_hooks), 1)
+                    hook = notification_hooks[0]
+                    self.assertEqual(hook.type, "adc_lark_message")
+                    self.assertTrue(hook.enabled)
+                    self.assertEqual(hook.interval, "5min")
+                    self.assertEqual(hook.ctx.userAccount, "guohongyu.7")
+                    self.assertEqual(hook.ctx.apiBase, "https://ai-data-center.bytedance.net/api")
+                    self.assertEqual(hook.template_id, "AAqtelosmXDl1")
+                    self.assertEqual(
+                        [stat.key for stat in hook.custom_stats],
+                        [
+                            "dedup.eligible_rows",
+                            "dedup.unique_rows",
+                            "dedup.duplicate_rows",
+                        ],
+                    )
+                else:
+                    self.assertEqual(notification_hooks, [])
                 targets = cfg.export["targets"] if isinstance(cfg.export, dict) else cfg.export.targets
                 self.assertEqual(len(targets), 2)
                 self.assertEqual(targets[0]["target"] if isinstance(targets[0], dict) else targets[0].target, "hdfs")
@@ -632,8 +794,14 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 second_filter = targets[1]["filter_condition"] if isinstance(targets[1], dict) else targets[1].filter_condition
                 self.assertIn("valid_video_count > 0", first_filter)
                 self.assertEqual(second_filter, "item_duration > 60")
-                first_columns = targets[0]["extra_args"]["columns"] if isinstance(targets[0], dict) else targets[0].extra_args["columns"]
-                second_columns = targets[1]["extra_args"]["columns"] if isinstance(targets[1], dict) else targets[1].extra_args["columns"]
+                first_extra_args = targets[0]["extra_args"] if isinstance(targets[0], dict) else targets[0].extra_args
+                second_extra_args = targets[1]["extra_args"] if isinstance(targets[1], dict) else targets[1].extra_args
+                self.assertEqual(first_extra_args["concurrency"], 1)
+                self.assertEqual(second_extra_args["concurrency"], 1)
+                first_columns = first_extra_args["columns"]
+                second_columns = second_extra_args["columns"]
+                self.assertIn("videos", first_columns)
+                self.assertIn("videos", second_columns)
                 self.assertNotIn("duplicate_id_list", first_columns)
                 self.assertNotIn("duplicate_id_list", second_columns)
 

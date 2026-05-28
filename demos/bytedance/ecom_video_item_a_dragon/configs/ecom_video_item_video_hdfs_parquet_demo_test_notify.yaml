@@ -1,0 +1,101 @@
+# Ray notification hook online E2E smoke.
+project_name: "ray-notification-hook-e2e"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+notification_hooks:
+  - type: adc_lark_message
+    enabled: true
+    interval: 30s
+    on_success: true
+    on_failure: true
+    fail_on_error: false
+    ctx:
+      userAccount: "guohongyu.7"
+      apiBase: "https://ai-data-center.bytedance.net/api"
+    template_id: "AAqtelosmXDl1"
+    custom_fields:
+      biz: "ecom_video_notify_e2e"
+      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/ray_notify_e2e_20260528110254/parquet"
+    custom_stats:
+      - key: "dedup.eligible_rows"
+        label: "可参与去重行数"
+      - key: "dedup.unique_rows"
+        label: "唯一行数"
+      - key: "dedup.duplicate_rows"
+        label: "重复行数"
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path:
+        - "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid/part-00999-b82f6a0e-7a71-4705-adc5-c2b0e27c4a48-c000.snappy.parquet"
+        - "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid/part-00998-b82f6a0e-7a71-4705-adc5-c2b0e27c4a48-c000.snappy.parquet"
+      format: "parquet"
+      limit: 80
+      override_num_blocks: 4
+      skip_zero_row_group_files: true
+
+process:
+  - json_object_mapper:
+      batch_size: 200
+      num_proc: 8
+      num_cpus: 1
+      output_key: "extra"
+      include_all: true
+      exclude_keys:
+        - "date"
+  - field_assign_mapper:
+      batch_size: 200
+      num_proc: 8
+      num_cpus: 1
+      assignments:
+        id: {template: "item_id-{item_id}", type: "string"}
+        source: {value: "ecom_video_raw_data", type: "string"}
+        type: {value: "video", type: "string"}
+        has_audio_in_video: {value: true, type: "bool"}
+        texts: {value: null, type: "string"}
+        audios: {value: null, type: "string"}
+        images: {value: null, type: "string"}
+        urls: {value: [], type: "list<string>"}
+        videos: {value: [], type: "list<binary>"}
+        md5: {template: "ray_notify_e2e_{item_id}", type: "string"}
+        valid_video_count: {value: 1, type: "int64"}
+  - python_lambda_mapper:
+      lambda_str: "lambda d: (__import__('time').sleep(0.5) or d.update({'md5': 'ray_notify_e2e_' + str(d.get('item_id') or d.get('id') or d.get('vid') or abs(hash(str(d))))}) or d)"
+      batch_size: 1
+      num_proc: 1
+      num_cpus: 1
+  - ray_field_dedup_pipeline:
+      batch_size: 50
+      num_proc: 8
+      num_cpus: 1
+      condition: "valid_video_count > 0"
+      field_key: "md5"
+      id_key: "id"
+      dedup_set_num: 4
+
+export:
+  targets:
+    - target: "hdfs"
+      type: "parquet"
+      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/ray_notify_e2e_20260528110254/parquet"
+      mode: "overwrite"
+      filter_condition: "valid_video_count > 0"
+      filesystem: "pyarrow"
+      extra_args:
+        concurrency: 1
+        columns:
+          - "id"
+          - "urls"
+          - "videos"
+          - "md5"
+          - "extra"
+          - "source"
+          - "texts"
+          - "audios"
+          - "images"
+          - "has_audio_in_video"
+          - "type"

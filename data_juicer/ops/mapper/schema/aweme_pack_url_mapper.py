@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
+from data_juicer.ops.mapper.rpc_rate_limiter import RpcQpsRateLimiter, validate_qps
 from data_juicer.utils.metrics_utils import emit_rpc_qps
 
 OP_NAME = "aweme_pack_url_mapper"
@@ -79,6 +80,7 @@ class AwemePackUrlMapper(Mapper):
         source_cluster: str = DEFAULT_SOURCE_CLUSTER,
         target_psm: str = DEFAULT_TARGET_PSM,
         target_cluster: str = DEFAULT_TARGET_CLUSTER,
+        qps: int | None = None,
         timeout: float = 5.0,
         *args,
         **kwargs,
@@ -93,6 +95,7 @@ class AwemePackUrlMapper(Mapper):
         :param source_cluster: caller/source cluster for Euler Base and env.
         :param target_psm: target RPC service PSM.
         :param target_cluster: target RPC service cluster.
+        :param qps: Ray job-level PackImage RPC request QPS limit.
         :param timeout: Euler RPC timeout in seconds.
         :param args: extra args.
         :param kwargs: extra args.
@@ -102,6 +105,7 @@ class AwemePackUrlMapper(Mapper):
             raise ValueError("uri_field must be provided")
         if not url_field:
             raise ValueError("url_field must be provided")
+        validate_qps(qps)
         self.uri_field = uri_field
         self.url_field = url_field
         self.image_expire_second = image_expire_second
@@ -109,7 +113,9 @@ class AwemePackUrlMapper(Mapper):
         self.source_cluster = source_cluster
         self.target_psm = target_psm
         self.target_cluster = target_cluster
+        self.qps = qps
         self.timeout = timeout
+        self._rpc_qps_limiter = RpcQpsRateLimiter(qps, self._rate_limiter_key())
         self._client = None
         self._api_thrift = None
 
@@ -118,6 +124,10 @@ class AwemePackUrlMapper(Mapper):
         state["_client"] = None
         state["_api_thrift"] = None
         return state
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        self._rpc_qps_limiter.setup_ray_actor()
+        return super().run(dataset, exporter=exporter, tracer=tracer)
 
     def process_single(self, sample):
         sample[self.url_field] = self._resolve_urls(sample.get(self.uri_field))
@@ -145,6 +155,7 @@ class AwemePackUrlMapper(Mapper):
         )
         target = _build_target(self.target_psm, self.target_cluster)
         try:
+            self._rpc_qps_limiter.acquire()
             resp = client.PackImage(req)
             status_code = self._base_resp_status_code(resp)
         except Exception:
@@ -198,6 +209,9 @@ class AwemePackUrlMapper(Mapper):
             Caller=self.source_psm,
             Extra={"cluster": self.source_cluster},
         )
+
+    def _rate_limiter_key(self) -> str:
+        return f"{_build_target(self.target_psm, self.target_cluster)}:PackImage"
 
     @staticmethod
     def _base_resp_status_code(resp) -> int:

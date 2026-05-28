@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Union
 
+from loguru import logger
+
 from data_juicer.utils.constant import HashKeys
 from data_juicer.utils.lazy_loader import LazyLoader
 
@@ -10,6 +12,9 @@ ray = LazyLoader("ray")
 redis = LazyLoader("redis")
 
 MERSENNE_PRIME = (1 << 61) - 1
+DEFAULT_ACTOR_GET_TIMEOUT = 600.0
+DEFAULT_ACTOR_GET_RETRY_TIMES = 2
+_RETRYABLE_RAY_GET_ERROR_NAMES = {"GetTimeoutError", "ActorUnavailableError"}
 
 
 class DedupSet:
@@ -66,13 +71,25 @@ class ActorBackend(Backend):
     the same deduplication state.
     """
 
-    def __init__(self, dedup_set_num: Union[int, str], RemoteDedupSet=None):
+    def __init__(
+        self,
+        dedup_set_num: Union[int, str],
+        RemoteDedupSet=None,
+        actor_get_timeout: float | None = DEFAULT_ACTOR_GET_TIMEOUT,
+        actor_get_retry_times: int = DEFAULT_ACTOR_GET_RETRY_TIMES,
+    ):
         # Store config but don't create actors yet.
         # dedup_set_num can be int or "auto".
         self._dedup_set_num_config = dedup_set_num
         self._RemoteDedupSet = RemoteDedupSet
         self._dedup_sets = None  # Lazy fallback for direct backend use.
         self._actual_dedup_set_num = None
+        self.actor_get_timeout = None if actor_get_timeout is None else float(actor_get_timeout)
+        if self.actor_get_timeout is not None and self.actor_get_timeout <= 0:
+            raise ValueError("actor_get_timeout must be positive or None")
+        self.actor_get_retry_times = int(actor_get_retry_times)
+        if self.actor_get_retry_times < 1:
+            raise ValueError("actor_get_retry_times must be at least 1")
 
     @property
     def dedup_set_num(self):
@@ -115,6 +132,7 @@ class ActorBackend(Backend):
             if hasattr(actor, "is_unique_many"):
                 grouped_calls.append(
                     (
+                        dedup_set_id,
                         items,
                         actor.is_unique_many.remote(
                             [item[1] for item in items],
@@ -125,6 +143,7 @@ class ActorBackend(Backend):
             else:
                 grouped_calls.append(
                     (
+                        dedup_set_id,
                         items,
                         [
                             actor.is_unique.remote(md5_value)
@@ -134,11 +153,69 @@ class ActorBackend(Backend):
                 )
 
         decisions = [False] * len(md5_values)
-        for items, future_or_futures in grouped_calls:
-            shard_decisions = ray.get(future_or_futures)
+        for dedup_set_id, items, future_or_futures in grouped_calls:
+            shard_decisions = self._get_actor_result(
+                future_or_futures,
+                dedup_set_id=dedup_set_id,
+                row_count=len(items),
+            )
             for (index, _, _), decision in zip(items, shard_decisions):
                 decisions[index] = decision
         return decisions
+
+    def _get_actor_result(self, future_or_futures, dedup_set_id: int, row_count: int):
+        last_retryable_error = None
+        for attempt in range(1, self.actor_get_retry_times + 1):
+            try:
+                if self.actor_get_timeout is None:
+                    return ray.get(future_or_futures)
+                return ray.get(future_or_futures, timeout=self.actor_get_timeout)
+            except Exception as exc:
+                if not self._is_retryable_ray_get_error(exc):
+                    raise RuntimeError(
+                        "Ray dedup actor call failed: "
+                        f"shard_id={dedup_set_id}, rows={row_count}, "
+                        f"dedup_set_num={self.dedup_set_num}, error={exc}"
+                    ) from exc
+                last_retryable_error = exc
+                if attempt < self.actor_get_retry_times:
+                    logger.warning(
+                        "Ray dedup actor result unavailable; waiting again on the same ObjectRef: "
+                        "shard_id={}, rows={}, dedup_set_num={}, timeout_seconds={}, "
+                        "error_type={}, attempt={}/{}",
+                        dedup_set_id,
+                        row_count,
+                        self.dedup_set_num,
+                        self.actor_get_timeout,
+                        exc.__class__.__name__,
+                        attempt,
+                        self.actor_get_retry_times,
+                    )
+
+        if self._is_ray_get_timeout(last_retryable_error):
+            raise TimeoutError(
+                "Ray dedup actor call timed out: "
+                f"shard_id={dedup_set_id}, rows={row_count}, "
+                f"dedup_set_num={self.dedup_set_num}, timeout_seconds={self.actor_get_timeout}, "
+                f"attempts={self.actor_get_retry_times}"
+            ) from last_retryable_error
+
+        raise RuntimeError(
+            "Ray dedup actor call failed after retries: "
+            f"shard_id={dedup_set_id}, rows={row_count}, dedup_set_num={self.dedup_set_num}, "
+            f"error_type={last_retryable_error.__class__.__name__}, "
+            f"attempts={self.actor_get_retry_times}, error={last_retryable_error}"
+        ) from last_retryable_error
+
+    @staticmethod
+    def _is_ray_get_timeout(exc: BaseException | None) -> bool:
+        return isinstance(exc, TimeoutError) or (
+            exc is not None and exc.__class__.__name__ == "GetTimeoutError"
+        )
+
+    @classmethod
+    def _is_retryable_ray_get_error(cls, exc: BaseException) -> bool:
+        return cls._is_ray_get_timeout(exc) or exc.__class__.__name__ in _RETRYABLE_RAY_GET_ERROR_NAMES
 
 
 class RedisBackend(Backend):
@@ -170,6 +247,8 @@ class RayBasicDeduplicator(Filter):
         backend: str = "ray_actor",
         redis_address: str = "redis://localhost:6379",
         dedup_set_num: Union[int, str] = "auto",
+        actor_get_timeout: float | None = DEFAULT_ACTOR_GET_TIMEOUT,
+        actor_get_retry_times: int = DEFAULT_ACTOR_GET_RETRY_TIMES,
         *args,
         **kwargs,
     ):
@@ -178,6 +257,8 @@ class RayBasicDeduplicator(Filter):
         :param backend: the backend for dedup, either 'ray_actor' or 'redis'
         :param redis_address: the address of redis server
         :param dedup_set_num: number of dedup set actors, or 'auto' to use CPU/2
+        :param actor_get_timeout: max seconds to wait for a Ray actor result, or None to wait forever
+        :param actor_get_retry_times: number of times to wait on the same actor result before failing
         :param args: extra args
         :param kwargs: extra args
         """
@@ -186,7 +267,11 @@ class RayBasicDeduplicator(Filter):
         self.backend = backend
         if backend == "ray_actor":
             # Pass dedup_set_num directly - ActorBackend handles "auto" lazily
-            self.backend = ActorBackend(dedup_set_num)
+            self.backend = ActorBackend(
+                dedup_set_num,
+                actor_get_timeout=actor_get_timeout,
+                actor_get_retry_times=actor_get_retry_times,
+            )
         elif backend == "redis":
             # TODO: add a barrier to ensure that flushdb is performed before
             # the operator is called
