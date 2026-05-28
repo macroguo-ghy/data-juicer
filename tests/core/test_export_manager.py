@@ -325,6 +325,7 @@ class ExportManagerTest(unittest.TestCase):
                         "target": "hdfs",
                         "path": "hdfs://cluster/path/output_b",
                         "type": "parquet",
+                        "compact": False,
                         "extra_args": {"columns": ["id", "md5"]},
                     },
                 ],
@@ -353,6 +354,41 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(kwargs["targets"][0]["extra_args"], {"compression": "zstd"})
         self.assertNotIn("compact", kwargs["targets"][0]["extra_args"])
         self.assertNotIn("compact", kwargs["targets"][1])
+
+    @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
+    @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
+    def test_ray_hdfs_multi_target_export_defaults_compact_to_datasink(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_fanout_datasink,
+    ):
+        cfg = self._make_cfg(
+            {
+                "targets": [
+                    {
+                        "target": "hdfs",
+                        "path": "hdfs://cluster/path/output_a",
+                        "type": "jsonl",
+                    },
+                ],
+            }
+        )
+        fake_filesystem = MagicMock()
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/path/output_a")
+        datasink = object()
+        mock_fanout_datasink.return_value = datasink
+        dataset = RayLikeDataset(["id"])
+        dataset.write_datasink = MagicMock()
+
+        manager = ExportManager(cfg, executor_type="ray")
+        manager.export(dataset, columns=["id"])
+
+        _, kwargs = mock_fanout_datasink.call_args
+        compact = kwargs["targets"][0]["compact"]
+        self.assertEqual(compact["target_bytes_per_file"], 64 * 1024 * 1024)
+        self.assertEqual(compact["target_rows_per_file"], 200000)
+        self.assertEqual(compact["max_buffer_bytes"], 128 * 1024 * 1024)
+        self.assertNotIn("compact", kwargs["targets"][0]["extra_args"])
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")

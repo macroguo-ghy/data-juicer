@@ -806,12 +806,8 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     self.assertEqual(export_concurrency, 1)
                     self.assertNotIn("concurrency", first_extra_args)
                     self.assertNotIn("concurrency", second_extra_args)
-                    first_has_compact = (
-                        "compact" in targets[0]
-                        if isinstance(targets[0], dict)
-                        else hasattr(targets[0], "compact")
-                    )
-                    self.assertFalse(first_has_compact)
+                    first_compact = targets[0]["compact"] if isinstance(targets[0], dict) else targets[0].compact
+                    self.assertIs(first_compact, False)
                     second_compact = targets[1]["compact"] if isinstance(targets[1], dict) else targets[1].compact
                     self.assertEqual(
                         second_compact["target_bytes_per_file"]

@@ -311,7 +311,7 @@ class ExportManager:
                 "columns": target_columns,
                 "extra_args": target_extra_args,
             }
-            if "compact" in target:
+            if target.get("compact"):
                 writer_target["compact"] = target["compact"]
             targets.append(writer_target)
 

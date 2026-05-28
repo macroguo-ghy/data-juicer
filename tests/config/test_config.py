@@ -660,7 +660,7 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
-    def test_structured_export_targets_accepts_compact_config(self):
+    def test_structured_export_targets_defaults_compact_config(self):
         config_data = {
             'project_name': 'structured_export_targets_compact',
             'executor_type': 'ray',
@@ -698,7 +698,78 @@ class ConfigTest(DataJuicerTestCaseBase):
             self.assertEqual(compact.target_bytes_per_file, 64 * 1024 * 1024)
             self.assertEqual(compact.target_rows_per_file, 200000)
             self.assertEqual(compact.max_buffer_bytes, 128 * 1024 * 1024)
-            self.assertFalse(hasattr(cfg.export.targets[1], 'compact'))
+            default_compact = cfg.export.targets[1].compact
+            self.assertEqual(default_compact.target_bytes_per_file, 64 * 1024 * 1024)
+            self.assertEqual(default_compact.target_rows_per_file, 200000)
+            self.assertEqual(default_compact.max_buffer_bytes, 128 * 1024 * 1024)
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_targets_accepts_compact_defaults_and_opt_out(self):
+        config_data = {
+            'project_name': 'structured_export_targets_default_compact',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/default_compact',
+                        'type': 'jsonl',
+                    },
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/disabled_compact',
+                        'type': 'jsonl',
+                        'compact': False,
+                    },
+                ],
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            compact = cfg.export.targets[0].compact
+            self.assertEqual(compact.target_bytes_per_file, 64 * 1024 * 1024)
+            self.assertEqual(compact.target_rows_per_file, 200000)
+            self.assertEqual(compact.max_buffer_bytes, 128 * 1024 * 1024)
+            self.assertIs(cfg.export.targets[1].compact, False)
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_targets_accepts_compact_partial_overrides(self):
+        config_data = {
+            'project_name': 'structured_export_targets_compact_partial',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'local',
+                        'path': './outputs/fanout_local/compact_partial',
+                        'type': 'jsonl',
+                        'compact': {'target_rows_per_file': 1000},
+                    },
+                ],
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            compact = cfg.export.targets[0].compact
+            self.assertEqual(compact.target_bytes_per_file, 64 * 1024 * 1024)
+            self.assertEqual(compact.target_rows_per_file, 1000)
+            self.assertEqual(compact.max_buffer_bytes, 128 * 1024 * 1024)
         finally:
             os.unlink(temp_config)
 
@@ -710,8 +781,7 @@ class ConfigTest(DataJuicerTestCaseBase):
         }
         cases = [
             ({'compact': True}, 'compact'),
-            ({'compact': {'target_bytes_per_file': 1024}}, 'target_rows_per_file'),
-            ({'compact': {'target_rows_per_file': 100}}, 'target_bytes_per_file'),
+            ({'compact': None}, 'compact'),
             ({'compact': {'target_bytes_per_file': 0, 'target_rows_per_file': 100}}, 'positive integer'),
             ({'compact': {'target_bytes_per_file': 1024, 'target_rows_per_file': False}}, 'positive integer'),
             ({

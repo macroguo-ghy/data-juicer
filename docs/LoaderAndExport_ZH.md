@@ -486,7 +486,7 @@ export:
 
 `export.targets` 用于 Ray 文件 fan-out 写出，不能和 `export.target` 同时配置。第一版支持 `executor_type: ray`、`target: hdfs/local`、`type: parquet/jsonl`，且同一个 `targets` 列表里的所有 target 的 `target` 与 `type` 必须一致。HDFS path 必须以 `hdfs://` 开头；local path 支持相对路径、绝对路径或 `file://`，但该目录必须对所有 Ray worker 可见。每个 target 可配置 `filter_condition`，语法复用 `general_field_filter` 的字段比较表达式；同一行可命中多个 target。任一写出失败都会让任务失败；`mode: append` 仍是 at-least-once，task retry 或用户重跑可能产生重复 part 文件。启用 `ray_data_checkpoint.enabled: true` 时，fan-out 只支持所有 target 都显式配置 `mode: append`；未配置 `mode` 仍按默认 `error_if_exists` 处理并被拒绝。
 
-fan-out target 可显式 opt-in 小文件合并：
+fan-out target 默认启用小文件合并，默认配置为 `target_bytes_per_file: 67108864`、`target_rows_per_file: 200000`、`max_buffer_bytes: 134217728`。如果某个 target 不适合缓存待写数据，例如包含较大的二进制 payload，可在该 target 顶层显式设置 `compact: false` 关闭：
 
 ```yaml
 executor_type: ray
@@ -496,18 +496,24 @@ export:
   targets:
     - target: hdfs
       type: parquet
+      path: hdfs://cluster/path/short_video
+      mode: overwrite
+      filter_condition: "item_duration <= 60 and valid_video_count > 0"
+      filesystem: pyarrow
+      compact: false
+      extra_args:
+        columns: ["id", "urls", "videos"]
+    - target: hdfs
+      type: parquet
       path: hdfs://cluster/path/long_video
       mode: overwrite
       filter_condition: "item_duration > 60"
       filesystem: pyarrow
-      compact:
-        target_bytes_per_file: 67108864
-        target_rows_per_file: 200000
       extra_args:
         columns: ["id", "urls", "videos"]
 ```
 
-`compact` 只能配置在 `export.targets[]` 顶层，必须是字典；不支持 `compact: true` 或 `enabled`。`target_bytes_per_file` 与 `target_rows_per_file` 都必填且必须为正整数；`max_buffer_bytes` 可选，默认 `2 * target_bytes_per_file`，且必须大于等于 `target_bytes_per_file`。compact 支持 fan-out 的 `parquet` 与 `jsonl`，同一个任务里 compact target 与非 compact target 可以混用；如果配置多个 compact target，归一化后的 compact 配置必须完全一致，否则会提前报错。
+如需覆盖默认值，可在 target 顶层设置 `compact: {}` 或字典字段；缺省字段会从默认值补齐。`compact` 只能配置在 `export.targets[]` 顶层，不支持 `compact: true` 或 `enabled`。`target_bytes_per_file`、`target_rows_per_file`、`max_buffer_bytes` 都必须为正整数；`max_buffer_bytes` 默认 `2 * target_bytes_per_file`，且必须大于等于 `target_bytes_per_file`。compact 支持 fan-out 的 `parquet` 与 `jsonl`，同一个任务里 compact target 与 `compact: false` target 可以混用；如果配置多个 compact target，归一化后的 compact 配置必须完全一致，否则会提前报错。
 
 compact 是每个 Ray writer task 内的 best-effort buffer，不做全局 strict repartition，也不承诺全局文件大小、文件数或顺序。compact 文件名形如 `part-{target_index}-{write_uuid}-{task_idx}-compact-{flush_idx}.{parquet|jsonl}`。flush 条件为 OR：buffer bytes 达到 `target_bytes_per_file`、buffer rows 达到 `target_rows_per_file`、或当前 write task 结束仍有残留。单个 filtered table 超过 `max_buffer_bytes` 时会按行 slice；单行超限时只能单行单文件并输出 warning。Parquet compact 使用 Arrow table buffer 并按 `table.nbytes` 估算 bytes；JSONL compact 使用序列化后的 UTF-8 bytes 估算。Parquet schema 不兼容时会先 flush 已有 buffer，再从当前 table 开始，并在 export summary 的 compact 字段里记录 `schema_mismatch_flushes`。
 

@@ -338,7 +338,7 @@ class RayHdfsFanoutDatasink(Datasink):
         self.write_uuid = uuid.uuid4().hex
         targets = [dict(target) for target in targets]
         normalize_fanout_target_compacts(targets)
-        compact_configs = [target["compact"] for target in targets if "compact" in target]
+        compact_configs = [target["compact"] for target in targets if target.get("compact")]
         self.compact_config = compact_configs[0] if compact_configs else None
         for index, target in enumerate(targets):
             condition = target.get("condition", target.get("filter_condition", ""))
