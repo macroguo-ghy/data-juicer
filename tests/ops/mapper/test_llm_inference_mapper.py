@@ -619,6 +619,8 @@ process:
             "user-query",
             "1query",
             "user query",
+            "sample.foo",
+            'sample["foo"]',
         ]
 
         for alias in invalid_aliases:
@@ -634,6 +636,22 @@ process:
                         },
                         ctx=self._ctx(),
                     )
+
+    def test_variable_mapping_alias_supports_jinja_unicode_name(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ 用户问题 }}",
+            variable_mapping={
+                "用户问题": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
 
     def test_sample_root_takes_precedence_over_sample_field(self):
         op = LLMInferenceMapper(

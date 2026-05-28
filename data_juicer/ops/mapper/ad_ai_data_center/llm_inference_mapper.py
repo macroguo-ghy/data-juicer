@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from jinja2 import Environment, StrictUndefined, UndefinedError
+from jinja2 import Environment, StrictUndefined, TemplateSyntaxError, UndefinedError, nodes
 from loguru import logger
 
 from data_juicer.ops.base_op import OPERATORS, Mapper
@@ -29,7 +29,6 @@ TEST_CARD_NOTIFICATION_TEMPLATE_ID = "AAqt1lQ72dVxK"
 SUBMIT_PATH = "/openapi/synthesis/llm-inference/submit"
 RESULT_PATH = "/openapi/synthesis/llm-inference/result"
 DEFAULT_SYSTEM_PROMPT = "你是一个数据合成助手。"
-JINJA_VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -219,12 +218,23 @@ class LLMInferenceMapper(Mapper):
         for alias, source_field in variable_mapping.items():
             if not isinstance(alias, str) or not alias:
                 raise ValueError("variable_mapping keys must be non-empty strings")
-            if JINJA_VARIABLE_NAME_PATTERN.fullmatch(alias) is None:
+            if not LLMInferenceMapper._is_jinja_variable_name(alias):
                 raise ValueError("variable_mapping keys must be valid Jinja variable names")
             if alias == "sample":
                 raise ValueError("variable_mapping key sample is reserved")
             if not isinstance(source_field, str) or not source_field:
                 raise ValueError("variable_mapping values must be non-empty strings")
+
+    @staticmethod
+    def _is_jinja_variable_name(alias: str) -> bool:
+        try:
+            parsed = Environment().parse("{{ " + alias + " }}")
+        except TemplateSyntaxError:
+            return False
+        if len(parsed.body) != 1 or not isinstance(parsed.body[0], nodes.Output):
+            return False
+        output_nodes = parsed.body[0].nodes
+        return len(output_nodes) == 1 and isinstance(output_nodes[0], nodes.Name)
 
     def before_operator_started(self, dataset=None, context=None):
         try:
