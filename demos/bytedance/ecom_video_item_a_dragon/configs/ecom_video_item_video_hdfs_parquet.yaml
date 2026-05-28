@@ -131,7 +131,7 @@ process:
 
 export:
   extra_args:
-    concurrency: 1
+    concurrency: 128
   targets:
     - target: "hdfs"
       type: "parquet"
@@ -159,6 +159,7 @@ export:
       mode: "overwrite"
       filter_condition: "item_duration > 60"
       filesystem: "pyarrow"
+      compact: false
       extra_args:
         columns:
           - "id"
