@@ -530,6 +530,7 @@ class _SamplePromptRenderer:
 
     def render(self, template: str) -> str:
         context = self._wrap_value(self.sample, "")
+        context["sample"] = self._wrap_value(self.sample, "")
         render_template = self._rewrite_legacy_array_paths(template, context)
         env = Environment(
             autoescape=False,
