@@ -337,6 +337,58 @@ class TaskNotificationTest(unittest.TestCase):
                 [{"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 0}],
             )
 
+    @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
+    def test_manager_computes_ratio_custom_stats(self):
+        cfg = SimpleNamespace(
+            notification_hooks=[
+                self._hook_cfg(
+                    interval=None,
+                    custom_stats=[
+                        {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数"},
+                        {
+                            "key": "rpc.video_url_rpc_mapper.failure_rate",
+                            "label": "RPC 失败率",
+                            "type": "ratio",
+                            "numerator": "rpc.video_url_rpc_mapper.failed_count",
+                            "denominator": "rpc.video_url_rpc_mapper.total_count",
+                        },
+                    ],
+                )
+            ],
+            job_id="job-1",
+            project_name="project",
+            executor_type="ray",
+            export_path="hdfs://cluster/output",
+            work_dir="/unused",
+        )
+        collector = RuntimeStatsCollector()
+        collector.snapshot = MagicMock(
+            return_value={
+                "rpc.video_url_rpc_mapper.total_count": 20,
+                "rpc.video_url_rpc_mapper.failed_count": 3,
+            }
+        )
+        manager = TaskNotificationManager(cfg, stats_collector=collector)
+
+        manager.finish(success=True)
+
+        variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+        self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failed_count"], 3)
+        self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failure_rate"], "15.00%")
+        self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate"], "15.00%")
+        self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate_text"], "15.00%")
+        self.assertEqual(
+            variables["customStats"],
+            [
+                {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数", "value": 3},
+                {
+                    "key": "rpc.video_url_rpc_mapper.failure_rate",
+                    "label": "RPC 失败率",
+                    "value": "15.00%",
+                },
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -375,19 +375,35 @@ class TaskNotificationManager:
 
     def _selected_custom_stats(self) -> dict[str, Any]:
         stats = self.stats_collector.snapshot()
-        requested = self._requested_custom_stat_keys()
-        if not requested:
+        configured = self._configured_custom_stat_items()
+        if not configured:
             return stats
-        return {key: stats.get(key, 0) for key in requested}
+        selected = {}
+        for item in configured:
+            key = item.get("key")
+            if not key:
+                continue
+            if _is_ratio_custom_stat(item):
+                selected[key] = _format_ratio_custom_stat(
+                    stats.get(item.get("numerator") or item.get("numerator_key"), 0),
+                    stats.get(item.get("denominator") or item.get("denominator_key"), 0),
+                    item,
+                )
+            else:
+                selected[key] = stats.get(key, 0)
+        return selected
 
-    def _requested_custom_stat_keys(self) -> list[str]:
-        keys = []
+    def _configured_custom_stat_items(self) -> list[dict[str, Any]]:
+        items = []
+        seen = set()
         for entry in self._hooks:
             for item in entry["cfg"].get("custom_stats") or []:
-                key = item if isinstance(item, str) else item.get("key") if isinstance(item, dict) else None
-                if key and key not in keys:
-                    keys.append(key)
-        return keys
+                normalized = {"key": item} if isinstance(item, str) else dict(item) if isinstance(item, dict) else {}
+                key = normalized.get("key")
+                if key and key not in seen:
+                    seen.add(key)
+                    items.append(normalized)
+        return items
 
     def _heartbeat_loop(self, interval: int) -> None:
         while not self._stop_event.wait(interval):
@@ -560,6 +576,29 @@ def _format_optional_value(value: Any) -> str:
     if value is None:
         return "unknown"
     return str(value)
+
+
+def _is_ratio_custom_stat(item: dict[str, Any]) -> bool:
+    return item.get("type") == "ratio" or (
+        (item.get("numerator") or item.get("numerator_key"))
+        and (item.get("denominator") or item.get("denominator_key"))
+    )
+
+
+def _format_ratio_custom_stat(numerator: Any, denominator: Any, item: dict[str, Any]) -> str | float:
+    try:
+        numerator = float(numerator or 0)
+    except (TypeError, ValueError):
+        numerator = 0.0
+    try:
+        denominator = float(denominator or 0)
+    except (TypeError, ValueError):
+        denominator = 0.0
+    ratio = 0.0 if denominator <= 0 else numerator / denominator
+    precision = int(item.get("precision", 2))
+    if item.get("format", "percent") == "number":
+        return round(ratio, precision)
+    return f"{ratio * 100:.{precision}f}%"
 
 
 def _format_url_variable(value: Any) -> dict[str, str]:

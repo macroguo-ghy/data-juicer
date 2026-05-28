@@ -2,7 +2,7 @@ import os
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pyarrow as pa
 
@@ -170,6 +170,40 @@ class MetricsUtilsTest(unittest.TestCase):
         self.assertEqual(calls[1][3], 12.0)
         self.assertEqual(calls[2][0], "store")
         self.assertEqual(calls[2][3], 34.5)
+
+    @patch("data_juicer.utils.metrics_utils._emit_rate_counter")
+    @patch("data_juicer.utils.metrics_utils.incr_task_kv")
+    def test_qps_metrics_update_runtime_operation_counts(self, incr_mock, _emit_mock):
+        metrics_utils.emit_rpc_qps(op_name="video_url_rpc_mapper", target="svc", method="M", status="success")
+        metrics_utils.emit_rpc_qps(op_name="video_url_rpc_mapper", target="svc", method="M", status="error")
+        metrics_utils.emit_vlm_qps(op_name="vlm_api_response_mapper", target="host", method="/v1", status="success")
+        metrics_utils.record_runtime_operation_counts(
+            "download",
+            op_name="download_file_mapper",
+            total=10,
+            success=9,
+            failed=1,
+        )
+
+        incr_mock.assert_has_calls(
+            [
+                call("rpc.total_count", 1, namespace="runtime_stats", wait=False),
+                call("rpc.video_url_rpc_mapper.total_count", 1, namespace="runtime_stats", wait=False),
+                call("rpc.success_count", 1, namespace="runtime_stats", wait=False),
+                call("rpc.video_url_rpc_mapper.success_count", 1, namespace="runtime_stats", wait=False),
+                call("rpc.failed_count", 1, namespace="runtime_stats", wait=False),
+                call("rpc.video_url_rpc_mapper.failed_count", 1, namespace="runtime_stats", wait=False),
+                call("download.total_count", 10, namespace="runtime_stats", wait=False),
+                call("download.download_file_mapper.total_count", 10, namespace="runtime_stats", wait=False),
+                call("download.success_count", 9, namespace="runtime_stats", wait=False),
+                call("download.download_file_mapper.success_count", 9, namespace="runtime_stats", wait=False),
+                call("download.failed_count", 1, namespace="runtime_stats", wait=False),
+                call("download.download_file_mapper.failed_count", 1, namespace="runtime_stats", wait=False),
+                call("vlm.success_count", 1, namespace="runtime_stats", wait=False),
+                call("vlm.vlm_api_response_mapper.success_count", 1, namespace="runtime_stats", wait=False),
+            ],
+            any_order=True,
+        )
 
     def test_emit_dedup_rows_uses_counter_value_and_stable_tags(self):
         calls = []

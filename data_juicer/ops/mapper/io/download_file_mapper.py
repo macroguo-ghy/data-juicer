@@ -15,6 +15,7 @@ from data_juicer.utils.metrics_utils import (
     emit_download_bytes,
     emit_download_latency_ms,
     emit_download_qps,
+    record_runtime_operation_counts,
 )
 
 from ...base_op import OPERATORS, Mapper
@@ -384,6 +385,13 @@ class DownloadFileMapper(Mapper):
                 else:
                     reconstructed_path[orig_idx][sub_idx] = save_path
 
+        record_runtime_operation_counts(
+            "download",
+            op_name=self._name,
+            total=len(download_results),
+            success=len(download_results) - failed_count,
+            failed=failed_count,
+        )
         return save_field_contents, reconstructed_path, failed_count, failed_summary
 
     def process_batched(self, samples):

@@ -782,6 +782,14 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                             "dedup.eligible_rows",
                             "dedup.unique_rows",
                             "dedup.duplicate_rows",
+                            "rpc.video_url_rpc_mapper.total_count",
+                            "rpc.video_url_rpc_mapper.success_count",
+                            "rpc.video_url_rpc_mapper.failed_count",
+                            "rpc.video_url_rpc_mapper.failure_rate",
+                            "download.download_file_mapper.total_count",
+                            "download.download_file_mapper.success_count",
+                            "download.download_file_mapper.failed_count",
+                            "download.download_file_mapper.failure_rate",
                         ],
                     )
                 else:
