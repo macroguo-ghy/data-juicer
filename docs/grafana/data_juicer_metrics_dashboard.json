@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "Bosun-style Grafana dashboard for all Data-Juicer bytedance.metrics call sites: VLM, VLM adaptive rate limit, RPC/OCR/schema, and ecom media RPC metrics.",
+  "description": "Bosun-style Grafana dashboard for Data-Juicer bytedance.metrics call sites. Rate-counter metrics emitted via emit_rate_counter are rendered directly; do not enable Grafana compute-rate on them, otherwise values are double-rated and look too small.",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
@@ -52,7 +52,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Counter metric emitted by emit_vlm_qps. Tags: job_id, op_name, target, method, status.",
+      "description": "Rate-counter metric emitted by emit_vlm_qps. Render directly without Grafana compute-rate. Tags: job_id, op_name, target, method, status.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -104,9 +104,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "method": "*",
             "op_name": "*",
@@ -120,7 +119,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "VLM 请求 QPS（status/op/target/method）",
+      "title": "VLM 请求速率（status/op/target/method）",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -165,7 +164,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "VLM API error requests only. Source: vlm_api_response_mapper.",
+      "description": "VLM API error request rate. Render directly without Grafana compute-rate. Source: vlm_api_response_mapper.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -217,9 +216,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -234,7 +232,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "VLM 错误 QPS",
+      "title": "VLM 错误速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -279,7 +277,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Counter metric for VLM adaptive rate-limit events: 429, retry, exhausted, penalty, recovery.",
+      "description": "Rate-counter metric for VLM adaptive rate-limit events: 429, retry, exhausted, penalty, recovery. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -331,9 +329,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.rate_limit.event",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "event": "*",
             "job_id": "*",
@@ -349,7 +346,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "VLM Rate Limit 事件",
+      "title": "VLM Rate Limit 事件速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -519,7 +516,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Counter metric emitted by emit_rpc_qps. Current call sites include image_ocr_mapper, aweme_pack_url_mapper, item_id_image_url_mapper, and video_url_rpc_mapper.",
+      "description": "Rate-counter metric emitted by emit_rpc_qps. Current call sites include image_ocr_mapper, aweme_pack_url_mapper, item_id_image_url_mapper, and video_url_rpc_mapper. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -571,9 +568,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "method": "*",
             "op_name": "*",
@@ -587,7 +583,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "RPC 请求 QPS（status/op/target/method）",
+      "title": "RPC 请求速率（status/op/target/method）",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -632,7 +628,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "RPC-style operator errors only.",
+      "description": "RPC-style operator error rate. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -684,9 +680,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -701,7 +696,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "RPC 错误 QPS",
+      "title": "RPC 错误速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -746,7 +741,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Focused view for image_ocr_mapper RPC traffic.",
+      "description": "Focused rate-counter view for image_ocr_mapper RPC traffic. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -798,9 +793,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -815,7 +809,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "OCR RPC QPS",
+      "title": "OCR RPC 速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -860,7 +854,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Focused view for schema RPC traffic, especially item_id_image_url_mapper.",
+      "description": "Focused rate-counter view for schema RPC traffic, especially item_id_image_url_mapper. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -912,9 +906,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -929,7 +922,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Schema RPC QPS",
+      "title": "Schema RPC 速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -972,7 +965,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Focused view for aweme_pack_url_mapper PackImage RPC traffic.",
+      "description": "Focused rate-counter view for aweme_pack_url_mapper PackImage RPC traffic. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -1024,9 +1017,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "PackImage",
@@ -1041,7 +1033,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Aweme Pack RPC QPS",
+      "title": "Aweme Pack RPC 速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1084,7 +1076,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Focused view for video_url_rpc_mapper SmartPlayer MGetPlayInfosV2 RPC traffic.",
+      "description": "Focused rate-counter view for video_url_rpc_mapper SmartPlayer MGetPlayInfosV2 RPC traffic. Render directly without Grafana compute-rate.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -1136,9 +1128,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "MGetPlayInfosV2",
@@ -1153,7 +1144,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Video URL RPC QPS",
+      "title": "Video URL RPC 速率",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1199,6 +1190,592 @@
         "x": 0,
         "y": 42
       },
+      "id": 15,
+      "panels": [],
+      "title": "Download / IO",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Rate-counter metric emitted by download_file_mapper and s3_download_file_mapper for each attempted input URL/path. Render directly without Grafana compute-rate. URL values are intentionally not used as tags.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 43
+      },
+      "hiddenSeries": false,
+      "id": 16,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "download.$tag_status | $tag_op_name | $tag_scheme | $tag_save_mode",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.download.qps",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*",
+            "status": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载请求速率（status/op/scheme/save_mode）",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "$$hashKey": "object:475",
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "$$hashKey": "object:476",
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Failed download rate grouped by operator, URL scheme, and save mode. Render directly without Grafana compute-rate.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 43
+      },
+      "hiddenSeries": false,
+      "id": 17,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "$tag_job_id | $tag_op_name | $tag_scheme | $tag_save_mode",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.download.qps",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*",
+            "status": "failed"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载失败速率",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "$$hashKey": "object:475",
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "$$hashKey": "object:476",
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Per-file successful download byte count. Uses content length when in-memory bytes are available, otherwise saved file size.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "hiddenSeries": false,
+      "id": 18,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "avg",
+          "alias": "bytes.$tag_op_name | $tag_scheme | $tag_save_mode",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": false,
+          "metric": "ad.ai.data_forge.download.bytes",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载字节数",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "bytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Per-file download latency in milliseconds, including local file reads and remote/S3 download attempts.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "hiddenSeries": false,
+      "id": 19,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "avg",
+          "alias": "latency.$tag_status | $tag_op_name | $tag_scheme | $tag_save_mode",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": false,
+          "metric": "ad.ai.data_forge.download.latency_ms",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*",
+            "status": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载耗时 ms",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "ms",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      },
+      "id": 20,
+      "panels": [],
+      "title": "Dedup",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Rate-counter metric emitted by emit_dedup_rows. event=eligible means rows entering the dedup condition, unique means representative rows kept, and duplicate means rows dropped by dedup. Render directly without Grafana compute-rate; use runtime custom_stats or export summary for cumulative counts.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "hiddenSeries": false,
+      "id": 21,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": true,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "$tag_event | $tag_op_name | $tag_field_key",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "sum",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.dedup.rows",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "backend": "*",
+            "event": "*",
+            "field_key": "*",
+            "job_id": "*",
+            "op_name": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Dedup 行数速率（event/op/field）",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "rps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
       "id": 11,
       "panels": [],
       "title": "Dashboard Notes",
@@ -1210,7 +1787,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "This repository currently emits these rate-counter metric families plus the VLM rate-limit store metric. Use tags to filter by job_id, op_name, target, method, status, model, and event.",
+      "description": "Overview of Data-Juicer rate-counter metric families plus VLM rate-limit, download store, and dedup metrics. Rate-counter targets are rendered directly without Grafana compute-rate. Use tags to filter by job_id, op_name, target, method, status, model, event, scheme, save_mode, field_key, and backend.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -1221,7 +1798,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 69
       },
       "hiddenSeries": false,
       "id": 12,
@@ -1262,9 +1839,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "A",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -1285,9 +1861,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
-          "rateDownsampleType": "before_downsample",
           "refId": "B",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "job_id": "*",
             "method": "*",
@@ -1308,9 +1883,8 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.vlm.rate_limit.event",
-          "rateDownsampleType": "before_downsample",
           "refId": "C",
-          "shouldComputeRate": true,
+          "shouldComputeRate": false,
           "tags": {
             "event": "*",
             "job_id": "*",
@@ -1320,13 +1894,57 @@
             "target": "*"
           },
           "tenant": "default"
+        },
+        {
+          "aggregator": "sum",
+          "alias": "download.$tag_status",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.download.qps",
+          "refId": "D",
+          "shouldComputeRate": false,
+          "tags": {
+            "job_id": "*",
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*",
+            "status": "*"
+          },
+          "tenant": "default"
+        },
+        {
+          "aggregator": "sum",
+          "alias": "dedup.$tag_event",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.dedup.rows",
+          "refId": "E",
+          "shouldComputeRate": false,
+          "tags": {
+            "backend": "*",
+            "event": "*",
+            "field_key": "*",
+            "job_id": "*",
+            "op_name": "*"
+          },
+          "tenant": "default"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "全部 Data-Juicer 外发打点总览",
+      "title": "全部 Data-Juicer 外发打点速率总览",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1385,5 +2003,5 @@
   "timezone": "",
   "title": "Data-Juicer Metrics",
   "uid": "LUEhrf1vk",
-  "version": 8
+  "version": 9
 }

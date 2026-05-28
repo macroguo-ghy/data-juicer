@@ -122,6 +122,89 @@ class MetricsUtilsTest(unittest.TestCase):
         self.assertEqual(calls[1][4]["metric"], "effective_rpm")
         self.assertEqual(calls[1][4]["job_id"], "job-1")
 
+    def test_emit_download_metrics_use_counter_and_store(self):
+        calls = []
+
+        class FakeClient:
+            def __init__(self, prefix):
+                self.prefix = prefix
+
+            def emit_rate_counter(self, name, value, tags):
+                calls.append(("counter", self.prefix, name, value, tags))
+
+            def emit_store(self, name, value, tags):
+                calls.append(("store", self.prefix, name, value, tags))
+
+        fake_metrics = types.SimpleNamespace(Client=FakeClient)
+        sys.modules["bytedance"] = types.SimpleNamespace(metrics=fake_metrics)
+        metrics_utils.set_metrics_context(job_id="job-1")
+
+        metrics_utils.emit_download_qps(
+            op_name="download_file_mapper",
+            scheme="http",
+            status="success",
+            save_mode="memory",
+        )
+        metrics_utils.emit_download_bytes(
+            op_name="download_file_mapper",
+            scheme="http",
+            byte_count=12,
+            save_mode="memory",
+        )
+        metrics_utils.emit_download_latency_ms(
+            op_name="download_file_mapper",
+            scheme="http",
+            status="success",
+            latency_ms=34.5,
+            save_mode="memory",
+        )
+
+        self.assertEqual([call[2] for call in calls], ["download.qps", "download.bytes", "download.latency_ms"])
+        self.assertEqual(calls[0][0], "counter")
+        self.assertEqual(calls[0][3], 1)
+        self.assertEqual(calls[0][4]["op_name"], "download_file_mapper")
+        self.assertEqual(calls[0][4]["scheme"], "http")
+        self.assertEqual(calls[0][4]["status"], "success")
+        self.assertEqual(calls[0][4]["save_mode"], "memory")
+        self.assertEqual(calls[1][0], "store")
+        self.assertEqual(calls[1][3], 12.0)
+        self.assertEqual(calls[2][0], "store")
+        self.assertEqual(calls[2][3], 34.5)
+
+    def test_emit_dedup_rows_uses_counter_value_and_stable_tags(self):
+        calls = []
+
+        class FakeClient:
+            def __init__(self, prefix):
+                self.prefix = prefix
+
+            def emit_rate_counter(self, name, value, tags):
+                calls.append((self.prefix, name, value, tags))
+
+        fake_metrics = types.SimpleNamespace(Client=FakeClient)
+        sys.modules["bytedance"] = types.SimpleNamespace(metrics=fake_metrics)
+        metrics_utils.set_metrics_context(job_id="job-1", ray_address="ray://cluster")
+
+        metrics_utils.emit_dedup_rows(
+            op_name="ray_field_dedup_pipeline",
+            field_key="md5",
+            event="duplicate",
+            count=7,
+            extra_tags={"backend": "ray_actor"},
+        )
+
+        self.assertEqual(len(calls), 1)
+        prefix, name, value, tags = calls[0]
+        self.assertEqual(prefix, "ad.ai.data_forge")
+        self.assertEqual(name, "dedup.rows")
+        self.assertEqual(value, 7)
+        self.assertEqual(tags["job_id"], "job-1")
+        self.assertEqual(tags["ray_address"], "ray://cluster")
+        self.assertEqual(tags["op_name"], "ray_field_dedup_pipeline")
+        self.assertEqual(tags["field_key"], "md5")
+        self.assertEqual(tags["event"], "duplicate")
+        self.assertEqual(tags["backend"], "ray_actor")
+
     def test_missing_metrics_sdk_warns_once_and_drops_events(self):
         with patch("data_juicer.utils.metrics_utils.logger.warning") as warning_mock:
             with patch.dict(sys.modules, {"bytedance": None}):

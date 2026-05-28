@@ -24,7 +24,7 @@ from data_juicer.core.io_utils import (
     write_ray_dataset_to_magnus,
     _ray_dataset_columns,
 )
-from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink
+from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink, summarize_filesystem_path
 from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, HashKeys
 
@@ -63,6 +63,8 @@ class ExportManager:
         self.export_targets = self.export_cfg.get("targets") or []
         self.target = self.export_cfg["target"]
         self.path = self.export_cfg.get("path") or getattr(cfg, "export_path", "")
+        self.last_export_summary = None
+        self._active_fanout_datasink = None
 
         self.file_exporter = None
         if not self.export_targets and self.target in {"local", "s3"}:
@@ -78,8 +80,14 @@ class ExportManager:
                 if self._is_quota_reservation_enabled():
                     dataset, columns = self._prepare_dataset_for_export(dataset, columns=columns)
                     dataset = self._reserve_quota_for_export(dataset)
-                return self.file_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
-            return self.file_exporter.export(dataset)
+                result = self.file_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+                if self.target == "local":
+                    self.last_export_summary = self._local_path_export_summary(self.path)
+                return result
+            result = self.file_exporter.export(dataset)
+            if self.target == "local":
+                self.last_export_summary = self._local_path_export_summary(self.path)
+            return result
 
         if self.target == "hdfs":
             return self._export_to_hdfs(dataset, columns=columns)
@@ -92,6 +100,18 @@ class ExportManager:
         if self.target == "magnus":
             return self._export_to_magnus(dataset, columns=columns)
         raise NotImplementedError(f"Unsupported export target [{self.target}]")
+
+    def current_export_summary(self) -> dict | None:
+        if self.last_export_summary:
+            return self.last_export_summary
+        datasink = self._active_fanout_datasink
+        partial_write_summary = getattr(datasink, "partial_write_summary", None)
+        if callable(partial_write_summary):
+            try:
+                return partial_write_summary()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to collect active Ray fan-out export summary: {}", exc)
+        return None
 
     def _limit_dataset_for_export(self, dataset):
         max_rows = self.export_cfg.get("max_rows")
@@ -251,7 +271,13 @@ class ExportManager:
                 mode=self.export_cfg.get("mode"),
                 **extra_args,
             )
-            return hdfs_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+            result = hdfs_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+            self.last_export_summary = self._filesystem_export_summary(
+                hdfs_exporter.pyarrow_filesystem,
+                hdfs_exporter.writer_export_path,
+                original_uri=self.path,
+            )
+            return result
 
         stage_path = self._export_via_staging(dataset, columns=columns)
         copy_local_to_uri(
@@ -260,14 +286,19 @@ class ExportManager:
             filesystem=self.export_cfg.get("filesystem"),
             storage_options=self.export_cfg.get("webhdfs"),
         )
+        self.last_export_summary = self._hdfs_metadata_summary_best_effort(self.path)
 
     def _export_to_file_targets(self, dataset, columns=None):
         self._validate_file_targets_for_export()
         export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
         targets = []
+        target_concurrency_values = []
         for target in self.export_targets:
             target_extra_args = merge_dicts(target.get("extra_args"), {})
             target_columns = target_extra_args.pop("columns", None)
+            target_concurrency = target_extra_args.pop("concurrency", None)
+            if target_concurrency is not None:
+                target_concurrency_values.append(target_concurrency)
             filesystem, writer_path = self._fanout_target_filesystem_and_path(target)
             targets.append(
                 {
@@ -283,12 +314,142 @@ class ExportManager:
             )
 
         action_args = merge_dicts(self.export_cfg.get("extra_args"), {})
-        datasink = RayHdfsFanoutDatasink(targets=targets, columns=export_columns)
-        return dataset.write_datasink(
-            datasink,
-            ray_remote_args=action_args.get("ray_remote_args"),
-            concurrency=action_args.get("concurrency"),
+        action_concurrency = self._resolve_file_targets_write_concurrency(
+            action_args.get("concurrency"),
+            target_concurrency_values,
         )
+        datasink = RayHdfsFanoutDatasink(targets=targets, columns=export_columns)
+        self._active_fanout_datasink = datasink
+        try:
+            result = dataset.write_datasink(
+                datasink,
+                ray_remote_args=action_args.get("ray_remote_args"),
+                concurrency=action_concurrency,
+            )
+        except Exception:
+            self.last_export_summary = self._fanout_partial_summary(datasink, targets)
+            raise
+        finally:
+            if self._active_fanout_datasink is datasink:
+                self._active_fanout_datasink = None
+        self.last_export_summary = self._coerce_export_summary(result) or getattr(
+            datasink, "last_write_summary", None
+        ) or self._fanout_metadata_summary(targets)
+        return result
+
+    @staticmethod
+    def _coerce_export_summary(result):
+        if not isinstance(result, dict):
+            return None
+        if {"output_rows", "output_files", "output_bytes"}.intersection(result):
+            return result
+        return None
+
+    def _fanout_partial_summary(self, datasink, targets: list[dict]) -> dict | None:
+        partial_write_summary = getattr(datasink, "partial_write_summary", None)
+        if callable(partial_write_summary):
+            try:
+                summary = partial_write_summary()
+                if summary:
+                    return summary
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to collect partial Ray fan-out export summary: {}", exc)
+        try:
+            summary = self._fanout_metadata_summary(targets)
+            summary["partial"] = True
+            return summary
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect fallback Ray fan-out export metadata summary: {}", exc)
+            return None
+
+    @staticmethod
+    def _filesystem_export_summary(filesystem, path: str, *, original_uri: str | None = None) -> dict:
+        metadata = summarize_filesystem_path(filesystem, path)
+        return {
+            "output_rows": None,
+            **metadata,
+            "targets": [
+                {
+                    "path": original_uri or path,
+                    "rows": None,
+                    **metadata,
+                }
+            ],
+        }
+
+    def _hdfs_metadata_summary_best_effort(self, path: str) -> dict:
+        try:
+            filesystem, writer_path = get_pyarrow_filesystem(
+                path,
+                filesystem=self.export_cfg.get("filesystem"),
+                storage_options=self.export_cfg.get("webhdfs"),
+            )
+            return self._filesystem_export_summary(filesystem, writer_path, original_uri=path)
+        except Exception as exc:
+            logger.warning(f"Failed to collect HDFS export metadata for {path}: {exc}")
+            return {
+                "output_rows": None,
+                "output_files": None,
+                "output_bytes": None,
+                "targets": [
+                    {
+                        "path": path,
+                        "rows": None,
+                        "output_files": None,
+                        "output_bytes": None,
+                    }
+                ],
+            }
+
+    @staticmethod
+    def _fanout_metadata_summary(targets: list[dict]) -> dict:
+        target_summaries = []
+        for target in targets:
+            metadata = summarize_filesystem_path(target["filesystem"], target["path"])
+            target_summaries.append(
+                {
+                    "path": target["original_uri"],
+                    "rows": None,
+                    **metadata,
+                }
+            )
+        return {
+            "output_rows": None,
+            "output_files": sum(target["output_files"] for target in target_summaries),
+            "output_bytes": sum(target["output_bytes"] for target in target_summaries),
+            "targets": target_summaries,
+        }
+
+    @staticmethod
+    def _local_path_export_summary(path: str) -> dict:
+        import pyarrow.fs as pa_fs
+
+        if path.startswith("file://"):
+            filesystem, writer_path = pa_fs.FileSystem.from_uri(path)
+        else:
+            filesystem, writer_path = pa_fs.LocalFileSystem(), os.path.abspath(path)
+        return ExportManager._filesystem_export_summary(filesystem, writer_path, original_uri=path)
+
+    @staticmethod
+    def _resolve_file_targets_write_concurrency(action_concurrency, target_concurrency_values):
+        if not target_concurrency_values:
+            return action_concurrency
+
+        unique_target_values = set(target_concurrency_values)
+        if len(unique_target_values) != 1:
+            raise ValueError(
+                "`export.targets[].extra_args.concurrency` maps to the single Ray "
+                "`write_datasink` action and must be identical for every target."
+            )
+
+        target_concurrency = target_concurrency_values[0]
+        if action_concurrency is not None and action_concurrency != target_concurrency:
+            raise ValueError(
+                "`export.extra_args.concurrency` and "
+                "`export.targets[].extra_args.concurrency` both configure the same "
+                "Ray `write_datasink` action and must match when both are set."
+            )
+        return action_concurrency if action_concurrency is not None else target_concurrency
 
     def _fanout_target_filesystem_and_path(self, target):
         if target.get("target") == "local":

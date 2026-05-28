@@ -14,7 +14,11 @@ import pyarrow.parquet as pq
 from pyarrow.fs import FileInfo, FileType, LocalFileSystem
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
-from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink
+from data_juicer.core.ray_exporter import (
+    EXPORT_WRITE_STATS_NAMESPACE,
+    RayExporter,
+    RayHdfsFanoutDatasink,
+)
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.mm_utils import load_images_byte
 
@@ -516,6 +520,26 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             self.assertTrue(os.path.exists(non_empty_dir))
             self.assertTrue(os.path.exists(append_dir))
 
+    def test_fanout_on_write_complete_returns_rows_files_and_bytes_summary(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "jsonl")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[self._target(output_dir, export_type="jsonl")],
+                columns=["id"],
+            )
+            table = pa.table({"id": [1, 2]})
+            datasink.on_write_start(table.schema)
+            write_return = datasink.write([table], self._ctx())
+            write_result = type("WriteResult", (), {"write_returns": [write_return]})()
+
+            summary = datasink.on_write_complete(write_result)
+
+            self.assertEqual(summary["output_rows"], 2)
+            self.assertEqual(summary["output_files"], 1)
+            self.assertGreater(summary["output_bytes"], 0)
+            self.assertEqual(summary["targets"][0]["rows"], 2)
+            self.assertEqual(summary["targets"][0]["output_files"], 1)
+
     def test_fanout_write_failure_after_partial_target_write_is_propagated(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_a = os.path.join(tmp_dir, "a")
@@ -537,6 +561,64 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
                 datasink.write([table], self._ctx())
 
             self.assertEqual(len(os.listdir(output_a)), 1)
+
+    @patch("data_juicer.core.ray_exporter.incr_task_kv")
+    def test_fanout_write_failure_records_partial_write_stats(self, incr_mock):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_a = os.path.join(tmp_dir, "a")
+            output_b = os.path.join(tmp_dir, "b")
+            failing_filesystem = MagicMock()
+            failing_filesystem.get_file_info.return_value = FileInfo(output_b, FileType.NotFound)
+            failing_filesystem.open_output_stream.side_effect = RuntimeError("cannot write target")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(output_a, condition="score >= 0.8"),
+                    self._target(output_b, filesystem=failing_filesystem, condition="score >= 0.8"),
+                ],
+                columns=["id", "score"],
+            )
+            table = pa.table({"id": [1, 2], "score": [0.9, 0.7]})
+            datasink.on_write_start(table.schema)
+
+            with self.assertRaisesRegex(RuntimeError, "cannot write target"):
+                datasink.write([table], self._ctx())
+
+            deltas = {call.args[0]: call.args[1] for call in incr_mock.call_args_list}
+            prefix = f"fanout.{datasink.write_uuid}"
+            self.assertEqual(deltas[f"{prefix}.output_rows"], 1)
+            self.assertEqual(deltas[f"{prefix}.output_files"], 1)
+            self.assertGreater(deltas[f"{prefix}.output_bytes"], 0)
+            self.assertEqual(deltas[f"{prefix}.targets.0.rows"], 1)
+            self.assertEqual(deltas[f"{prefix}.targets.0.output_files"], 1)
+            self.assertNotIn(f"{prefix}.targets.1.rows", deltas)
+            for call in incr_mock.call_args_list:
+                self.assertEqual(call.kwargs["namespace"], EXPORT_WRITE_STATS_NAMESPACE)
+                self.assertTrue(call.kwargs["wait"])
+
+    @patch("data_juicer.core.ray_exporter.snapshot_task_kv")
+    def test_fanout_partial_write_summary_uses_recorded_rows_and_filesystem_metadata(self, snapshot_mock):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "jsonl")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[self._target(output_dir, export_type="jsonl")],
+                columns=["id"],
+            )
+            table = pa.table({"id": [1, 2]})
+            datasink.on_write_start(table.schema)
+            datasink.write([table], self._ctx())
+            prefix = f"fanout.{datasink.write_uuid}"
+            snapshot_mock.return_value = {
+                f"{prefix}.output_rows": 2,
+                f"{prefix}.targets.0.rows": 2,
+            }
+
+            summary = datasink.partial_write_summary()
+
+            self.assertTrue(summary["partial"])
+            self.assertEqual(summary["output_rows"], 2)
+            self.assertEqual(summary["output_files"], 1)
+            self.assertGreater(summary["output_bytes"], 0)
+            self.assertEqual(summary["targets"][0]["rows"], 2)
 
     def test_fanout_unknown_export_type_fails_fast(self):
         datasink = RayHdfsFanoutDatasink(

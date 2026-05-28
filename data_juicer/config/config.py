@@ -26,6 +26,7 @@ from jsonargparse._typehints import ActionTypeHint
 from jsonargparse.typing import ClosedUnitInterval, NonNegativeInt, PositiveInt
 from loguru import logger
 
+from data_juicer.core.task_notification import validate_notification_hooks_config
 from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
 from data_juicer.ops.op_fusion import FUSION_STRATEGIES
@@ -670,6 +671,12 @@ def build_base_parser() -> ArgumentParser:
         "plan, then skip materialization and export. Use this to inspect a local demo "
         "pipeline without running the full Ray Data job.",
     )
+    parser.add_argument(
+        "--notification_hooks",
+        type=List[Dict],
+        default=[],
+        help="RayExecutor task notification hooks. First version supports type=adc_lark_message.",
+    )
 
     # Partitioning configuration for PartitionedRayExecutor
     # Support both flat and nested partition configuration
@@ -865,6 +872,7 @@ def init_configs(args: Optional[List[str]] = None, which_entry: object = None, l
             with timing_context("Parsing arguments"):
                 cfg = parser.parse_args(args=args)
                 cfg = normalize_export_config(cfg)
+                cfg = normalize_notification_hooks_config(cfg)
 
                 if cfg.executor_type == "ray":
                     os.environ[RAY_JOB_ENV_VAR] = "1"
@@ -886,6 +894,7 @@ def init_configs(args: Optional[List[str]] = None, which_entry: object = None, l
 
         with timing_context("Updating operator process"):
             cfg = update_op_process(cfg, parser, used_ops)
+            cfg = namespace_notification_hooks_config(cfg)
 
         # Validate config for resumption if job_id is provided
         if not load_configs_only and hasattr(cfg, "job_id") and cfg.job_id:
@@ -981,6 +990,22 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         cfg.export_aws_credentials = export_cfg.get("aws_credentials")
 
     cfg.export = dict_to_namespace(export_cfg)
+    return cfg
+
+
+def normalize_notification_hooks_config(cfg: Namespace) -> Namespace:
+    hooks = _plain_cfg_value(getattr(cfg, "notification_hooks", None) or [])
+    validate_notification_hooks_config(hooks)
+    for hook in hooks:
+        if isinstance(hook, dict) and hook.get("enabled", True) is not False:
+            hook.setdefault("interval", None)
+    cfg.notification_hooks = hooks
+    return cfg
+
+
+def namespace_notification_hooks_config(cfg: Namespace) -> Namespace:
+    hooks = _plain_cfg_value(getattr(cfg, "notification_hooks", None) or [])
+    cfg.notification_hooks = [dict_to_namespace(hook) for hook in hooks]
     return cfg
 
 

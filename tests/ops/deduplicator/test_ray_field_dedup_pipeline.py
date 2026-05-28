@@ -89,6 +89,20 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
                 num_proc=1,
             )
 
+    def test_constructor_passes_actor_timeout_options_to_backend(self):
+        op = RayFieldDedupPipeline(
+            field_key="comment_id",
+            dedup_set_num=7,
+            actor_get_timeout=123,
+            actor_get_retry_times=4,
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+
+        self.assertEqual(op.backend._dedup_set_num_config, 7)
+        self.assertEqual(op.backend.actor_get_timeout, 123.0)
+        self.assertEqual(op.backend.actor_get_retry_times, 4)
+
     def test_run_prepares_backend_and_uses_arrow_map_batches(self):
         op = RayFieldDedupPipeline(
             field_key="comment_id",
@@ -169,11 +183,68 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
             }
         )
 
-        output = op.process_batched(table)
+        with patch(
+            "data_juicer.ops.deduplicator.ray_field_dedup_pipeline.emit_dedup_rows"
+        ) as emit_mock:
+            output = op.process_batched(table)
 
         self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "c"])
         self.assertEqual(len(backend.calls), 1)
         self.assertEqual(backend.calls[0][1], ["a", "b", "c"])
+        self.assertEqual(
+            [call.kwargs for call in emit_mock.call_args_list],
+            [
+                {
+                    "op_name": "ray_field_dedup_pipeline",
+                    "field_key": "md5",
+                    "event": "eligible",
+                    "count": 3,
+                    "extra_tags": {"backend": "ray_actor"},
+                },
+                {
+                    "op_name": "ray_field_dedup_pipeline",
+                    "field_key": "md5",
+                    "event": "unique",
+                    "count": 2,
+                    "extra_tags": {"backend": "ray_actor"},
+                },
+                {
+                    "op_name": "ray_field_dedup_pipeline",
+                    "field_key": "md5",
+                    "event": "duplicate",
+                    "count": 1,
+                    "extra_tags": {"backend": "ray_actor"},
+                },
+            ],
+        )
+
+    def test_process_batched_records_runtime_dedup_stats(self):
+        op = RayFieldDedupPipeline(
+            field_key="md5",
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+        op.backend = _LocalBackend()
+        table = pa.table(
+            {
+                "md5": pa.array(["same", "same", "other"], type=pa.string()),
+            }
+        )
+
+        with patch(
+            "data_juicer.ops.deduplicator.ray_field_dedup_pipeline.RuntimeStatsCollector"
+        ) as collector_cls:
+            collector = collector_cls.return_value
+            op.process_batched(table)
+
+        self.assertEqual(
+            [call.args for call in collector.increment.call_args_list],
+            [
+                ("dedup.eligible_rows", 3),
+                ("dedup.unique_rows", 2),
+                ("dedup.duplicate_rows", 1),
+            ],
+        )
 
     def test_calculate_hash_distinguishes_string_and_integer_values(self):
         op = RayFieldDedupPipeline(
