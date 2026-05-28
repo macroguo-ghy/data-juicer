@@ -566,6 +566,41 @@ class VideoUrlRpcMapperTest(unittest.TestCase):
         self.assertNotIn("vid-ok", logged_args)
         self.assertNotIn("secret", logged_args)
 
+    def test_empty_result_samples_rpc_payload_without_identity_secret(self):
+        class FakeClient:
+            def MGetPlayInfosV2(self, _req):
+                return types.SimpleNamespace(VideoInfos={})
+
+        api_thrift = types.SimpleNamespace(
+            MGetPlayInfosV2Request=lambda: types.SimpleNamespace(),
+            FilterParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            UrlParams=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            Identity=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            VideoDefinition=types.SimpleNamespace(V720P="720p"),
+        )
+        mapper = VideoUrlRpcMapper(vid_key="vid", output_key="urls")
+        mapper._client = FakeClient()
+        mapper._api_thrift = api_thrift
+        mapper._rpc_qps_limiter = types.SimpleNamespace(acquire=lambda: None)
+
+        with patch(
+            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.sign_rpc_request",
+            return_value="secret-signature",
+        ), patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.emit_rpc_qps"), patch(
+            "data_juicer.ops.mapper.schema.video_url_rpc_mapper.random.random",
+            return_value=0.0,
+        ), patch("data_juicer.ops.mapper.schema.video_url_rpc_mapper.logger") as logger:
+            output = mapper.process_batched({"vid": ["vid-empty"]})
+
+        self.assertEqual(output["urls"], [[]])
+        warning_args = " ".join(str(arg) for call in logger.warning.call_args_list for arg in call.args)
+        self.assertIn("VideoUrlRpcMapper empty-result RPC sampled", warning_args)
+        self.assertIn("vid-empty", warning_args)
+        self.assertIn("request", warning_args)
+        self.assertIn("response", warning_args)
+        self.assertIn("<redacted>", warning_args)
+        self.assertNotIn("secret-signature", warning_args)
+
     def test_state_empty_vid_batch_and_runtime_import_error_paths(self):
         mapper = VideoUrlRpcMapper(vid_key="vid", output_key="urls")
         mapper._client = object()
