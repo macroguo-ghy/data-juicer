@@ -20,6 +20,15 @@ from .ray_basic_deduplicator import (
 )
 
 OP_NAME = "ray_field_dedup_pipeline"
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
+
+
+def _dedup_debug_logs_enabled() -> bool:
+    return _truthy_env("DATA_JUICER_RAY_DEBUG_LOGS") or _truthy_env("DATA_JUICER_RAY_DEDUP_DEBUG")
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -105,7 +114,8 @@ class RayFieldDedupPipeline(Pipeline):
         self._debug_batch_count += 1
         batch_index = self._debug_batch_count
         batch_start = time.monotonic()
-        should_log = batch_index <= 3 or batch_index % 100 == 0
+        debug_logs_enabled = _dedup_debug_logs_enabled()
+        should_log = debug_logs_enabled and (batch_index <= 3 or batch_index % 100 == 0)
         if isinstance(samples, pa.Table):
             input_rows = samples.num_rows
             input_bytes = int(getattr(samples, "nbytes", 0) or 0)
@@ -127,7 +137,7 @@ class RayFieldDedupPipeline(Pipeline):
             output = samples.filter(pa.array(keep))
             filter_seconds = time.monotonic() - filter_start
             elapsed_seconds = time.monotonic() - batch_start
-            if should_log or elapsed_seconds >= 5:
+            if should_log or (debug_logs_enabled and elapsed_seconds >= 5):
                 self._log_process_batch_event(
                     "ray_field_dedup_batch_complete",
                     batch_index=batch_index,
@@ -166,7 +176,7 @@ class RayFieldDedupPipeline(Pipeline):
             for key in keys
         }
         elapsed_seconds = time.monotonic() - batch_start
-        if should_log or elapsed_seconds >= 5:
+        if should_log or (debug_logs_enabled and elapsed_seconds >= 5):
             self._log_process_batch_event(
                 "ray_field_dedup_batch_complete",
                 batch_index=batch_index,
@@ -212,13 +222,14 @@ class RayFieldDedupPipeline(Pipeline):
                 duplicate_rows=len(eligible_indices) - sum(bool(should_keep) for should_keep in eligible_keep),
                 actor_seconds=round(actor_seconds, 3),
                 dedup_set_num=getattr(self.backend, "dedup_set_num", None),
+                level="warning",
             )
         self._emit_dedup_rows(len(eligible_indices), eligible_keep)
         for index, should_keep in zip(eligible_indices, eligible_keep):
             keep[index] = should_keep
         return keep
 
-    def _log_process_batch_event(self, event: str, **payload) -> None:
+    def _log_process_batch_event(self, event: str, level: str = "info", **payload) -> None:
         body = {
             "event": event,
             "pid": os.getpid(),
@@ -227,7 +238,7 @@ class RayFieldDedupPipeline(Pipeline):
             "condition": self.condition,
             **payload,
         }
-        logger.info(json.dumps(body, sort_keys=True, default=str))
+        getattr(logger, level)(json.dumps(body, sort_keys=True, default=str))
 
     def _emit_dedup_rows(self, eligible_count: int, eligible_keep: list[bool]) -> None:
         unique_count = sum(bool(should_keep) for should_keep in eligible_keep)

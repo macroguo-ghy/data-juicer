@@ -18,6 +18,15 @@ from data_juicer.utils.ray_task_kv_store import incr_task_kv, snapshot_task_kv
 from data_juicer.utils.webdataset_utils import reconstruct_custom_webdataset_format
 
 EXPORT_WRITE_STATS_NAMESPACE = "export_write_stats"
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
+
+
+def _fanout_debug_logs_enabled() -> bool:
+    return _truthy_env("DATA_JUICER_RAY_DEBUG_LOGS") or _truthy_env("DATA_JUICER_RAY_FANOUT_DEBUG")
 
 
 def _dataset_columns_no_fetch(dataset):
@@ -59,7 +68,9 @@ def _json_default(value):
     return str(value)
 
 
-def _log_fanout_event(level: str, event: str, payload: dict) -> None:
+def _log_fanout_event(level: str, event: str, payload: dict, *, debug: bool = False) -> None:
+    if debug and not _fanout_debug_logs_enabled():
+        return
     body = {"event": event, **payload}
     try:
         message = json.dumps(body, sort_keys=True, default=_json_default)
@@ -221,6 +232,7 @@ class _FanoutCompactBuffer:
                 "task_index": self.task_index,
                 **_target_log_context(self.target),
             },
+            debug=True,
         )
 
     def append(self, table) -> dict[str, int]:
@@ -238,6 +250,7 @@ class _FanoutCompactBuffer:
                     "input_bytes": self._table_nbytes(table),
                     **_target_log_context(self.target),
                 },
+                debug=True,
             )
         if self.target["type"] == "jsonl":
             return self._append_jsonl(table)
@@ -267,6 +280,7 @@ class _FanoutCompactBuffer:
                 "output_path": output_path,
                 **_target_log_context(self.target),
             },
+            debug=True,
         )
         try:
             if self.target["type"] == "jsonl":
@@ -310,6 +324,7 @@ class _FanoutCompactBuffer:
                 "output_path": output_path,
                 **_target_log_context(self.target),
             },
+            debug=True,
         )
         return {
             "rows": rows,
@@ -390,6 +405,7 @@ class _FanoutCompactBuffer:
                     "max_buffer_bytes": max_buffer_bytes,
                     **_target_log_context(self.target),
                 },
+                debug=True,
             )
         avg_row_bytes = max(1, math.ceil(table_bytes / table.num_rows))
         rows_per_slice = max(1, min(table.num_rows, max_buffer_bytes // avg_row_bytes))
@@ -440,6 +456,7 @@ class _FanoutCompactBuffer:
                 "task_index": self.task_index,
                 **_target_log_context(self.target),
             },
+            debug=True,
         )
 
     def _warn_large_row_once(self, row_bytes: int) -> None:
@@ -456,6 +473,7 @@ class _FanoutCompactBuffer:
                 "max_buffer_bytes": self.compact["max_buffer_bytes"],
                 **_target_log_context(self.target),
             },
+            debug=True,
         )
 
     @staticmethod
@@ -519,6 +537,7 @@ class RayHdfsFanoutDatasink(Datasink):
                 "min_rows_per_write": self.min_rows_per_write,
                 "targets": [_target_log_context(target) for target in self.targets],
             },
+            debug=True,
         )
 
     @property
@@ -546,6 +565,7 @@ class RayHdfsFanoutDatasink(Datasink):
                 "schema": _schema_log_context(schema),
                 "targets": [_target_log_context(target) for target in self.targets],
             },
+            debug=True,
         )
         file_infos = []
         for target in self.targets:
@@ -581,6 +601,7 @@ class RayHdfsFanoutDatasink(Datasink):
                     for target in self.targets
                 ],
             },
+            debug=True,
         )
 
     @staticmethod
@@ -616,6 +637,7 @@ class RayHdfsFanoutDatasink(Datasink):
                 "compact_target_indices": sorted(compact_buffers),
                 "direct_target_indices": sorted(target["index"] for target in self.targets if not target.get("compact")),
             },
+            debug=True,
         )
         try:
             for block_index, block in enumerate(blocks):
@@ -652,6 +674,7 @@ class RayHdfsFanoutDatasink(Datasink):
                                 "output_path": output_path,
                                 **_target_log_context(target),
                             },
+                            debug=True,
                         )
                     try:
                         self._write_table(target, filtered_table, output_path)
@@ -703,6 +726,7 @@ class RayHdfsFanoutDatasink(Datasink):
                         for target_index, compact_buffer in compact_buffers.items()
                     },
                 },
+                debug=True,
             )
             return results
         except Exception as exc:  # noqa: BLE001

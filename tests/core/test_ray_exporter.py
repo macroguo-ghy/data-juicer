@@ -741,6 +741,66 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             self.assertEqual(summary["targets"][0]["compact"]["flushes"], 1)
             self.assertEqual(summary["targets"][0]["compact"]["schema_mismatch_flushes"], 0)
 
+    def test_fanout_compact_probe_logs_are_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact_default_quiet")
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "DATA_JUICER_RAY_DEBUG_LOGS": "",
+                        "DATA_JUICER_RAY_FANOUT_DEBUG": "",
+                    },
+                    clear=False,
+                ),
+                patch("data_juicer.core.ray_exporter.logger.info") as info_mock,
+            ):
+                datasink = RayHdfsFanoutDatasink(
+                    targets=[
+                        self._target(
+                            output_dir,
+                            export_type="parquet",
+                            compact=self._compact_config(rows_per_file=10),
+                        )
+                    ],
+                    columns=["id"],
+                )
+                table = pa.table({"id": [1, 2]})
+
+                datasink.on_write_start(table.schema)
+                datasink.write([table], self._ctx())
+
+            info_mock.assert_not_called()
+
+    def test_fanout_compact_probe_logs_can_be_enabled_for_debug_runs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact_debug_logs")
+            with (
+                patch.dict(
+                    os.environ,
+                    {"DATA_JUICER_RAY_FANOUT_DEBUG": "1"},
+                    clear=False,
+                ),
+                patch("data_juicer.core.ray_exporter.logger.info") as info_mock,
+            ):
+                datasink = RayHdfsFanoutDatasink(
+                    targets=[
+                        self._target(
+                            output_dir,
+                            export_type="parquet",
+                            compact=self._compact_config(rows_per_file=10),
+                        )
+                    ],
+                    columns=["id"],
+                )
+                table = pa.table({"id": [1, 2]})
+
+                datasink.on_write_start(table.schema)
+                datasink.write([table], self._ctx())
+
+            messages = [call.args[0] for call in info_mock.call_args_list]
+            self.assertTrue(any("ray_fanout_compact_flush_complete" in message for message in messages))
+
     def test_fanout_jsonl_compact_merges_blocks(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_dir = os.path.join(tmp_dir, "compact_jsonl")

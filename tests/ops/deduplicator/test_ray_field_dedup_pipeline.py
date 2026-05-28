@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -245,6 +246,49 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
                 ("dedup.duplicate_rows", 1),
             ],
         )
+
+    def test_process_batched_debug_logs_are_disabled_by_default(self):
+        op = RayFieldDedupPipeline(
+            field_key="md5",
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+        op.backend = _LocalBackend()
+        table = pa.table({"md5": ["same", "other"]})
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DATA_JUICER_RAY_DEBUG_LOGS": "",
+                    "DATA_JUICER_RAY_DEDUP_DEBUG": "",
+                },
+                clear=False,
+            ),
+            patch("data_juicer.ops.deduplicator.ray_field_dedup_pipeline.logger.info") as info_mock,
+        ):
+            op.process_batched(table)
+
+        info_mock.assert_not_called()
+
+    def test_process_batched_debug_logs_can_be_enabled_for_debug_runs(self):
+        op = RayFieldDedupPipeline(
+            field_key="md5",
+            auto_op_parallelism=False,
+            num_proc=1,
+        )
+        op.backend = _LocalBackend()
+        table = pa.table({"md5": ["same", "other"]})
+
+        with (
+            patch.dict(os.environ, {"DATA_JUICER_RAY_DEDUP_DEBUG": "1"}, clear=False),
+            patch("data_juicer.ops.deduplicator.ray_field_dedup_pipeline.logger.info") as info_mock,
+        ):
+            op.process_batched(table)
+
+        messages = [call.args[0] for call in info_mock.call_args_list]
+        self.assertTrue(any("ray_field_dedup_batch_start" in message for message in messages))
+        self.assertTrue(any("ray_field_dedup_batch_complete" in message for message in messages))
 
     def test_calculate_hash_distinguishes_string_and_integer_values(self):
         op = RayFieldDedupPipeline(
