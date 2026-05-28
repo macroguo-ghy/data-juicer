@@ -62,7 +62,7 @@ def normalize_fanout_target_compacts(targets: list[MutableMapping[str, Any]]) ->
                 "`export.targets[].extra_args.compact` is not supported."
             )
 
-        raw_compact = target.get("compact") if "compact" in target else {}
+        raw_compact = target.get("compact") if "compact" in target else False
         compact = normalize_fanout_compact(raw_compact, context=f"export.targets[{index}].compact")
         if compact is None:
             target["compact"] = False

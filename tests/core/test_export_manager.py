@@ -357,7 +357,7 @@ class ExportManagerTest(unittest.TestCase):
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
-    def test_ray_hdfs_multi_target_export_defaults_compact_to_datasink(
+    def test_ray_hdfs_multi_target_export_defaults_compact_disabled_to_datasink(
         self,
         mock_get_pyarrow_filesystem,
         mock_fanout_datasink,
@@ -384,10 +384,7 @@ class ExportManagerTest(unittest.TestCase):
         manager.export(dataset, columns=["id"])
 
         _, kwargs = mock_fanout_datasink.call_args
-        compact = kwargs["targets"][0]["compact"]
-        self.assertEqual(compact["target_bytes_per_file"], 64 * 1024 * 1024)
-        self.assertEqual(compact["target_rows_per_file"], 200000)
-        self.assertEqual(compact["max_buffer_bytes"], 128 * 1024 * 1024)
+        self.assertNotIn("compact", kwargs["targets"][0])
         self.assertNotIn("compact", kwargs["targets"][0]["extra_args"])
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")

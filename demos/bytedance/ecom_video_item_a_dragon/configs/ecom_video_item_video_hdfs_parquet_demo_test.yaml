@@ -93,7 +93,6 @@ export:
       mode: "overwrite"
       filter_condition: "item_duration <= 60 and valid_video_count > 0"
       filesystem: "pyarrow"
-      compact: false
       extra_args:
         concurrency: 1
         columns:
@@ -114,7 +113,6 @@ export:
       mode: "overwrite"
       filter_condition: "item_duration > 60"
       filesystem: "pyarrow"
-      compact: false
       extra_args:
         concurrency: 1
         columns:

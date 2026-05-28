@@ -660,7 +660,7 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
-    def test_structured_export_targets_defaults_compact_config(self):
+    def test_structured_export_targets_default_compact_disabled(self):
         config_data = {
             'project_name': 'structured_export_targets_compact',
             'executor_type': 'ray',
@@ -698,14 +698,11 @@ class ConfigTest(DataJuicerTestCaseBase):
             self.assertEqual(compact.target_bytes_per_file, 64 * 1024 * 1024)
             self.assertEqual(compact.target_rows_per_file, 200000)
             self.assertEqual(compact.max_buffer_bytes, 128 * 1024 * 1024)
-            default_compact = cfg.export.targets[1].compact
-            self.assertEqual(default_compact.target_bytes_per_file, 64 * 1024 * 1024)
-            self.assertEqual(default_compact.target_rows_per_file, 200000)
-            self.assertEqual(default_compact.max_buffer_bytes, 128 * 1024 * 1024)
+            self.assertIs(cfg.export.targets[1].compact, False)
         finally:
             os.unlink(temp_config)
 
-    def test_structured_export_targets_accepts_compact_defaults_and_opt_out(self):
+    def test_structured_export_targets_accepts_compact_opt_in_defaults_and_opt_out(self):
         config_data = {
             'project_name': 'structured_export_targets_default_compact',
             'executor_type': 'ray',
@@ -716,6 +713,7 @@ class ConfigTest(DataJuicerTestCaseBase):
                         'target': 'local',
                         'path': './outputs/fanout_local/default_compact',
                         'type': 'jsonl',
+                        'compact': {},
                     },
                     {
                         'target': 'local',

@@ -569,9 +569,9 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             self.assertEqual(summary["targets"][0]["rows"], 2)
             self.assertEqual(summary["targets"][0]["output_files"], 1)
 
-    def test_fanout_default_compact_merges_blocks(self):
+    def test_fanout_missing_compact_preserves_direct_per_block_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            output_dir = os.path.join(tmp_dir, "default_compact")
+            output_dir = os.path.join(tmp_dir, "missing_compact")
             datasink = RayHdfsFanoutDatasink(
                 targets=[
                     self._target(
@@ -589,16 +589,14 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             ]
 
             datasink.on_write_start(blocks[0].schema)
-            self.assertEqual(datasink.min_rows_per_write, 200000)
+            self.assertIsNone(datasink.min_rows_per_write)
             write_return = datasink.write(blocks, self._ctx(task_idx=3))
             summary = datasink.on_write_complete(type("WriteResult", (), {"write_returns": [write_return]})())
 
             files = self._data_files(output_dir, ".jsonl")
-            self.assertEqual(len(files), 1)
-            self.assertIn("-3-compact-0.jsonl", os.path.basename(files[0]))
+            self.assertEqual(len(files), 3)
             self.assertEqual(summary["targets"][0]["rows"], 3)
-            self.assertEqual(summary["targets"][0]["compact"]["enabled"], True)
-            self.assertEqual(summary["targets"][0]["compact"]["files"], 1)
+            self.assertNotIn("compact", summary["targets"][0])
 
     def test_fanout_compact_false_preserves_direct_per_block_writes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
