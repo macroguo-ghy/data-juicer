@@ -696,7 +696,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
             "ecom_video_item_video_hdfs_parquet.yaml": {
                 "override_num_blocks": 4096,
                 "num_proc": 1024,
-                "dedup_set_num": 256,
+                "dedup_set_num": 64,
                 "actor_get_timeout": 600,
                 "actor_get_retry_times": 2,
                 "max_vids_per_request": 20,
