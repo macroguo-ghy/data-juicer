@@ -653,6 +653,22 @@ process:
 
         self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
 
+    def test_variable_mapping_alias_strips_surrounding_whitespace(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                " user_query ": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
+
     def test_sample_root_takes_precedence_over_sample_field(self):
         op = LLMInferenceMapper(
             user_prompt='历史对话：{{ sample["context/memory/chat_history"] }}',

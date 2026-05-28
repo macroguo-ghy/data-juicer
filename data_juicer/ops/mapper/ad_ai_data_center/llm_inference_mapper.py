@@ -101,7 +101,7 @@ class LLMInferenceMapper(Mapper):
             raise ValueError("repartition_num_blocks must be a positive integer")
         if retry_attempts < 0:
             raise ValueError("retry_attempts must be non-negative")
-        self._validate_variable_mapping(variable_mapping)
+        variable_mapping = self._normalize_variable_mapping(variable_mapping)
 
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
@@ -117,7 +117,7 @@ class LLMInferenceMapper(Mapper):
         self.timeout = timeout
         self.repartition_num_blocks = repartition_num_blocks
         self.retry_attempts = retry_attempts
-        self.variable_mapping = variable_mapping or {}
+        self.variable_mapping = variable_mapping
         self._operator_execution_callback_client = None
 
     def run(self, dataset, *, exporter=None, tracer=None):
@@ -210,13 +210,17 @@ class LLMInferenceMapper(Mapper):
             )
 
     @staticmethod
-    def _validate_variable_mapping(variable_mapping: dict[str, str] | None):
+    def _normalize_variable_mapping(variable_mapping: dict[str, str] | None) -> dict[str, str]:
         if variable_mapping is None:
-            return
+            return {}
         if not isinstance(variable_mapping, dict):
             raise ValueError("variable_mapping must be a dictionary")
+        normalized = {}
         for alias, source_field in variable_mapping.items():
             if not isinstance(alias, str) or not alias:
+                raise ValueError("variable_mapping keys must be non-empty strings")
+            alias = alias.strip()
+            if not alias:
                 raise ValueError("variable_mapping keys must be non-empty strings")
             if not LLMInferenceMapper._is_jinja_variable_name(alias):
                 raise ValueError("variable_mapping keys must be valid Jinja variable names")
@@ -224,6 +228,8 @@ class LLMInferenceMapper(Mapper):
                 raise ValueError("variable_mapping key sample is reserved")
             if not isinstance(source_field, str) or not source_field:
                 raise ValueError("variable_mapping values must be non-empty strings")
+            normalized[alias] = source_field
+        return normalized
 
     @staticmethod
     def _is_jinja_variable_name(alias: str) -> bool:
