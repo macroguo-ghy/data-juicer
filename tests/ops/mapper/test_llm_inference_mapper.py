@@ -528,6 +528,161 @@ process:
 
         self.assertEqual(payload["userPrompt"], "历史对话：用户：ROI 为什么下降？")
 
+    def test_user_prompt_supports_variable_mapping(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                "user_query": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
+
+    def test_system_prompt_supports_variable_mapping(self):
+        op = LLMInferenceMapper(
+            system_prompt="历史：{{ chat_history }}",
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                "chat_history": "context/memory/chat_history",
+                "user_query": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "context/memory/chat_history": "用户：ROI 为什么下降？",
+            "客户问题": "怎么优化？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["systemPrompt"], "历史：用户：ROI 为什么下降？")
+        self.assertEqual(payload["userPrompt"], "用户问题：怎么优化？")
+
+    def test_prompt_template_supports_variable_mapping(self):
+        op = LLMInferenceMapper(
+            prompt_template="用户问题：{{ user_query }}",
+            variable_mapping={
+                "user_query": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        prompt = op._build_prompt({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(prompt, "用户问题：ROI 为什么下降？")
+
+    def test_variable_mapping_alias_takes_precedence_over_sample_field(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                "user_query": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "user_query": "普通字段",
+            "客户问题": "映射字段",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：映射字段")
+
+    def test_variable_mapping_missing_source_field_raises_clear_error(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                "user_query": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"user_prompt missing field: variable_mapping\.user_query -> 客户问题",
+        ):
+            op._build_prompt_payload({
+                RECORD_KEY_FIELD: "record-1",
+            })
+
+    def test_variable_mapping_alias_must_be_jinja_variable_name(self):
+        invalid_aliases = [
+            "user-query",
+            "1query",
+            "user query",
+            "sample.foo",
+            'sample["foo"]',
+        ]
+
+        for alias in invalid_aliases:
+            with self.subTest(alias=alias):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "variable_mapping keys must be valid Jinja variable names",
+                ):
+                    LLMInferenceMapper(
+                        user_prompt="用户问题：{{ user_query }}",
+                        variable_mapping={
+                            alias: "客户问题",
+                        },
+                        ctx=self._ctx(),
+                    )
+
+    def test_variable_mapping_alias_supports_jinja_unicode_name(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ 用户问题 }}",
+            variable_mapping={
+                "用户问题": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
+
+    def test_variable_mapping_alias_strips_surrounding_whitespace(self):
+        op = LLMInferenceMapper(
+            user_prompt="用户问题：{{ user_query }}",
+            variable_mapping={
+                " user_query ": "客户问题",
+            },
+            ctx=self._ctx(),
+        )
+
+        payload = op._build_prompt_payload({
+            "客户问题": "ROI 为什么下降？",
+            RECORD_KEY_FIELD: "record-1",
+        })
+
+        self.assertEqual(payload["userPrompt"], "用户问题：ROI 为什么下降？")
+
+    def test_variable_mapping_rejects_duplicate_alias_after_normalization(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "variable_mapping contains duplicate alias after normalization: user_query",
+        ):
+            LLMInferenceMapper(
+                user_prompt="用户问题：{{ user_query }}",
+                variable_mapping={
+                    "user_query": "客户问题A",
+                    " user_query ": "客户问题B",
+                },
+                ctx=self._ctx(),
+            )
+
     def test_sample_root_takes_precedence_over_sample_field(self):
         op = LLMInferenceMapper(
             user_prompt='历史对话：{{ sample["context/memory/chat_history"] }}',
