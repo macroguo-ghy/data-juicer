@@ -125,7 +125,7 @@ process:
       condition: "item_duration <= 60 and valid_video_count > 0"
       field_key: "md5"
       id_key: "id"
-      dedup_set_num: 512
+      dedup_set_num: 256
       actor_get_timeout: 600
       actor_get_retry_times: 2
 
