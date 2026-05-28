@@ -38,6 +38,7 @@ class TaskProgressSnapshot:
     output_bytes: int | None
     output_files: int | None
     custom_stats: dict[str, Any]
+    export_targets: list[dict[str, Any]] | None = None
     error_summary: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +101,7 @@ class AdcLarkMessageNotificationHook:
         output_rows_text = _format_optional_value(snapshot.output_rows)
         output_files_text = _format_optional_value(snapshot.output_files)
         export_path_text = _format_optional_value(snapshot.export_path)
+        export_targets_text = _format_export_targets_text(snapshot.export_targets)
         error_summary_text = snapshot.error_summary or "无"
         ray_ui_url = _format_url_variable(custom_fields.get("rayUiUrl") or custom_fields.get("ray_ui_url"))
         driver_log_url = _format_url_variable(custom_fields.get("driverLogUrl") or custom_fields.get("driver_log_url"))
@@ -132,6 +134,10 @@ class AdcLarkMessageNotificationHook:
             "export_path": snapshot.export_path,
             "exportPathText": export_path_text,
             "export_path_text": export_path_text,
+            "exportTargets": snapshot.export_targets or [],
+            "export_targets": snapshot.export_targets or [],
+            "exportTargetsText": export_targets_text,
+            "export_targets_text": export_targets_text,
             "outputRows": snapshot.output_rows,
             "output_rows": snapshot.output_rows,
             "outputRowsText": output_rows_text,
@@ -179,6 +185,10 @@ class AdcLarkMessageNotificationHook:
                 "export_path": snapshot.export_path,
                 "exportPathText": export_path_text,
                 "export_path_text": export_path_text,
+                "exportTargets": snapshot.export_targets or [],
+                "export_targets": snapshot.export_targets or [],
+                "exportTargetsText": export_targets_text,
+                "export_targets_text": export_targets_text,
                 "outputRows": snapshot.output_rows,
                 "output_rows": snapshot.output_rows,
                 "outputRowsText": output_rows_text,
@@ -217,6 +227,7 @@ class AdcLarkMessageNotificationHook:
         configured_stats = self.hook_cfg.get("custom_stats") or []
         output = []
         seen = set()
+        suppress_keys = _rollup_stat_keys_shadowed_by_configured(configured_stats, stats)
         for item in configured_stats:
             if isinstance(item, str):
                 key = item
@@ -237,7 +248,7 @@ class AdcLarkMessageNotificationHook:
                 stat["group"] = group
             output.append(stat)
         for key in sorted(stats):
-            if key in seen:
+            if key in seen or key in suppress_keys:
                 continue
             value = stats.get(key)
             output.append({"key": key, "label": key, "value": value})
@@ -375,6 +386,7 @@ class TaskNotificationManager:
             output_bytes=export_summary.get("output_bytes"),
             output_files=export_summary.get("output_files"),
             custom_stats=stats,
+            export_targets=export_summary.get("targets"),
             error_summary=self.error_summary,
         )
 
@@ -612,6 +624,61 @@ def _format_custom_stats_text(items: list[dict[str, Any]]) -> str:
         label = item.get("label") or item.get("key") or "stat"
         lines.append(f"• {label}：{_format_optional_value(item.get('value'))}")
     return "\n".join(lines)
+
+
+def _format_export_targets_text(targets: list[dict[str, Any]] | None) -> str:
+    if not targets:
+        return "暂无"
+    lines = []
+    for index, target in enumerate(targets, 1):
+        if not isinstance(target, dict):
+            lines.append(f"{index}. {_format_optional_value(target)}")
+            continue
+        rows = _format_optional_value(_first_present(target, "rows", "output_rows"))
+        files = _format_optional_value(target.get("output_files"))
+        bytes_text = _format_bytes(target.get("output_bytes"))
+        path = _format_optional_value(_first_present(target, "path", "original_uri", "uri"))
+        lines.append(f"{index}. 行数：{rows}；文件数：{files}；大小：{bytes_text}")
+        lines.append(path)
+    return "\n".join(lines)
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping.get(key)
+    return None
+
+
+def _rollup_stat_keys_shadowed_by_configured(configured_stats: list[Any], stats: dict[str, Any]) -> set[str]:
+    configured_keys = _configured_custom_stat_dependency_keys(configured_stats)
+    suppressed = set()
+    for key in stats:
+        parts = str(key).split(".")
+        if len(parts) != 2 or parts[1] not in {"total_count", "success_count", "failed_count"}:
+            continue
+        family, suffix = parts
+        for configured_key in configured_keys:
+            configured_parts = str(configured_key).split(".")
+            if len(configured_parts) >= 3 and configured_parts[0] == family and configured_parts[-1] == suffix:
+                suppressed.add(key)
+                break
+    return suppressed
+
+
+def _configured_custom_stat_dependency_keys(configured_stats: list[Any]) -> set[str]:
+    keys = set()
+    for item in configured_stats:
+        if isinstance(item, str):
+            keys.add(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for field in ("key", "numerator", "numerator_key", "denominator", "denominator_key"):
+            value = item.get(field)
+            if value:
+                keys.add(str(value))
+    return keys
 
 
 def _is_ratio_custom_stat(item: dict[str, Any]) -> bool:

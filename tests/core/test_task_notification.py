@@ -268,6 +268,20 @@ class TaskNotificationTest(unittest.TestCase):
                     "output_rows": 4,
                     "output_files": 2,
                     "output_bytes": 128,
+                    "targets": [
+                        {
+                            "path": "hdfs://cluster/output_short",
+                            "rows": 3,
+                            "output_files": 1,
+                            "output_bytes": 64,
+                        },
+                        {
+                            "path": "hdfs://cluster/output_long",
+                            "rows": 1,
+                            "output_files": 1,
+                            "output_bytes": 64,
+                        },
+                    ],
                 },
             )
 
@@ -276,7 +290,13 @@ class TaskNotificationTest(unittest.TestCase):
             self.assertEqual(snapshot["status"], "success")
             self.assertEqual(snapshot["phase"], "finished")
             self.assertEqual(snapshot["output_rows"], 4)
+            self.assertEqual(len(snapshot["export_targets"]), 2)
             self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4, "other": 9})
+            variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+            self.assertIn("1. 行数：3；文件数：1；大小：64 B", variables["export_targets_text"])
+            self.assertIn("hdfs://cluster/output_short", variables["export_targets_text"])
+            self.assertIn("2. 行数：1；文件数：1；大小：64 B", variables["exportTargetsText"])
+            self.assertIn("hdfs://cluster/output_long", variables["exportTargetsText"])
 
     def test_manager_snapshot_uses_live_export_summary_provider(self):
         cfg = SimpleNamespace(
@@ -400,6 +420,8 @@ class TaskNotificationTest(unittest.TestCase):
                 self._hook_cfg(
                     interval=None,
                     custom_stats=[
+                        {"key": "rpc.video_url_rpc_mapper.total_count", "label": "RPC 总次数"},
+                        {"key": "rpc.video_url_rpc_mapper.success_count", "label": "RPC 成功次数"},
                         {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数"},
                         {
                             "key": "rpc.video_url_rpc_mapper.failure_rate",
@@ -420,7 +442,11 @@ class TaskNotificationTest(unittest.TestCase):
         collector = RuntimeStatsCollector()
         collector.snapshot = MagicMock(
             return_value={
+                "rpc.total_count": 20,
+                "rpc.success_count": 17,
+                "rpc.failed_count": 3,
                 "rpc.video_url_rpc_mapper.total_count": 20,
+                "rpc.video_url_rpc_mapper.success_count": 17,
                 "rpc.video_url_rpc_mapper.failed_count": 3,
             }
         )
@@ -433,22 +459,23 @@ class TaskNotificationTest(unittest.TestCase):
         self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failure_rate"], "15.00%")
         self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate"], "15.00%")
         self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate_text"], "15.00%")
+        self.assertIn("• RPC 总次数：20", variables["custom_stats_text"])
+        self.assertIn("• RPC 成功次数：17", variables["custom_stats_text"])
         self.assertIn("• RPC 失败次数：3", variables["custom_stats_text"])
         self.assertIn("• RPC 失败率：15.00%", variables["custom_stats_text"])
-        self.assertIn("• rpc.video_url_rpc_mapper.total_count：20", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.total_count：20", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.failed_count：3", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.success_count：17", variables["custom_stats_text"])
         self.assertEqual(
             variables["customStats"],
             [
+                {"key": "rpc.video_url_rpc_mapper.total_count", "label": "RPC 总次数", "value": 20},
+                {"key": "rpc.video_url_rpc_mapper.success_count", "label": "RPC 成功次数", "value": 17},
                 {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数", "value": 3},
                 {
                     "key": "rpc.video_url_rpc_mapper.failure_rate",
                     "label": "RPC 失败率",
                     "value": "15.00%",
-                },
-                {
-                    "key": "rpc.video_url_rpc_mapper.total_count",
-                    "label": "rpc.video_url_rpc_mapper.total_count",
-                    "value": 20,
                 },
             ],
         )

@@ -793,7 +793,7 @@ notification_hooks:
           <h2>自定义统计</h2>
           <p>Ray worker 侧可以通过 <code>RuntimeStatsCollector.increment()</code> 写入 runtime stats actor，driver 侧 snapshot 会读取 actor 快照并生成 <code>custom_stats_text</code>。卡片模板只需要绑定 <code>custom_stats_text</code>，后续新增统计 KV 不需要再改卡片模板。</p>
 
-          <p><code>custom_stats</code> 配置现在只用于展示名、展示顺序和派生 ratio；未出现在 <code>custom_stats</code> 里的 runtime KV 会按 key 排序追加到 <code>custom_stats_text</code> 和 <code>customStats</code>。如果完全不配置 <code>custom_stats</code>，会展示 actor 中的全部 KV。</p>
+          <p><code>custom_stats</code> 配置现在只用于展示名、展示顺序和派生 ratio；未出现在 <code>custom_stats</code> 里的 runtime KV 会按 key 排序追加到 <code>custom_stats_text</code> 和 <code>customStats</code>。如果完全不配置 <code>custom_stats</code>，会展示 actor 中的全部 KV。若已配置 <code>rpc.video_url_rpc_mapper.total_count</code> 这类 op 维度计数，<code>rpc.total_count</code> 这类同后缀的家族级 rollup 计数不会再重复展示。</p>
 
           <h3>当前 dedup pipeline 写入的统计</h3>
           <div class="table-wrap">
