@@ -59,6 +59,53 @@ def _json_default(value):
     return str(value)
 
 
+def _log_fanout_event(level: str, event: str, payload: dict) -> None:
+    body = {"event": event, **payload}
+    try:
+        message = json.dumps(body, sort_keys=True, default=_json_default)
+    except Exception as exc:  # noqa: BLE001
+        message = json.dumps(
+            {
+                "event": event,
+                "log_error": repr(exc),
+                "payload_repr": repr(payload),
+            },
+            sort_keys=True,
+        )
+    getattr(logger, level)(message)
+
+
+def _target_log_context(target) -> dict:
+    extra_args = target.get("extra_args") or {}
+    columns = target.get("columns")
+    if columns is None:
+        columns = extra_args.get("columns")
+    return {
+        "target_index": target.get("index"),
+        "target_type": target.get("type"),
+        "path": target.get("original_uri", target.get("path")),
+        "mode": target.get("mode"),
+        "condition": target.get("condition", target.get("filter_condition", "")),
+        "compact": target.get("compact") or False,
+        "columns_count": len(columns or []),
+    }
+
+
+def _schema_log_context(schema) -> dict:
+    if schema is None:
+        return {"available": False}
+    base_schema = getattr(schema, "base_schema", schema)
+    names = getattr(base_schema, "names", None)
+    if names is None:
+        return {"available": True, "repr": str(schema)[:2048]}
+    names = list(names)
+    return {
+        "available": True,
+        "columns_count": len(names),
+        "columns_sample": names[:50],
+    }
+
+
 def summarize_filesystem_path(filesystem, path: str) -> dict[str, int]:
     from pyarrow.fs import FileSelector, FileType
 
@@ -162,32 +209,108 @@ class _FanoutCompactBuffer:
             "flushes": 0,
             "schema_mismatch_flushes": 0,
         }
+        self.append_calls = 0
         self.warned_schema_mismatch = False
         self.warned_large_row = False
+        self.logged_table_split = False
+        _log_fanout_event(
+            "info",
+            "ray_fanout_compact_buffer_init",
+            {
+                "write_uuid": self.datasink.write_uuid,
+                "task_index": self.task_index,
+                **_target_log_context(self.target),
+            },
+        )
 
     def append(self, table) -> dict[str, int]:
         if table.num_rows == 0:
             return self._empty_result()
+        self.append_calls += 1
+        if self.append_calls == 1:
+            _log_fanout_event(
+                "info",
+                "ray_fanout_compact_first_append",
+                {
+                    "write_uuid": self.datasink.write_uuid,
+                    "task_index": self.task_index,
+                    "input_rows": table.num_rows,
+                    "input_bytes": self._table_nbytes(table),
+                    **_target_log_context(self.target),
+                },
+            )
         if self.target["type"] == "jsonl":
             return self._append_jsonl(table)
         return self._append_parquet(table)
 
-    def flush(self) -> dict[str, int]:
+    def flush(self, *, reason: str = "manual") -> dict[str, int]:
         if self.rows == 0:
             return self._empty_result()
 
         rows = self.rows
+        bytes_buffered = self.bytes
+        table_count = len(self.tables)
+        jsonl_line_count = len(self.jsonl_lines)
         output_path = posixpath.join(self.target["path"], self._filename())
-        if self.target["type"] == "jsonl":
-            self.datasink._write_jsonl_lines(self.target["filesystem"], output_path, self.jsonl_lines)
-        else:
-            table = self.tables[0] if len(self.tables) == 1 else self._concat_tables(self.tables)
-            self.datasink._write_table(self.target, table, output_path)
+        _log_fanout_event(
+            "info",
+            "ray_fanout_compact_flush_start",
+            {
+                "write_uuid": self.datasink.write_uuid,
+                "task_index": self.task_index,
+                "flush_index": self.flush_index,
+                "reason": reason,
+                "buffered_rows": rows,
+                "buffered_bytes": bytes_buffered,
+                "buffered_tables": table_count,
+                "buffered_jsonl_lines": jsonl_line_count,
+                "output_path": output_path,
+                **_target_log_context(self.target),
+            },
+        )
+        try:
+            if self.target["type"] == "jsonl":
+                self.datasink._write_jsonl_lines(self.target["filesystem"], output_path, self.jsonl_lines)
+            else:
+                table = self.tables[0] if len(self.tables) == 1 else self._concat_tables(self.tables)
+                self.datasink._write_table(self.target, table, output_path)
+        except Exception as exc:  # noqa: BLE001
+            _log_fanout_event(
+                "warning",
+                "ray_fanout_compact_flush_failed",
+                {
+                    "write_uuid": self.datasink.write_uuid,
+                    "task_index": self.task_index,
+                    "flush_index": self.flush_index,
+                    "reason": reason,
+                    "buffered_rows": rows,
+                    "buffered_bytes": bytes_buffered,
+                    "output_path": output_path,
+                    "error": repr(exc),
+                    **_target_log_context(self.target),
+                },
+            )
+            raise
         metadata = self.datasink._summarize_written_file(self.target, output_path)
         self.stats["files"] += metadata["output_files"]
         self.stats["flushes"] += 1
         self.flush_index += 1
         self._reset()
+        _log_fanout_event(
+            "info",
+            "ray_fanout_compact_flush_complete",
+            {
+                "write_uuid": self.datasink.write_uuid,
+                "task_index": self.task_index,
+                "flush_index": self.flush_index - 1,
+                "reason": reason,
+                "rows": rows,
+                "output_files": metadata["output_files"],
+                "output_bytes": metadata["output_bytes"],
+                "output_path": output_path,
+                **_target_log_context(self.target),
+            },
+        )
         return {
             "rows": rows,
             "files": metadata["output_files"],
@@ -207,7 +330,7 @@ class _FanoutCompactBuffer:
         result = self._empty_result()
         if self.schema is not None and not table.schema.equals(self.schema, check_metadata=False):
             if self.rows:
-                result = self._merge_results(result, self.flush())
+                result = self._merge_results(result, self.flush(reason="schema_mismatch"))
             self.stats["schema_mismatch_flushes"] += 1
             self._warn_schema_mismatch_once()
 
@@ -215,14 +338,15 @@ class _FanoutCompactBuffer:
         if table.num_rows == 1 and table_bytes > self.compact["max_buffer_bytes"]:
             self._warn_large_row_once(table_bytes)
         if self.rows and self.bytes + table_bytes > self.compact["max_buffer_bytes"]:
-            result = self._merge_results(result, self.flush())
+            result = self._merge_results(result, self.flush(reason="max_buffer_bytes"))
 
         self.tables.append(table)
         self.schema = table.schema
         self.rows += table.num_rows
         self.bytes += table_bytes
-        if self._should_flush():
-            result = self._merge_results(result, self.flush())
+        flush_reason = self._flush_reason()
+        if flush_reason:
+            result = self._merge_results(result, self.flush(reason=flush_reason))
         return result
 
     def _append_jsonl(self, table) -> dict[str, int]:
@@ -237,12 +361,13 @@ class _FanoutCompactBuffer:
             if line_bytes > self.compact["max_buffer_bytes"]:
                 self._warn_large_row_once(line_bytes)
             if self.rows and self.bytes + line_bytes > self.compact["max_buffer_bytes"]:
-                result = self._merge_results(result, self.flush())
+                result = self._merge_results(result, self.flush(reason="max_buffer_bytes"))
             self.jsonl_lines.append(line)
             self.rows += 1
             self.bytes += line_bytes
-            if self._should_flush():
-                result = self._merge_results(result, self.flush())
+            flush_reason = self._flush_reason()
+            if flush_reason:
+                result = self._merge_results(result, self.flush(reason=flush_reason))
         return result
 
     def _iter_table_slices(self, table):
@@ -252,6 +377,20 @@ class _FanoutCompactBuffer:
             yield table
             return
 
+        if not self.logged_table_split:
+            self.logged_table_split = True
+            _log_fanout_event(
+                "info",
+                "ray_fanout_compact_split_large_table",
+                {
+                    "write_uuid": self.datasink.write_uuid,
+                    "task_index": self.task_index,
+                    "input_rows": table.num_rows,
+                    "input_bytes": table_bytes,
+                    "max_buffer_bytes": max_buffer_bytes,
+                    **_target_log_context(self.target),
+                },
+            )
         avg_row_bytes = max(1, math.ceil(table_bytes / table.num_rows))
         rows_per_slice = max(1, min(table.num_rows, max_buffer_bytes // avg_row_bytes))
         start = 0
@@ -271,11 +410,16 @@ class _FanoutCompactBuffer:
             f"{self.task_index}-compact-{self.flush_index}.{extension}"
         )
 
-    def _should_flush(self) -> bool:
-        return (
-            self.bytes >= self.compact["target_bytes_per_file"]
-            or self.rows >= self.compact["target_rows_per_file"]
-        )
+    def _flush_reason(self):
+        bytes_reached = self.bytes >= self.compact["target_bytes_per_file"]
+        rows_reached = self.rows >= self.compact["target_rows_per_file"]
+        if bytes_reached and rows_reached:
+            return "target_bytes_and_rows"
+        if bytes_reached:
+            return "target_bytes_per_file"
+        if rows_reached:
+            return "target_rows_per_file"
+        return None
 
     def _reset(self) -> None:
         self.tables = []
@@ -288,22 +432,30 @@ class _FanoutCompactBuffer:
         if self.warned_schema_mismatch:
             return
         self.warned_schema_mismatch = True
-        logger.warning(
-            "Ray fan-out compact target {} saw incompatible Arrow schemas; "
-            "flushed the current compact buffer before continuing.",
-            self.target["original_uri"],
+        _log_fanout_event(
+            "warning",
+            "ray_fanout_compact_schema_mismatch",
+            {
+                "write_uuid": self.datasink.write_uuid,
+                "task_index": self.task_index,
+                **_target_log_context(self.target),
+            },
         )
 
     def _warn_large_row_once(self, row_bytes: int) -> None:
         if self.warned_large_row:
             return
         self.warned_large_row = True
-        logger.warning(
-            "Ray fan-out compact target {} has a single row larger than max_buffer_bytes "
-            "({} > {}); writing that row as a single compact file.",
-            self.target["original_uri"],
-            row_bytes,
-            self.compact["max_buffer_bytes"],
+        _log_fanout_event(
+            "warning",
+            "ray_fanout_compact_large_row",
+            {
+                "write_uuid": self.datasink.write_uuid,
+                "task_index": self.task_index,
+                "row_bytes": row_bytes,
+                "max_buffer_bytes": self.compact["max_buffer_bytes"],
+                **_target_log_context(self.target),
+            },
         )
 
     @staticmethod
@@ -356,6 +508,18 @@ class RayHdfsFanoutDatasink(Datasink):
             if "compact" in target:
                 writer_target["compact"] = target["compact"]
             self.targets.append(writer_target)
+        _log_fanout_event(
+            "info",
+            "ray_fanout_datasink_init",
+            {
+                "write_uuid": self.write_uuid,
+                "target_count": len(self.targets),
+                "compact_target_count": len([target for target in self.targets if target.get("compact")]),
+                "direct_target_count": len([target for target in self.targets if not target.get("compact")]),
+                "min_rows_per_write": self.min_rows_per_write,
+                "targets": [_target_log_context(target) for target in self.targets],
+            },
+        )
 
     @property
     def supports_distributed_writes(self) -> bool:
@@ -373,6 +537,16 @@ class RayHdfsFanoutDatasink(Datasink):
     def on_write_start(self, schema=None) -> None:
         from pyarrow.fs import FileType
 
+        _log_fanout_event(
+            "info",
+            "ray_fanout_on_write_start",
+            {
+                "write_uuid": self.write_uuid,
+                "min_rows_per_write": self.min_rows_per_write,
+                "schema": _schema_log_context(schema),
+                "targets": [_target_log_context(target) for target in self.targets],
+            },
+        )
         file_infos = []
         for target in self.targets:
             info = target["filesystem"].get_file_info(target["path"])
@@ -394,6 +568,20 @@ class RayHdfsFanoutDatasink(Datasink):
             elif info.type is FileType.NotFound:
                 target["created_dir"] = True
             self._create_dir(filesystem, target["path"])
+        _log_fanout_event(
+            "info",
+            "ray_fanout_output_dirs_ready",
+            {
+                "write_uuid": self.write_uuid,
+                "targets": [
+                    {
+                        **_target_log_context(target),
+                        "created_dir": target["created_dir"],
+                    }
+                    for target in self.targets
+                ],
+            },
+        )
 
     @staticmethod
     def _create_dir(filesystem, path):
@@ -403,6 +591,7 @@ class RayHdfsFanoutDatasink(Datasink):
             filesystem.create_dir(path)
 
     def write(self, blocks, ctx):
+        task_index = getattr(ctx, "task_idx", 0)
         results = {target["index"]: 0 for target in self.targets}
         partial_rows = {target["index"]: 0 for target in self.targets}
         partial_files = {target["index"]: 0 for target in self.targets}
@@ -411,11 +600,23 @@ class RayHdfsFanoutDatasink(Datasink):
             target["index"]: _FanoutCompactBuffer(
                 datasink=self,
                 target=target,
-                task_index=getattr(ctx, "task_idx", 0),
+                task_index=task_index,
             )
             for target in self.targets
             if target.get("compact")
         }
+        direct_logged_targets = set()
+        _log_fanout_event(
+            "info",
+            "ray_fanout_write_task_start",
+            {
+                "write_uuid": self.write_uuid,
+                "task_index": task_index,
+                "min_rows_per_write": self.min_rows_per_write,
+                "compact_target_indices": sorted(compact_buffers),
+                "direct_target_indices": sorted(target["index"] for target in self.targets if not target.get("compact")),
+            },
+        )
         try:
             for block_index, block in enumerate(blocks):
                 table = self._block_to_table(block)
@@ -436,9 +637,39 @@ class RayHdfsFanoutDatasink(Datasink):
                             partial_bytes,
                         )
                         continue
-                    filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
+                    filename = self._filename(target, task_index, block_index)
                     output_path = posixpath.join(target["path"], filename)
-                    self._write_table(target, filtered_table, output_path)
+                    if target_index not in direct_logged_targets:
+                        direct_logged_targets.add(target_index)
+                        _log_fanout_event(
+                            "info",
+                            "ray_fanout_direct_write_first_file",
+                            {
+                                "write_uuid": self.write_uuid,
+                                "task_index": task_index,
+                                "block_index": block_index,
+                                "rows": filtered_table.num_rows,
+                                "output_path": output_path,
+                                **_target_log_context(target),
+                            },
+                        )
+                    try:
+                        self._write_table(target, filtered_table, output_path)
+                    except Exception as exc:  # noqa: BLE001
+                        _log_fanout_event(
+                            "warning",
+                            "ray_fanout_direct_write_failed",
+                            {
+                                "write_uuid": self.write_uuid,
+                                "task_index": task_index,
+                                "block_index": block_index,
+                                "rows": filtered_table.num_rows,
+                                "output_path": output_path,
+                                "error": repr(exc),
+                                **_target_log_context(target),
+                            },
+                        )
+                        raise
                     metadata = self._summarize_written_file(target, output_path)
                     rows = filtered_table.num_rows
                     results[target_index] += rows
@@ -446,7 +677,7 @@ class RayHdfsFanoutDatasink(Datasink):
                     partial_files[target_index] += metadata["output_files"]
                     partial_bytes[target_index] += metadata["output_bytes"]
             for target_index, compact_buffer in compact_buffers.items():
-                write_delta = compact_buffer.flush()
+                write_delta = compact_buffer.flush(reason="final")
                 self._apply_write_delta(
                     target_index,
                     write_delta,
@@ -460,7 +691,36 @@ class RayHdfsFanoutDatasink(Datasink):
                     target_index: compact_buffer.compact_summary()
                     for target_index, compact_buffer in compact_buffers.items()
                 }
+            _log_fanout_event(
+                "info",
+                "ray_fanout_write_task_complete",
+                {
+                    "write_uuid": self.write_uuid,
+                    "task_index": task_index,
+                    "targets": self._task_targets_for_log(partial_rows, partial_files, partial_bytes),
+                    "compact": {
+                        target_index: compact_buffer.compact_summary()
+                        for target_index, compact_buffer in compact_buffers.items()
+                    },
+                },
+            )
             return results
+        except Exception as exc:  # noqa: BLE001
+            _log_fanout_event(
+                "warning",
+                "ray_fanout_write_task_failed",
+                {
+                    "write_uuid": self.write_uuid,
+                    "task_index": task_index,
+                    "error": repr(exc),
+                    "targets": self._task_targets_for_log(partial_rows, partial_files, partial_bytes),
+                    "compact": {
+                        target_index: compact_buffer.compact_summary()
+                        for target_index, compact_buffer in compact_buffers.items()
+                    },
+                },
+            )
+            raise
         finally:
             self._record_partial_write_stats(
                 partial_rows,
@@ -471,6 +731,18 @@ class RayHdfsFanoutDatasink(Datasink):
                     for target_index, compact_buffer in compact_buffers.items()
                 },
             )
+
+    def _task_targets_for_log(self, partial_rows, partial_files, partial_bytes):
+        return [
+            {
+                "target_index": target["index"],
+                "rows": partial_rows.get(target["index"], 0),
+                "files": partial_files.get(target["index"], 0),
+                "bytes": partial_bytes.get(target["index"], 0),
+                "compact_enabled": bool(target.get("compact")),
+            }
+            for target in self.targets
+        ]
 
     @staticmethod
     def _apply_write_delta(target_index, write_delta, results, partial_rows, partial_files, partial_bytes):
@@ -534,6 +806,14 @@ class RayHdfsFanoutDatasink(Datasink):
             "targets": target_summaries,
         }
         self.last_write_summary = summary
+        _log_fanout_event(
+            "info",
+            "ray_fanout_on_write_complete",
+            {
+                "write_uuid": self.write_uuid,
+                "summary": summary,
+            },
+        )
         return summary
 
     @staticmethod
@@ -589,13 +869,22 @@ class RayHdfsFanoutDatasink(Datasink):
         output_rows = self._optional_int(stats.get(self._stats_key("output_rows")))
         output_files = self._sum_optional_values(target["output_files"] for target in target_summaries)
         output_bytes = self._sum_optional_values(target["output_bytes"] for target in target_summaries)
-        return {
+        summary = {
             "partial": True,
             "output_rows": output_rows,
             "output_files": output_files,
             "output_bytes": output_bytes,
             "targets": target_summaries,
         }
+        _log_fanout_event(
+            "info",
+            "ray_fanout_partial_write_summary",
+            {
+                "write_uuid": self.write_uuid,
+                "summary": summary,
+            },
+        )
+        return summary
 
     def _partial_compact_summary(self, stats, target_index):
         compact_stats = self._new_compact_stats()
