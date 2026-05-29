@@ -256,7 +256,7 @@ dataset:
 | `format` | 否 | `parquet` | 支持 `parquet`、`json`、`jsonl` 以及 `.parquet`、`.json`、`.jsonl` 等扩展名写法。读取目录时不会按目录名自动识别格式，省略时仍按 `parquet` 处理。 |
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
-| `limit` | 否 | 无 | Ray HDFS 直读后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
+| `limit` | 否 | 无 | 限制进入后续 process/export 的行数。Parquet 会先基于文件级 metadata 裁剪到足够覆盖 `limit` 的最短文件列表，再应用 `Dataset.limit(limit)` 精确截断最后一个文件；如果配置了 `shuffle` 或 `partition_filter`，为保持随机化/分区过滤语义，不做预裁剪。JSON/JSONL 无可靠行数 metadata，仅在直读后应用 `Dataset.limit(limit)`。 |
 | `on_bad_files` | 否 | `error` | 坏文件处理策略。`error` 保持 fail-fast。Parquet 下，`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。JSON/JSONL 下，`skip` 会在 worker 读取时跳过空文件、非法 JSON 文件，以及读到中途才发现非法内容的整文件；该模式是文件级跳过，不做单行容错。如果所有文件都被跳过，则返回空 Ray Dataset。 |
 | `skip_zero_row_group_files` | 否 | `true` | 仅对 Parquet 生效。是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |

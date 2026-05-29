@@ -273,6 +273,8 @@ def _build_parquet_read_plan_from_filesystem(
     *,
     filter_for_ray_sampling_only: bool = False,
     skip_bad_files: bool = False,
+    limit: int | None = None,
+    allow_empty: bool = True,
 ) -> _ParquetReadPlan:
     try:
         import pyarrow.parquet as pq
@@ -280,7 +282,9 @@ def _build_parquet_read_plan_from_filesystem(
         parquet_paths = _parquet_files_from_filesystem(filesystem, path)
         if parquet_paths is None:
             return _ParquetReadPlan(paths=path)
-        if filter_for_ray_sampling_only and not skip_bad_files:
+        if parquet_paths == [] and not allow_empty:
+            return _ParquetReadPlan(paths=path)
+        if limit is None and filter_for_ray_sampling_only and not skip_bad_files:
             return _filter_ray_sampled_zero_row_group_files(filesystem, path, parquet_paths)
 
         readable_paths = []
@@ -315,6 +319,8 @@ def _build_parquet_read_plan_from_filesystem(
                 record_skipped_file(parquet_path, "0 row groups")
                 continue
             readable_paths.append(parquet_path)
+            if limit is not None and row_count >= limit:
+                break
 
         if skipped_empty_file_count:
             if skip_bad_files:
@@ -339,6 +345,8 @@ def _build_parquet_read_plan_from_filesystem(
                 row_count=row_count,
                 skipped_empty_file_count=skipped_empty_file_count,
             )
+        if limit is not None:
+            return _ParquetReadPlan(paths=readable_paths, schema=schema, row_count=row_count)
         return _ParquetReadPlan(paths=path, schema=schema, row_count=row_count)
     except Exception as exc:
         if skip_bad_files:
@@ -1291,17 +1299,33 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
 
             read_kwargs = self.get_ray_parquet_read_kwargs(kwargs)
             skip_zero_row_group_files = self.ds_config.get("skip_zero_row_group_files", True)
+            limit = self.ds_config.get("limit")
+            read_plan_limit = limit
+            if (
+                read_kwargs.get("shuffle") not in (None, False)
+                or read_kwargs.get("partition_filter") is not None
+                or (not skip_zero_row_group_files and on_bad_files != "skip")
+            ):
+                read_plan_limit = None
             if on_bad_files == "skip":
+                read_plan_kwargs = {"skip_bad_files": True}
+                if read_plan_limit is not None:
+                    read_plan_kwargs["limit"] = read_plan_limit
+                    read_plan_kwargs["allow_empty"] = True
                 read_plan = _build_parquet_read_plan_from_filesystem(
                     filesystem,
                     fs_path,
-                    skip_bad_files=True,
+                    **read_plan_kwargs,
                 )
-            elif skip_zero_row_group_files:
+            elif skip_zero_row_group_files or read_plan_limit is not None:
+                read_plan_kwargs = {"filter_for_ray_sampling_only": skip_zero_row_group_files}
+                if read_plan_limit is not None:
+                    read_plan_kwargs["limit"] = read_plan_limit
+                    read_plan_kwargs["allow_empty"] = False
                 read_plan = _build_parquet_read_plan_from_filesystem(
                     filesystem,
                     fs_path,
-                    filter_for_ray_sampling_only=True,
+                    **read_plan_kwargs,
                 )
             else:
                 read_plan = _ParquetReadPlan(paths=fs_path)
@@ -1317,7 +1341,6 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                 dataset = ray.data.from_arrow(empty_table, **from_arrow_kwargs)
             else:
                 dataset = ray.data.read_parquet(read_plan.paths, filesystem=filesystem, **read_kwargs)
-            limit = self.ds_config.get("limit")
             if limit is not None:
                 dataset = dataset.limit(limit)
             return RayDataset(
