@@ -32,6 +32,34 @@ class StateMetricRuntimeTest(unittest.TestCase):
 
         self.assertEqual(detect_id_key(state, "456"), "adv_id")
 
+    def test_detect_id_key_supports_material_id(self):
+        state = {"material_state": [{"material_id": "789"}]}
+
+        self.assertEqual(detect_id_key(state, "789"), "material_id")
+
+    def test_detect_id_key_prefers_ad_and_adv_before_material(self):
+        state = {
+            "ad_state": [{"ad_id": "123"}],
+            "adv_state": [{"adv_id": "123"}],
+            "material_state": [{"material_id": "123"}],
+        }
+
+        self.assertEqual(detect_id_key(state, "123"), "ad_id")
+
+    def test_helpers_get_id_key_exposes_id_detection(self):
+        helpers = MetricHelpers()
+        state = {
+            "ad_state": [{"ad_id": "123"}],
+            "adv_state": [{"adv_id": "456"}],
+            "material_state": [{"material_id": "789"}],
+        }
+
+        self.assertEqual(helpers.get_id_key(state, "123"), "ad_id")
+        self.assertEqual(helpers.get_id_key(state, "456"), "adv_id")
+        self.assertEqual(helpers.get_id_key(state, "789"), "material_id")
+        self.assertEqual(helpers.get_id_keys(state, "789"), {"material_id"})
+        self.assertIsNone(helpers.get_id_key(state, "000"))
+
     def test_helpers_safe_divide_and_parse_percent(self):
         helpers = MetricHelpers()
 

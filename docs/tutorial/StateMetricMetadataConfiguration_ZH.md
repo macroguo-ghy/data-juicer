@@ -43,15 +43,15 @@ process:
 | `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
 | `result_mode` | 否 | 输出模式，支持 `summary` 和 `object`，默认 `summary`。 |
 | `summary_success_only` | 否 | 仅 `summary` 模式生效；默认 `false` 保留成功和失败结果，`true` 时只输出 DF 成功字段。 |
-| `start_date_key` | 否 | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 使用。 |
-| `end_date_key` | 否 | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 使用。 |
+| `start_date_key` | 否 | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请通过 `inputParameter.params` 和 `parameter_mapping` 配置。 |
+| `end_date_key` | 否 | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请通过 `inputParameter.params` 和 `parameter_mapping` 配置。 |
 | `operators` | 是 | 本次要执行的指标列表。 |
 | `operators[].operator_id` | 是 | 后端指标元数据 ID。 |
 | `operators[].parameter_mapping` | 否 | `inputParameter.params` 中 `placeholder` 参数到样本字段的映射。 |
 | `ctx.apiBase` | 是 | ADC OpenAPI base URL。 |
 | `ctx.userAccount` | 是 | 请求后端接口和回调时使用的用户。 |
 
-公共上下文字段建议收敛为 `state_key`、`id_source_key`、`start_date_key`、`end_date_key`。`parameter_mapping` 只配置指标自己的业务参数；它的 key 必须是后端 `inputParameter.params[].key_name_en`，value 是输入样本里的字段名。
+公共上下文字段建议收敛为 `state_key`、`id_source_key`。`parameter_mapping` 配置指标自己的业务参数；它的 key 必须是后端 `inputParameter.params[].key_name_en`，value 是输入样本里的字段名。
 
 ## 3. 后端指标元数据
 
@@ -63,8 +63,8 @@ process:
   "operatorType": "metric",
   "operatorNameEn": "bench_roi_score",
   "operatorNameCn": "行业基准 ROI 得分",
-  "inputParameter": "{\"params\":[{\"key_name_en\":\"bench_roi\",\"data_type\":\"placeholder\"},{\"key_name_en\":\"threshold\",\"data_type\":\"defaultValue\",\"default_or_placeholder_value\":0.8}]}",
-  "operatorCode": "def calculate(state, bench_roi, threshold, id_value, id_key, start_date=None, end_date=None, helpers=None):\n    return helpers.fmt4(float(threshold))"
+  "inputParameter": "{\"params\":[{\"key_name_en\":\"bench_roi\",\"data_type\":\"placeholder\"},{\"key_name_en\":\"id_value\",\"data_type\":\"placeholder\"},{\"key_name_en\":\"threshold\",\"data_type\":\"defaultValue\",\"default_or_placeholder_value\":0.8}]}",
+  "operatorCode": "def calculate(state, bench_roi, id_value, threshold, helpers=None):\n    id_key = helpers.get_id_key(state, id_value)\n    return helpers.fmt4(float(threshold))"
 }
 ```
 
@@ -76,7 +76,7 @@ process:
   "operatorType": "tool",
   "toolName": "get_industry_creative_tips",
   "toolNameCn": "行业创意建议",
-  "inputParameter": "{\"params\":[]}",
+  "inputParameter": "{\"params\":[{\"key_name_en\":\"id_value\",\"data_type\":\"placeholder\"}]}",
   "handlerType": "builtin",
   "handlerName": "get_industry_creative_tips",
   "operatorCode": "def calculate(state, id_value, helpers=None):\n    return f\"建议优化 {id_value} 的前三秒卖点\""
@@ -131,7 +131,10 @@ tool 专用字段：
 推荐写法：
 
 ```python
-def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=None):
+def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
+    id_key = helpers.get_id_key(state, id_value)
+    if id_key is None:
+        raise ValueError(f"Unknown id: {id_value}")
     series = {}
     for adv in state.get("adv_state", []):
         if str(adv.get("adv_id")) == str(id_value):
@@ -156,13 +159,9 @@ def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=N
 | 参数 | 说明 |
 | --- | --- |
 | `state` | 从 `state_key` 读取并解析后的 State。 |
-| `id_key` | 当前 ID 在 State 中命中的字段，目前识别 `ad_id` 和 `adv_id`。 |
-| `id_value` | 当前正在计算的单个 ID。 |
-| `start_date` | 从 `start_date_key` 样本字段解析出的 `datetime.date`。 |
-| `end_date` | 从 `end_date_key` 样本字段解析出的 `datetime.date`。 |
 | `helpers` | 公共数学和日期辅助方法集合。 |
 
-注意：如果 `inputParameter.params` 里显式声明了同名参数，例如 `start_date` 或 `helpers`，则声明参数优先，会走 `parameter_mapping` 或 `defaultValue`，不会走 runtime 注入。一般不要把这些保留参数写进 `inputParameter.params`。
+`id_value`、`id_key`、`start_date`、`end_date` 不再是公共 runtime 注入参数。如果指标需要这些值，必须在 `inputParameter.params` 中声明，并通过 YAML `parameter_mapping` 映射到样本字段，或使用 `defaultValue`。`id_key` 不再作为形参注入，指标代码应通过 `helpers.get_id_key(state, id_value)` 主动识别。
 
 ### 4.2 公共函数兼容策略
 
@@ -175,7 +174,7 @@ from utils.math import calc_sequential_stats
 Data-Juicer 不会加载 Dataset Factory 的运行环境，也不会把 `utils.math` 这类路径注入到 `operatorCode` 的执行环境中。公共数学、日期和格式化能力统一通过 `helpers` 参数调用：
 
 ```python
-def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
+def calculate(state, start_date=None, end_date=None, helpers=None):
     series = {}
     cur, prev, ratio = helpers.calc_sequential_stats(series, start_date, end_date)
     return helpers.fmt4(cur or 0.0)
@@ -199,6 +198,8 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 | `parse_duration_seconds` | 解析秒数。 |
 | `average` | 求均值。 |
 | `fmt4` | 小数格式化，最多保留 4 位并去掉尾随 0。 |
+| `get_id_key` | 根据 `state` 和业务传入的 ID 识别 `ad_id`、`adv_id` 或 `material_id`。 |
+| `get_id_keys` | 返回当前 ID 在 State 中命中的所有 ID 类型集合。 |
 
 对于模板中“生成含问题发生时间及之前的 14 天数据”的数组字段，例如 `ad_active_materials_count: [5,5,6,6,6,7,7,7,6,6,5,5,6,6]`，`calc_sequential_stats`、`calc_sequential_stats_integer`、`calc_sequential_stats_for_fraction` 和 `calc_sequential_ratio` 会按数组前半段作为上周期、后半段作为本周期计算环比。若字段是 `{YYYY-MM-DD: value}` 字典，则仍按日期范围计算。
 
@@ -210,17 +211,18 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 如果配置了 `id_source_key` 且样本中该字段有值，算子会使用它作为当前样本的 ID 来源。算子不会再从 `inputParameter.params` 或 `parameter_mapping` 中按参数名推断 ID 来源；`ids`、`id`、`adv_id` 这类参数名都只是普通业务参数。
 
-因此，推荐配置是：公共 ID 统一放在算子级 `id_source_key`；指标级 `parameter_mapping` 只维护该指标自己的业务参数。需要当前计算 ID 时，在 `operatorCode` 中声明 runtime 注入参数 `id_value`，不要声明并映射 `ids`、`id`、`adv_id` 来承载当前 ID。
+因此，推荐配置是：公共 ID 统一放在算子级 `id_source_key`；指标级 `parameter_mapping` 只维护该指标自己的业务参数。需要在指标代码中使用 ID 时，显式声明普通参数，例如 `id_value`，并在该指标的 `parameter_mapping` 中映射到样本字段。
 
-注意：外部传入的 ID 是当前样本的主输入来源。也就是说，题目或样本字段里的 `adv_id` / `ad_id` 应优先通过 `id_source_key` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。State 里的 ID 只用于识别当前 ID 类型，也就是给 `calculate(..., id_key, ...)` 注入 `ad_id` 或 `adv_id`。
+注意：外部传入的 ID 是当前样本的主输入来源。也就是说，题目或样本字段里的 `adv_id` / `ad_id` 应优先通过 `id_source_key` 传入；summary 顶层 key 使用这个外部 ID。State 里的 ID 只用于 `helpers.get_id_key(state, id_value)` 识别当前 ID 类型。
 
 当前 `id_key` 识别只检查：
 
 - `state.ad_state[].ad_id`
 - `state.adv_state[].adv_id`
 - `state.adv_state[].meta_data.adv_id`
+- `state.material_state[].material_id`
 
-当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，声明了 `id_key` 的指标会因为无法识别 ID 类型而失败，错误类似 `Unknown id: ...`。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` 与外部样本 ID 对齐。
+当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，`helpers.get_id_key(state, id_value)` 会返回 `None`。如果指标依赖 ID 类型，应在指标代码里显式抛出类似 `Unknown id: ...` 的错误。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` / `material_id` 与外部样本 ID 对齐。
 
 如果样本字段是字符串：
 
@@ -230,7 +232,7 @@ def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
 
 如果样本字段是数组，则数组元素会按列表语义逐个作为 ID。
 
-每个 ID 都会执行一遍 `operators` 中的所有指标。若指标函数声明了 `id_key`，但当前 ID 无法在 `state.ad_state[].ad_id` 或 `state.adv_state[].adv_id` 中命中，该指标会失败并输出 `Unknown id: ...`。
+每个 ID 都会执行一遍 `operators` 中的所有指标。`id_source_key` 负责拆分 summary 的外层 ID key，但不会把当前拆分后的 ID 自动注入到 `calculate(...)`。如果指标把 `id_value` 配置为 placeholder，它拿到的是 `parameter_mapping` 指向的样本字段原始值。
 
 如果某个指标声明了 `ids`、`id`、`adv_id` 这类形参，它们会按普通 placeholder 处理：必须在 `parameter_mapping` 中映射到样本字段，且传入值是该字段原始值，不会被替换成当前拆分后的 ID。
 
@@ -329,7 +331,7 @@ metric 和 tool 的共同要求：
 
 - 后端能按 `operator_id` 返回元数据。
 - 元数据里有 `operatorCode`，并且能通过 `calculate(...)` 直接得到输出。
-- 入参能通过公共上下文字段、`inputParameter.params`、`parameter_mapping`、State 或 runtime 注入参数解决。
+- 入参能通过公共上下文字段、`inputParameter.params`、`parameter_mapping`、State 或 runtime 注入参数 `state` / `helpers` 解决。
 
 注意：Data-Juicer 当前不会加载 Dataset Factory 的 `run_aux_tools` / `get_tool_handler` 注册表，也不会因为 `handlerType=builtin` 自动调用 DF builtin handler。`handlerType` 和 `handlerName` 只是元信息；真正执行逻辑必须写在 `operatorCode.calculate(...)` 里。
 
@@ -345,10 +347,10 @@ metric 和 tool 的共同要求：
 4. tool 配置 `toolName` 和 `toolNameCn`，便于下游识别工具结果。
 5. `inputParameter` 是合法 JSON object 或 JSON 字符串，且 `params` 是数组。
 6. 每个 `calculate(...)` 普通业务参数都能在 `inputParameter.params` 找到。
-7. YAML 配置了公共上下文字段：`state_key`、`id_source_key`、`start_date_key`、`end_date_key`。
+7. YAML 配置了公共上下文字段：`state_key`、`id_source_key`。`start_date_key`、`end_date_key` 不再自动注入到指标代码，日期参数需要按普通业务参数配置。
 8. 每个业务 `placeholder` 参数都在 YAML `parameter_mapping` 中映射到了真实样本字段。
-9. 不把 `state`、`id_key`、`id_value`、`start_date`、`end_date`、`helpers` 这些 runtime 注入参数写进 `inputParameter.params`，除非明确要覆盖注入行为。
-10. 如果 metric/tool 依赖 `id_key`，确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
+9. 不把 `state`、`helpers` 写进 `inputParameter.params`；它们是当前仅有的 runtime 注入参数。
+10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id`、`adv_state[].adv_id` 或 `material_state[].material_id`。
 11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
 12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
 
@@ -379,10 +381,10 @@ metric 和 tool 的共同要求：
 
 ### 为什么指标代码里拿不到 `start_date`？
 
-需要同时满足两个条件：
+`start_date` 不再由算子自动注入。需要在指标元数据和 YAML 中把它按普通参数配置：
 
-1. YAML 配置了 `start_date_key`。
-2. `calculate(...)` 声明了 `start_date`，并且 `inputParameter.params` 没有显式声明同名参数。
+1. `inputParameter.params` 声明 `{"key_name_en": "start_date", "data_type": "placeholder"}`。
+2. YAML 的 `operators[].parameter_mapping.start_date` 映射到真实样本字段。
 
 `end_date` 同理。
 

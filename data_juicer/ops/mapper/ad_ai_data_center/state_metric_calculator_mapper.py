@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import datetime
 import inspect
 import json
 from typing import Any
@@ -19,7 +18,6 @@ from data_juicer.utils.operator_execution_callback_utils import (
 from data_juicer.utils.python_script_utils import PythonScriptRunner
 from data_juicer.ops.mapper.ad_ai_data_center.state_metric_runtime import (
     MetricHelpers,
-    detect_id_key,
     extract_metric_ids,
 )
 
@@ -64,8 +62,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param fail_policy: first version supports ``continue`` only.
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
-        :param start_date_key: optional sample field containing metric start date.
-        :param end_date_key: optional sample field containing metric end date.
+        :param start_date_key: compatibility field retained in operator config.
+        :param end_date_key: compatibility field retained in operator config.
         :param timeout: HTTP timeout in seconds.
         :param retry_attempts: HTTP retry attempts for ADC OpenAPI requests.
         :param summary_success_only: when true, summary output keeps only
@@ -200,7 +198,6 @@ class StateMetricCalculatorMapper(Mapper):
         for item_id in item_ids:
             metrics = []
             tools = []
-            current_id_key = detect_id_key(state_data, item_id)
             for operator_config in self.operators:
                 operator_id = operator_config["operator_id"]
                 detail = details.get(operator_id)
@@ -215,10 +212,8 @@ class StateMetricCalculatorMapper(Mapper):
                             sample,
                             operator_config,
                             detail,
-                            current_id=item_id,
                             state_data=state_data,
                             state_present=state_present,
-                            id_key=current_id_key,
                             helpers=helpers,
                         ))
                     else:
@@ -226,10 +221,8 @@ class StateMetricCalculatorMapper(Mapper):
                             sample,
                             operator_config,
                             detail,
-                            current_id=item_id,
                             state_data=state_data,
                             state_present=state_present,
-                            id_key=current_id_key,
                             helpers=helpers,
                         ))
                 except Exception as exc:
@@ -406,10 +399,8 @@ class StateMetricCalculatorMapper(Mapper):
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         detail: dict[str, Any],
-        current_id: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
-        id_key: str | None = None,
         helpers: MetricHelpers | None = None,
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
@@ -420,10 +411,8 @@ class StateMetricCalculatorMapper(Mapper):
             operator_config,
             parameters,
             inspect.signature(runner.process_func),
-            current_id=current_id,
             state_data=state_data,
             state_present=state_present,
-            id_key=id_key,
             helpers=helpers,
         )
         value = runner.run_with_args(*args)
@@ -439,10 +428,8 @@ class StateMetricCalculatorMapper(Mapper):
         sample: dict[str, Any],
         operator_config: dict[str, Any],
         detail: dict[str, Any],
-        current_id: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
-        id_key: str | None = None,
         helpers: MetricHelpers | None = None,
     ) -> dict[str, Any]:
         operator_id = int(detail["id"])
@@ -453,10 +440,8 @@ class StateMetricCalculatorMapper(Mapper):
             operator_config,
             parameters,
             inspect.signature(runner.process_func),
-            current_id=current_id,
             state_data=state_data,
             state_present=state_present,
-            id_key=id_key,
             helpers=helpers,
         )
         value = runner.run_with_args(*args)
@@ -473,10 +458,8 @@ class StateMetricCalculatorMapper(Mapper):
         operator_config: dict[str, Any],
         parameters: list[dict[str, Any]],
         signature: inspect.Signature,
-        current_id: str | None = None,
         state_data: Any = None,
         state_present: bool = False,
-        id_key: str | None = None,
         helpers: MetricHelpers | None = None,
     ) -> list[Any]:
         parameters_by_name = {
@@ -500,6 +483,8 @@ class StateMetricCalculatorMapper(Mapper):
                     if state_present
                     else self._resolve_state_value(sample)
                 )
+            elif name == "helpers":
+                args.append(helpers or MetricHelpers())
             elif name in parameters_by_name:
                 args.append(
                     self._resolve_parameter_value(
@@ -508,22 +493,6 @@ class StateMetricCalculatorMapper(Mapper):
                         parameters_by_name[name],
                     )
                 )
-            elif name == "id_key":
-                if id_key is None:
-                    raise ValueError(f"Unknown id: {current_id}")
-                args.append(id_key)
-            elif name == "id_value":
-                args.append(current_id)
-            elif name == "start_date":
-                args.append(
-                    self._resolve_date_value(sample, self.start_date_key)
-                )
-            elif name == "end_date":
-                args.append(
-                    self._resolve_date_value(sample, self.end_date_key)
-                )
-            elif name == "helpers":
-                args.append(helpers or MetricHelpers())
             elif func_parameter.default is not inspect.Parameter.empty:
                 args.append(func_parameter.default)
             else:
@@ -564,20 +533,6 @@ class StateMetricCalculatorMapper(Mapper):
         missing = object()
         value = sample.get(self.state_key, missing)
         return not self._is_missing_state_value(value, missing)
-
-    @staticmethod
-    def _resolve_date_value(sample: dict[str, Any], key: str | None):
-        if not key:
-            return None
-        value = sample.get(key)
-        if value is None or value == "":
-            return None
-        if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-            return value
-        try:
-            return datetime.date.fromisoformat(str(value))
-        except Exception as exc:
-            raise ValueError(f"sample.{key} must be a YYYY-MM-DD date") from exc
 
     def _resolve_output_items(
         self,

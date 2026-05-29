@@ -11,9 +11,9 @@
 | 字段 | 说明 |
 | --- | --- |
 | `state_key` | State 所在样本字段，默认 `state`。 |
-| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；summary 顶层 key 和 runtime 注入的 `id_value` 都来自该字段。 |
-| `start_date_key` | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 注入。 |
-| `end_date_key` | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 注入。 |
+| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；用于拆分 summary 顶层 key，不会再自动注入 `id_value`。 |
+| `start_date_key` | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请按普通 placeholder 配置。 |
+| `end_date_key` | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请按普通 placeholder 配置。 |
 | `output_key` | 输出字段，默认 `query_metric_data_outputs`。 |
 | `result_mode` | 支持 `summary` 和 `object`；两者结构一致，只差 JSON 序列化。 |
 | `summary_success_only` | 默认 `false`，保留成功和失败结果以及 `error` 字段。 |
@@ -43,9 +43,9 @@
 
 ### 1.4 Runtime 注入参数
 
-这些参数不要写入 `inputParameter.params`，算子会按 `calculate(...)` 签名自动注入：`state`、`id_value`、`id_key`、`start_date`、`end_date`、`helpers`。业务参数才写入 `inputParameter.params` 并通过 YAML `parameter_mapping` 映射。
+这些参数不要写入 `inputParameter.params`，算子会按 `calculate(...)` 签名自动注入：`state`、`helpers`。业务参数才写入 `inputParameter.params` 并通过 YAML `parameter_mapping` 映射；`id_value`、`id_key`、`start_date`、`end_date` 不再公共注入。
 
-外部题目或样本字段里的 ID 是主输入来源，通常通过 `id_source_key` 传入；summary 顶层 key 和 `id_value` 都使用这个外部 ID。`id_key` 不是直接取外部字段名，而是用外部 ID 到生成后的 State 里匹配得到：当前只检查 `ad_state[].ad_id`、`adv_state[].adv_id` 和 `adv_state[].meta_data.adv_id`，不会通过 `ad_state[].related_adv_id` 推断 `adv_id`。
+外部题目或样本字段里的 ID 是主输入来源，通常通过 `id_source_key` 传入；summary 顶层 key 和按普通参数配置的 `id_value` 都使用这个外部 ID。`id_key` 不是直接取外部字段名，而是用外部 ID 到生成后的 State 里匹配得到：当前检查 `ad_state[].ad_id`、`adv_state[].adv_id`、`adv_state[].meta_data.adv_id` 和 `material_state[].material_id`，不会通过 `ad_state[].related_adv_id` 推断 `adv_id`。
 
 ## 2. Metric 清单
 

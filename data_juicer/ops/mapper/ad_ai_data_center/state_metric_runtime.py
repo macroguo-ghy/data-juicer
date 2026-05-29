@@ -51,6 +51,11 @@ def detect_id_keys(state_data: dict[str, Any], id_value: Any) -> set[str]:
             keys.add("adv_id")
             break
 
+    for material in state_data.get("material_state", []) or []:
+        if isinstance(material, dict) and str(material.get("material_id", "")).strip() == id_text:
+            keys.add("material_id")
+            break
+
     return keys
 
 
@@ -60,10 +65,20 @@ def detect_id_key(state_data: dict[str, Any], id_value: Any) -> str | None:
         return "ad_id"
     if "adv_id" in keys:
         return "adv_id"
+    if "material_id" in keys:
+        return "material_id"
     return None
 
 
 class MetricHelpers:
+
+    @staticmethod
+    def get_id_keys(state_data, id_value):
+        return detect_id_keys(state_data, id_value)
+
+    @staticmethod
+    def get_id_key(state_data, id_value):
+        return detect_id_key(state_data, id_value)
 
     @staticmethod
     def extract_numeric_values_in_range(series_map, start_date, end_date):

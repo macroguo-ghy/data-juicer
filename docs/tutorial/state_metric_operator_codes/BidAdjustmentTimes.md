@@ -10,12 +10,15 @@
 
 ## Data-Juicer operatorCode 要求
 
-同步到 ADC 元数据平台时，`operatorCode` 必须定义 `calculate(...)`。推荐签名：
+同步到 ADC 元数据平台时，`operatorCode` 必须定义 `calculate(...)`。推荐写法：
 
 ```python
-def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=None):
+def calculate(state, id_value, start_date=None, end_date=None, helpers=None):
+    id_key = helpers.get_id_key(state, id_value)
     ...
 ```
+
+其中 `id_value`、`start_date`、`end_date` 需要在 `inputParameter.params` 和 YAML `parameter_mapping` 中显式配置；`id_key` 通过 `helpers.get_id_key(state, id_value)` 获取，不再作为形参注入。
 
 下面保留的是 Dataset Factory 真实计算代码，迁移时需要把 `state_data` 改为 `state`，把公共数学函数改为 `helpers.xxx(...)`，并移除对 Dataset Factory 包路径的运行时依赖。
 

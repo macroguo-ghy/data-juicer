@@ -371,7 +371,12 @@ process:
                     "toolNameCn": "行业创意建议",
                     "handlerType": "builtin",
                     "handlerName": "get_industry_creative_tips",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
                         "def calculate(id_value):\n"
                         "    return f'建议优化计划 {id_value} 的前三秒卖点'\n"
@@ -382,7 +387,7 @@ process:
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
             id_source_key="issue_id",
-            operators=[{"operator_id": 301, "parameter_mapping": {}}],
+            operators=[{"operator_id": 301, "parameter_mapping": {"id_value": "issue_id"}}],
             ctx=self._ctx(),
         )
 
@@ -414,7 +419,12 @@ process:
                     "operatorType": "metric",
                     "operatorNameEn": "BidAdjustmentTimes",
                     "operatorNameCn": "是否频繁调整出价",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
                         "def calculate(id_value):\n"
                         "    return f'指标名称:是否频繁调整出价, 指标值：计划ID:{id_value}：否'\n"
@@ -425,7 +435,12 @@ process:
                     "operatorType": "metric",
                     "operatorNameEn": "failed_metric",
                     "operatorNameCn": "失败指标",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": "def calculate(id_value):\n    raise ValueError('bad metric')\n",
                 },
                 {
@@ -433,7 +448,12 @@ process:
                     "operatorType": "metric",
                     "operatorNameEn": "failed_output_metric",
                     "operatorNameCn": "失败输出指标",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": "def calculate(id_value):\n    return '返回调用失败'\n",
                 },
                 {
@@ -441,7 +461,12 @@ process:
                     "operatorType": "tool",
                     "toolName": "customer_info_acquisition",
                     "toolNameCn": "客户信息获取",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": "def calculate(id_value):\n    return \"{'adv_name':'焱焱香文化'}\"\n",
                 },
             ],
@@ -451,10 +476,10 @@ process:
             id_source_key="issue_id",
             summary_success_only=True,
             operators=[
-                {"operator_id": 201, "parameter_mapping": {}},
-                {"operator_id": 202, "parameter_mapping": {}},
-                {"operator_id": 203, "parameter_mapping": {}},
-                {"operator_id": 301, "parameter_mapping": {}},
+                {"operator_id": 201, "parameter_mapping": {"id_value": "issue_id"}},
+                {"operator_id": 202, "parameter_mapping": {"id_value": "issue_id"}},
+                {"operator_id": 203, "parameter_mapping": {"id_value": "issue_id"}},
+                {"operator_id": 301, "parameter_mapping": {"id_value": "issue_id"}},
             ],
             ctx=self._ctx(),
         )
@@ -495,7 +520,12 @@ process:
                     "operatorType": "metric",
                     "operatorNameEn": "AdOnlineMaterialsCount",
                     "operatorNameCn": "在投素材数环比",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": "def calculate(id_value):\n    return f'metric:{id_value}'\n",
                 },
                 {
@@ -505,7 +535,12 @@ process:
                     "toolNameCn": "行业创意建议",
                     "handlerType": "builtin",
                     "handlerName": "get_industry_creative_tips",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": "def calculate(id_value):\n    return f'tool:{id_value}'\n",
                 },
             ],
@@ -515,8 +550,8 @@ process:
             id_source_key="issue_id",
             result_mode="object",
             operators=[
-                {"operator_id": 201, "parameter_mapping": {}},
-                {"operator_id": 301, "parameter_mapping": {}},
+                {"operator_id": 201, "parameter_mapping": {"id_value": "issue_id"}},
+                {"operator_id": 301, "parameter_mapping": {"id_value": "issue_id"}},
             ],
             ctx=self._ctx(),
         )
@@ -667,7 +702,7 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_calculate_can_receive_metric_context(self, mock_client_cls):
+    def test_calculate_can_receive_configured_metric_context(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -677,12 +712,19 @@ process:
                     "inputParameter": (
                         '{"params": ['
                         '{"data_type": "placeholder", "key_name_en": "ids", '
-                        '"default_or_placeholder_value": "ids"}'
+                        '"default_or_placeholder_value": "ids"},'
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"},'
+                        '{"data_type": "placeholder", "key_name_en": "start_date", '
+                        '"default_or_placeholder_value": "start_date"},'
+                        '{"data_type": "placeholder", "key_name_en": "end_date", '
+                        '"default_or_placeholder_value": "end_date"}'
                         ']}'
                     ),
                     "operatorCode": (
-                        "def calculate(state, ids, id_key, id_value, "
-                        "start_date=None, end_date=None, helpers=None):\n"
+                        "def calculate(state, ids, id_value, start_date, "
+                        "end_date, helpers=None):\n"
+                        "    id_key = helpers.get_id_key(state, id_value)\n"
                         "    return {\n"
                         "        'ids': ids,\n"
                         "        'id_key': id_key,\n"
@@ -702,6 +744,9 @@ process:
                 "operator_id": 220,
                 "parameter_mapping": {
                     "ids": "issue_id",
+                    "id_value": "issue_id",
+                    "start_date": "start",
+                    "end_date": "end",
                 },
             }],
             ctx=self._ctx(),
@@ -726,7 +771,7 @@ process:
         self.assertEqual(output["fmt"], "1.23")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_declared_params_take_precedence_over_reserved_context_names(self, mock_client_cls):
+    def test_id_value_and_dates_are_configured_params_not_context_injected(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -738,12 +783,14 @@ process:
                         '{"data_type": "placeholder", "key_name_en": "ids", '
                         '"default_or_placeholder_value": "ids"},'
                         '{"data_type": "placeholder", "key_name_en": "start_date", '
-                        '"default_or_placeholder_value": "start_date"}'
+                        '"default_or_placeholder_value": "start_date"},'
+                        '{"data_type": "placeholder", "key_name_en": "end_date", '
+                        '"default_or_placeholder_value": "end_date"}'
                         ']}'
                     ),
                     "operatorCode": (
-                        "def calculate(state, ids, start_date):\n"
-                        "    return {'ids': ids, 'start_date': start_date}\n"
+                        "def calculate(state, ids, start_date, end_date):\n"
+                        "    return {'ids': ids, 'start_date': start_date, 'end_date': end_date}\n"
                     ),
                 },
             ],
@@ -756,25 +803,30 @@ process:
                 "parameter_mapping": {
                     "ids": "issue_id",
                     "start_date": "mapped_start",
+                    "end_date": "mapped_end",
                 },
             }],
             ctx=self._ctx(),
             start_date_key="context_start",
+            end_date_key="context_end",
         )
 
         result = op.process_single({
             RECORD_KEY_FIELD: "record-1",
             "issue_id": "123",
             "mapped_start": "mapped-value",
+            "mapped_end": "mapped-end",
             "context_start": "2024-01-01",
+            "context_end": "2024-01-07",
             "state": {"ad_state": [{"ad_id": "123"}]},
         })
 
         output = json.loads(self._summary(result)["123"]["metrics"][0]["output"])
         self.assertEqual(output["start_date"], "mapped-value")
+        self.assertEqual(output["end_date"], "mapped-end")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_invalid_context_date_is_reported_as_metric_failure(self, mock_client_cls):
+    def test_context_date_key_is_not_injected_without_configured_parameter(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -813,8 +865,8 @@ process:
 
         metric = self._summary(result)["123"]["metrics"][0]
         self.assertEqual(metric["metricCode"], "date_metric")
-        self.assertEqual(metric["output"], "null")
-        self.assertIn("sample.bad_start must be a YYYY-MM-DD date", metric["error"])
+        self.assertEqual(metric["output"], "None")
+        self.assertEqual(metric["error"], "")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_unknown_id_is_reported_as_metric_failure(self, mock_client_cls):
@@ -830,7 +882,13 @@ process:
                         '"default_or_placeholder_value": "ids"}'
                         ']}'
                     ),
-                    "operatorCode": "def calculate(state, ids, id_key):\n    return id_key\n",
+                    "operatorCode": (
+                        "def calculate(state, ids, helpers=None):\n"
+                        "    id_key = helpers.get_id_key(state, ids)\n"
+                        "    if id_key is None:\n"
+                        "        raise ValueError(f'Unknown id: {ids}')\n"
+                        "    return id_key\n"
+                    ),
                 },
             ],
         }))
@@ -935,7 +993,7 @@ process:
         self.assertEqual(list(self._summary(result).keys()), ["unknown"])
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_comma_separated_ids_are_calculated_as_separate_items(self, mock_client_cls):
+    def test_comma_separated_ids_split_output_but_configured_id_value_uses_sample_field(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
                 {
@@ -943,12 +1001,14 @@ process:
                     "operatorNameEn": "ad_roi_latest",
                     "operatorNameCn": "广告最新 ROI",
                     "inputParameter": (
-                        '{"params": []}'
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
                     ),
                     "operatorCode": (
                         "def calculate(state, id_value):\n"
-                        "    adv_by_id = {item['adv_id']: item for item in state['adv_state']}\n"
-                        "    return adv_by_id[id_value]['adv_roi'][-1]\n"
+                        "    return id_value\n"
                     ),
                 },
             ],
@@ -958,7 +1018,7 @@ process:
             id_source_key="material_ids",
             operators=[{
                 "operator_id": 208,
-                "parameter_mapping": {},
+                "parameter_mapping": {"id_value": "material_ids"},
             }],
             ctx=self._ctx(),
         )
@@ -986,7 +1046,7 @@ process:
                     {
                         "metricCode": "ad_roi_latest",
                         "metricName": "广告最新 ROI",
-                        "output": "0.33",
+                        "output": "1854751525764108, 1853671159428096",
                         "error": "",
                     },
                 ],
@@ -996,7 +1056,7 @@ process:
                     {
                         "metricCode": "ad_roi_latest",
                         "metricName": "广告最新 ROI",
-                        "output": "0.52",
+                        "output": "1854751525764108, 1853671159428096",
                         "error": "",
                     },
                 ],
@@ -1004,7 +1064,7 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
-    def test_id_source_key_provides_common_ids_when_metric_has_no_id_mapping(
+    def test_id_source_key_splits_output_but_id_value_uses_configured_sample_field(
         self,
         mock_client_cls,
     ):
@@ -1014,9 +1074,15 @@ process:
                     "id": 208,
                     "operatorNameEn": "id_context",
                     "operatorNameCn": "ID 上下文",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
-                        "def calculate(state, id_value, id_key):\n"
+                        "def calculate(state, id_value, helpers=None):\n"
+                        "    id_key = helpers.get_id_key(state, id_value)\n"
                         "    return f'{id_key}:{id_value}'\n"
                     ),
                 },
@@ -1027,7 +1093,7 @@ process:
             id_source_key="issue_id",
             operators=[{
                 "operator_id": 208,
-                "parameter_mapping": {},
+                "parameter_mapping": {"id_value": "issue_id"},
             }],
             ctx=self._ctx(),
         )
@@ -1049,7 +1115,7 @@ process:
                     {
                         "metricCode": "id_context",
                         "metricName": "ID 上下文",
-                        "output": "adv_id:1854751525764108",
+                        "output": "None:1854751525764108, 1853671159428096",
                         "error": "",
                     },
                 ],
@@ -1059,7 +1125,7 @@ process:
                     {
                         "metricCode": "id_context",
                         "metricName": "ID 上下文",
-                        "output": "adv_id:1853671159428096",
+                        "output": "None:1854751525764108, 1853671159428096",
                         "error": "",
                     },
                 ],
@@ -1411,7 +1477,12 @@ process:
                     "id": 223,
                     "operatorNameEn": "ad_online_materials_count",
                     "operatorNameCn": "在投素材数环比",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
                         "def calculate(id_value):\n"
                         "    return f'指标名称:在投素材数（环比）, "
@@ -1424,7 +1495,7 @@ process:
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
             id_source_key="issue_id",
-            operators=[{"operator_id": 223, "parameter_mapping": {}}],
+            operators=[{"operator_id": 223, "parameter_mapping": {"id_value": "issue_id"}}],
             ctx=self._ctx(),
         )
 
@@ -1451,9 +1522,14 @@ process:
                     "id": 224,
                     "operatorNameEn": "AdROIBench",
                     "operatorNameCn": "ROI同行数据",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
-                        "def calculate(state, id_value, id_key, helpers=None):\n"
+                        "def calculate(state, id_value, helpers=None):\n"
                         "    bench = state.get('world_state', {}).get('bench_roi')\n"
                         "    bench_val = bench[0] if isinstance(bench, list) else bench\n"
                         "    for adv in state.get('adv_state', []):\n"
@@ -1471,7 +1547,7 @@ process:
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
             id_source_key="adv_id",
-            operators=[{"operator_id": 224, "parameter_mapping": {}}],
+            operators=[{"operator_id": 224, "parameter_mapping": {"id_value": "adv_id"}}],
             ctx=self._ctx(),
         )
 
@@ -1507,9 +1583,14 @@ process:
                     "id": 225,
                     "operatorNameEn": "AdOnlineMaterialsCount",
                     "operatorNameCn": "在投素材数环比",
-                    "inputParameter": '{"params": []}',
+                    "inputParameter": (
+                        '{"params": ['
+                        '{"data_type": "placeholder", "key_name_en": "id_value", '
+                        '"default_or_placeholder_value": "id_value"}'
+                        ']}'
+                    ),
                     "operatorCode": (
-                        "def calculate(state, id_value, id_key, helpers=None):\n"
+                        "def calculate(state, id_value, helpers=None):\n"
                         "    for adv in state.get('adv_state', []):\n"
                         "        if str(adv.get('adv_id')) == str(id_value):\n"
                         "            cur, prev, ratio = helpers.calc_sequential_stats_integer(\n"
@@ -1523,7 +1604,7 @@ process:
         mock_client_cls.return_value = fake_client
         op = StateMetricCalculatorMapper(
             id_source_key="adv_id",
-            operators=[{"operator_id": 225, "parameter_mapping": {}}],
+            operators=[{"operator_id": 225, "parameter_mapping": {"id_value": "adv_id"}}],
             ctx=self._ctx(),
         )
 
