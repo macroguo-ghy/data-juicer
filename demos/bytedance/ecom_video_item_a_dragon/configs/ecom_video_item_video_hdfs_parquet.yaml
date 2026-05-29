@@ -139,6 +139,9 @@ export:
       mode: "overwrite"
       filter_condition: "item_duration <= 60 and valid_video_count > 0"
       filesystem: "pyarrow"
+      compact:
+        target_bytes_per_file: 134217728
+        max_buffer_bytes: 134217728
       extra_args:
         columns:
           - "id"
@@ -158,6 +161,9 @@ export:
       mode: "overwrite"
       filter_condition: "item_duration > 60"
       filesystem: "pyarrow"
+      compact:
+        target_bytes_per_file: 134217728
+        max_buffer_bytes: 134217728
       extra_args:
         columns:
           - "id"
