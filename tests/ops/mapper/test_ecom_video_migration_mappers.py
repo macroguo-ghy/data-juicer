@@ -24,6 +24,7 @@ pa.register_extension_type = _register_extension_type_once
 
 from data_juicer.config.config import init_configs
 from data_juicer.core.data import NestedDataset
+from data_juicer.ops.filter.general_field_filter import compile_filter_condition
 from data_juicer.ops.load import load_ops
 from data_juicer.ops.mapper.schema.bytes_exact_dedup_mapper import BytesExactDedupMapper
 from data_juicer.ops.mapper.schema import bytes_exact_dedup_mapper as bytes_dedup_module
@@ -725,6 +726,60 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
             "BytesExactDedupMapper",
             "FieldDropMapper",
         ])
+
+    def test_video_url_rpc_missing_diagnostic_config_loads_and_filters_requested_empty_results(self):
+        path = os.path.join(
+            os.getcwd(),
+            "demos",
+            "bytedance",
+            "ecom_video_item_a_dragon",
+            "configs",
+            "ecom_video_item_video_url_rpc_missing_hdfs_parquet.yaml",
+        )
+
+        cfg = init_configs(args=["--config", path], load_configs_only=True)
+        ops = load_ops(cfg.process)
+
+        self.assertEqual(
+            [op.__class__.__name__ for op in ops],
+            ["JsonObjectMapper", "FieldAssignMapper", "VideoUrlRpcMapper", "PythonLambdaMapper"],
+        )
+        self.assertEqual(ops[2].condition, "item_duration <= 60")
+        self.assertEqual(ops[2].vid_key, "vid")
+        self.assertEqual(ops[2].output_key, "urls")
+
+        target = cfg.export["targets"][0] if isinstance(cfg.export, dict) else cfg.export.targets[0]
+        filter_condition = target["filter_condition"] if isinstance(target, dict) else target.filter_condition
+        self.assertEqual(filter_condition, "video_url_rpc_missing_result == True")
+        compiled_filter = compile_filter_condition(filter_condition)
+
+        missing = ops[3].process_single({"item_duration": 10, "vid": "vid-1", "urls": []})
+        self.assertTrue(missing["video_url_rpc_condition_matched"])
+        self.assertTrue(missing["video_url_rpc_request_eligible"])
+        self.assertEqual(missing["video_url_rpc_output_url_count"], 0)
+        self.assertTrue(missing["video_url_rpc_missing_result"])
+        self.assertEqual(missing["video_url_rpc_missing_reason"], "empty_result_or_rpc_error")
+        self.assertTrue(compiled_filter.matches(missing))
+
+        resolved = ops[3].process_single({"item_duration": 10, "vid": "vid-1", "urls": ["https://example.com/a.mp4"]})
+        long_video = ops[3].process_single({"item_duration": 90, "vid": "vid-2", "urls": []})
+        empty_vid = ops[3].process_single({"item_duration": 10, "vid": " ", "urls": []})
+        self.assertFalse(resolved["video_url_rpc_missing_result"])
+        self.assertFalse(long_video["video_url_rpc_missing_result"])
+        self.assertFalse(empty_vid["video_url_rpc_missing_result"])
+        self.assertFalse(compiled_filter.matches(resolved))
+        self.assertFalse(compiled_filter.matches(long_video))
+        self.assertFalse(compiled_filter.matches(empty_vid))
+
+        export_extra_args = cfg.export["extra_args"] if isinstance(cfg.export, dict) else cfg.export.extra_args
+        export_concurrency = (
+            export_extra_args["concurrency"] if isinstance(export_extra_args, dict) else export_extra_args.concurrency
+        )
+        self.assertEqual(export_concurrency, 128)
+        columns = target["extra_args"]["columns"] if isinstance(target, dict) else target.extra_args.columns
+        self.assertIn("vid", columns)
+        self.assertIn("video_url_rpc_missing_result", columns)
+        self.assertNotIn("videos", columns)
 
     def test_ecom_video_hdfs_parquet_configs_use_targets_and_new_ops(self):
         expected_tuning = {
