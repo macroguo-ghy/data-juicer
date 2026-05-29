@@ -22,6 +22,17 @@ RUNTIME_STATS_NAMESPACE = "runtime_stats"
 SNAPSHOT_FILENAME = "notification_snapshot.json"
 
 _INTERVAL_RE = re.compile(r"^([1-9]\d*)(s|min|h)$")
+_RUNTIME_STATS_WARNING_KEYS: set[str] = set()
+_RUNTIME_STATS_WARNING_KEYS_LOCK = threading.Lock()
+
+
+def _log_runtime_stats_warning_once(action: str, exc: BaseException) -> None:
+    key = f"{action}:{type(exc).__name__}:{str(exc)[:200]}"
+    with _RUNTIME_STATS_WARNING_KEYS_LOCK:
+        if key in _RUNTIME_STATS_WARNING_KEYS:
+            return
+        _RUNTIME_STATS_WARNING_KEYS.add(key)
+    logger.warning("Runtime stats [{}] failed; continuing without runtime stats: {}", action, exc)
 
 
 @dataclass
@@ -52,10 +63,17 @@ class RuntimeStatsCollector:
     def increment(self, key: str, delta: int | float = 1) -> None:
         if delta == 0:
             return
-        incr_task_kv(key, delta, namespace=self.namespace, wait=False)
+        try:
+            incr_task_kv(key, delta, namespace=self.namespace, wait=False)
+        except Exception as exc:  # noqa: BLE001
+            _log_runtime_stats_warning_once("increment", exc)
 
     def snapshot(self) -> dict[str, Any]:
-        return dict(snapshot_task_kv(namespace=self.namespace) or {})
+        try:
+            return dict(snapshot_task_kv(namespace=self.namespace) or {})
+        except Exception as exc:  # noqa: BLE001
+            _log_runtime_stats_warning_once("snapshot", exc)
+            return {}
 
 
 class AdcLarkMessageNotificationHook:
@@ -405,7 +423,11 @@ class TaskNotificationManager:
         return export_summary
 
     def _selected_custom_stats(self) -> dict[str, Any]:
-        stats = dict(self.stats_collector.snapshot() or {})
+        try:
+            stats = dict(self.stats_collector.snapshot() or {})
+        except Exception as exc:  # noqa: BLE001
+            _log_runtime_stats_warning_once("notification_snapshot", exc)
+            stats = {}
         configured = self._configured_custom_stat_items()
         if not configured:
             return stats
