@@ -220,8 +220,9 @@ def calculate(state, start_date=None, end_date=None, helpers=None):
 - `state.ad_state[].ad_id`
 - `state.adv_state[].adv_id`
 - `state.adv_state[].meta_data.adv_id`
+- `state.material_state[].material_id`
 
-当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，`helpers.get_id_key(state, id_value)` 会返回 `None`。如果指标依赖 ID 类型，应在指标代码里显式抛出类似 `Unknown id: ...` 的错误。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` 与外部样本 ID 对齐。
+当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，`helpers.get_id_key(state, id_value)` 会返回 `None`。如果指标依赖 ID 类型，应在指标代码里显式抛出类似 `Unknown id: ...` 的错误。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` / `material_id` 与外部样本 ID 对齐。
 
 如果样本字段是字符串：
 
@@ -349,7 +350,7 @@ metric 和 tool 的共同要求：
 7. YAML 配置了公共上下文字段：`state_key`、`id_source_key`。`start_date_key`、`end_date_key` 不再自动注入到指标代码，日期参数需要按普通业务参数配置。
 8. 每个业务 `placeholder` 参数都在 YAML `parameter_mapping` 中映射到了真实样本字段。
 9. 不把 `state`、`helpers` 写进 `inputParameter.params`；它们是当前仅有的 runtime 注入参数。
-10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
+10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id`、`adv_state[].adv_id` 或 `material_state[].material_id`。
 11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
 12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
 
