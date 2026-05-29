@@ -7,7 +7,6 @@ import pyarrow as pa
 from loguru import logger
 
 from data_juicer.core.exporter import Exporter
-from data_juicer.core.fanout_compact import normalize_fanout_compact, normalize_fanout_target_compacts
 from data_juicer.core.io_utils import (
     append_csv_to_lark_sheet,
     copy_local_to_uri,
@@ -68,11 +67,7 @@ class ExportManager:
         self._active_fanout_datasink = None
 
         self.file_exporter = None
-        if (
-            not self.export_targets
-            and self.target in {"local", "s3"}
-            and not self._use_ray_single_target_compact_file_export()
-        ):
+        if not self.export_targets and self.target in {"local", "s3"}:
             self.file_exporter = self._build_file_exporter(self.path)
 
     def export(self, dataset, columns=None):
@@ -82,8 +77,6 @@ class ExportManager:
         dataset = self._limit_dataset_for_export(dataset)
         if self.target in {"local", "s3"}:
             if self.executor_type == "ray":
-                if self._use_ray_single_target_compact_file_export():
-                    return self._export_to_single_file_datasink(dataset, columns=columns)
                 if self._is_quota_reservation_enabled():
                     dataset, columns = self._prepare_dataset_for_export(dataset, columns=columns)
                     dataset = self._reserve_quota_for_export(dataset)
@@ -265,8 +258,6 @@ class ExportManager:
     def _export_to_hdfs(self, dataset, columns=None):
         if self._use_ray_distributed_hdfs_export():
             self._validate_ray_distributed_hdfs_export()
-            if self._use_ray_single_target_compact_file_export():
-                return self._export_to_single_file_datasink(dataset, columns=columns)
             dataset = self._reserve_quota_for_export(dataset)
             extra_args = merge_dicts(self.export_cfg.get("extra_args"), {})
             hdfs_exporter = RayExporter(
@@ -297,47 +288,6 @@ class ExportManager:
         )
         self.last_export_summary = self._hdfs_metadata_summary_best_effort(self.path)
 
-    def _export_to_single_file_datasink(self, dataset, columns=None):
-        self._validate_ray_single_target_compact_file_export()
-        dataset = self._reserve_quota_for_export(dataset)
-        export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
-        action_args = merge_dicts(self.export_cfg.get("extra_args"), {})
-        ray_remote_args = action_args.pop("ray_remote_args", None)
-        concurrency = action_args.pop("concurrency", None)
-        target_columns = action_args.pop("columns", None)
-        filesystem, writer_path = self._single_file_target_filesystem_and_path()
-        targets = [
-            {
-                "path": writer_path,
-                "original_uri": self.path,
-                "filesystem": filesystem,
-                "type": self._single_file_export_type(),
-                "mode": self.export_cfg.get("mode") or "error_if_exists",
-                "condition": "",
-                "columns": target_columns,
-                "extra_args": action_args,
-                "compact": self.export_cfg["compact"],
-            }
-        ]
-        datasink = RayHdfsFanoutDatasink(targets=targets, columns=export_columns)
-        self._active_fanout_datasink = datasink
-        try:
-            result = dataset.write_datasink(
-                datasink,
-                ray_remote_args=ray_remote_args,
-                concurrency=concurrency,
-            )
-        except Exception:
-            self.last_export_summary = self._fanout_partial_summary(datasink, targets)
-            raise
-        finally:
-            if self._active_fanout_datasink is datasink:
-                self._active_fanout_datasink = None
-        self.last_export_summary = self._coerce_export_summary(result) or getattr(
-            datasink, "last_write_summary", None
-        ) or self._fanout_metadata_summary(targets)
-        return result
-
     def _export_to_file_targets(self, dataset, columns=None):
         self._validate_file_targets_for_export()
         export_columns = self._export_columns_after_internal_field_removal(dataset, columns)
@@ -350,19 +300,18 @@ class ExportManager:
             if target_concurrency is not None:
                 target_concurrency_values.append(target_concurrency)
             filesystem, writer_path = self._fanout_target_filesystem_and_path(target)
-            writer_target = {
-                "path": writer_path,
-                "original_uri": target["path"],
-                "filesystem": filesystem,
-                "type": target["type"],
-                "mode": target.get("mode") or "error_if_exists",
-                "condition": target.get("filter_condition") or target.get("condition") or "",
-                "columns": target_columns,
-                "extra_args": target_extra_args,
-            }
-            if target.get("compact"):
-                writer_target["compact"] = target["compact"]
-            targets.append(writer_target)
+            targets.append(
+                {
+                    "path": writer_path,
+                    "original_uri": target["path"],
+                    "filesystem": filesystem,
+                    "type": target["type"],
+                    "mode": target.get("mode") or "error_if_exists",
+                    "condition": target.get("filter_condition") or target.get("condition") or "",
+                    "columns": target_columns,
+                    "extra_args": target_extra_args,
+                }
+            )
 
         action_args = merge_dicts(self.export_cfg.get("extra_args"), {})
         action_concurrency = self._resolve_file_targets_write_concurrency(
@@ -457,19 +406,13 @@ class ExportManager:
         target_summaries = []
         for target in targets:
             metadata = summarize_filesystem_path(target["filesystem"], target["path"])
-            target_summary = {
-                "path": target["original_uri"],
-                "rows": None,
-                **metadata,
-            }
-            if target.get("compact"):
-                target_summary["compact"] = {
-                    "enabled": True,
-                    "files": metadata["output_files"],
-                    "flushes": None,
-                    "schema_mismatch_flushes": None,
+            target_summaries.append(
+                {
+                    "path": target["original_uri"],
+                    "rows": None,
+                    **metadata,
                 }
-            target_summaries.append(target_summary)
+            )
         return {
             "output_rows": None,
             "output_files": sum(target["output_files"] for target in target_summaries),
@@ -517,15 +460,6 @@ class ExportManager:
             storage_options=target.get("webhdfs"),
         )
 
-    def _single_file_target_filesystem_and_path(self):
-        target = {
-            "target": self.target,
-            "path": self.path,
-            "filesystem": self.export_cfg.get("filesystem"),
-            "webhdfs": self.export_cfg.get("webhdfs"),
-        }
-        return self._fanout_target_filesystem_and_path(target)
-
     @staticmethod
     def _local_fanout_filesystem_and_path(path: str):
         import pyarrow.fs as pa_fs
@@ -566,7 +500,6 @@ class ExportManager:
             if target_path in paths:
                 raise ValueError("`export.targets` paths must be unique.")
             paths.add(target_path)
-        normalize_fanout_target_compacts(self.export_targets)
 
     _validate_hdfs_targets_for_export = _validate_file_targets_for_export
 
@@ -636,19 +569,6 @@ class ExportManager:
             and self._hdfs_export_type() in {"parquet", "jsonl"}
         )
 
-    def _use_ray_single_target_compact_file_export(self):
-        return (
-            bool(self.export_cfg.get("compact"))
-            and self.executor_type == "ray"
-            and self.target in {"hdfs", "local"}
-            and self._single_file_export_type() in {"parquet", "jsonl"}
-        )
-
-    def _single_file_export_type(self):
-        if self.target == "hdfs":
-            return self._hdfs_export_type()
-        return self.export_cfg.get("type") or self._suffix_from_path(self.path) or "jsonl"
-
     def _hdfs_export_type(self):
         return self.export_cfg.get("type") or self._suffix_from_path(self.path) or "jsonl"
 
@@ -660,20 +580,6 @@ class ExportManager:
             )
         if self._looks_like_file_path(self.path):
             raise ValueError("Ray distributed HDFS export requires a directory path, not a file-like path.")
-
-    def _validate_ray_single_target_compact_file_export(self):
-        if self.executor_type != "ray":
-            raise ValueError("`export.compact` requires `executor_type: ray`.")
-        if self.target not in {"hdfs", "local"}:
-            raise ValueError("`export.compact` only supports single file `target: local/hdfs`.")
-        if self._single_file_export_type() not in {"parquet", "jsonl"}:
-            raise ValueError("`export.compact` only supports `type: parquet/jsonl`.")
-        if self.target == "hdfs" and (not isinstance(self.path, str) or not self.path.startswith("hdfs://")):
-            raise ValueError("`export.compact` with `target: hdfs` requires an HDFS `path`.")
-        if self.target == "local" and not self._is_local_fanout_path(self.path):
-            raise ValueError("`export.compact` with `target: local` requires a local `path`.")
-        if self._looks_like_file_path(self.path):
-            raise ValueError("Ray file `export.compact` paths must be directory paths, not file-like paths.")
 
     @staticmethod
     def _looks_like_file_path(path: str | None) -> bool:
@@ -911,10 +817,6 @@ class ExportManager:
             )
             export_cfg.setdefault("extra_args", {})
             export_cfg.setdefault("aws_credentials", {})
-            if "compact" in export_cfg:
-                export_cfg["compact"] = (
-                    normalize_fanout_compact(export_cfg.get("compact"), context="export.compact") or False
-                )
             return export_cfg
 
         return {

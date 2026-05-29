@@ -26,7 +26,6 @@ from jsonargparse._typehints import ActionTypeHint
 from jsonargparse.typing import ClosedUnitInterval, NonNegativeInt, PositiveInt
 from loguru import logger
 
-from data_juicer.core.fanout_compact import normalize_fanout_compact, normalize_fanout_target_compacts
 from data_juicer.core.task_notification import validate_notification_hooks_config
 from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
@@ -972,7 +971,6 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         cfg.export_path = export_cfg["targets"][0]["path"]
         cfg.export = dict_to_namespace(export_cfg)
         return cfg
-    _validate_export_compact(export_cfg, cfg)
     _validate_export_max_rows(export_cfg, cfg)
 
     path = export_cfg.get("path")
@@ -1093,59 +1091,6 @@ def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
             raise ValueError("`export.targets` paths must be unique.")
         seen_paths.add(path)
         targets[index] = target_cfg
-    normalize_fanout_target_compacts(targets)
-
-
-def _validate_export_compact(export_cfg: dict, cfg: Namespace) -> None:
-    extra_args = _plain_cfg_value(export_cfg.get("extra_args") or {})
-    if isinstance(extra_args, dict) and "compact" in extra_args:
-        raise ValueError(
-            "`export.compact` must be configured at the export top level; "
-            "`export.extra_args.compact` is not supported."
-        )
-
-    if "compact" not in export_cfg:
-        return
-
-    compact = normalize_fanout_compact(export_cfg.get("compact"), context="export.compact")
-    if compact is None:
-        export_cfg["compact"] = False
-        return
-
-    if getattr(cfg, "executor_type", "default") != "ray":
-        raise ValueError("`export.compact` requires `executor_type: ray`.")
-
-    target = _infer_single_export_target(export_cfg)
-    export_type = (
-        export_cfg.get("type")
-        or export_cfg.get("export_type")
-        or _suffix_from_export_path(export_cfg.get("path"))
-        or "jsonl"
-    )
-    path = export_cfg.get("path")
-    if target not in {"hdfs", "local"}:
-        raise ValueError("`export.compact` only supports single file `target: local/hdfs`.")
-    if export_type not in {"parquet", "jsonl"}:
-        raise ValueError("`export.compact` only supports `type: parquet/jsonl`.")
-    if target == "hdfs" and (not isinstance(path, str) or not path.startswith("hdfs://")):
-        raise ValueError("`export.compact` with `target: hdfs` requires an HDFS `path`.")
-    if target == "local" and (not isinstance(path, str) or not _is_local_export_path(path)):
-        raise ValueError("`export.compact` with `target: local` requires a local `path`.")
-    if _looks_like_export_file_path(path):
-        raise ValueError("Ray file `export.compact` paths must be directory paths, not file-like paths.")
-
-    export_cfg["compact"] = compact
-
-
-def _infer_single_export_target(export_cfg: dict) -> str:
-    if export_cfg.get("target"):
-        return export_cfg["target"]
-    path = export_cfg.get("path")
-    if isinstance(path, str) and path.startswith("hdfs://"):
-        return "hdfs"
-    if isinstance(path, str) and path.startswith("s3://"):
-        return "s3"
-    return "local"
 
 
 def _suffix_from_export_path(path):
@@ -1244,9 +1189,7 @@ def init_setup_from_cfg(cfg: Namespace, load_configs_only=False):
         if export_cfg.get("targets"):
             _validate_export_targets(export_cfg, cfg)
             cfg.export_path = export_cfg["targets"][0]["path"]
-        else:
-            _validate_export_compact(export_cfg, cfg)
-        if not export_cfg.get("targets") and export_cfg.get("path"):
+        elif export_cfg.get("path"):
             export_cfg["path"] = cfg.export_path
         cfg.export = dict_to_namespace(export_cfg)
 

@@ -849,53 +849,8 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                         else export_extra_args.concurrency
                     )
                     self.assertEqual(export_concurrency, tuning["export_concurrency"])
-                    self.assertNotIn("concurrency", first_extra_args)
-                    self.assertNotIn("concurrency", second_extra_args)
-                else:
-                    self.assertEqual(first_extra_args["concurrency"], 1)
-                    self.assertEqual(second_extra_args["concurrency"], 1)
-                first_compact = targets[0]["compact"] if isinstance(targets[0], dict) else targets[0].compact
-                second_compact = targets[1]["compact"] if isinstance(targets[1], dict) else targets[1].compact
-                if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
-                    self.assertIs(first_compact, False)
-                    self.assertIs(second_compact, False)
-                else:
-                    first_compact_rows = (
-                        first_compact["target_rows_per_file"]
-                        if isinstance(first_compact, dict)
-                        else first_compact.target_rows_per_file
-                    )
-                    first_compact_bytes = (
-                        first_compact["target_bytes_per_file"]
-                        if isinstance(first_compact, dict)
-                        else first_compact.target_bytes_per_file
-                    )
-                    first_compact_buffer = (
-                        first_compact["max_buffer_bytes"]
-                        if isinstance(first_compact, dict)
-                        else first_compact.max_buffer_bytes
-                    )
-                    second_compact_rows = (
-                        second_compact["target_rows_per_file"]
-                        if isinstance(second_compact, dict)
-                        else second_compact.target_rows_per_file
-                    )
-                    second_compact_bytes = (
-                        second_compact["target_bytes_per_file"]
-                        if isinstance(second_compact, dict)
-                        else second_compact.target_bytes_per_file
-                    )
-                    second_compact_buffer = (
-                        second_compact["max_buffer_bytes"]
-                        if isinstance(second_compact, dict)
-                        else second_compact.max_buffer_bytes
-                    )
-                    self.assertEqual(first_compact_rows, 100)
-                    self.assertEqual(first_compact_bytes, 16 * 1024 * 1024)
-                    self.assertEqual(first_compact_buffer, 64 * 1024 * 1024)
-                    self.assertEqual(second_compact_rows, 100)
-                    self.assertEqual(second_compact_bytes, 16 * 1024 * 1024)
-                    self.assertEqual(second_compact_buffer, 64 * 1024 * 1024)
+                self.assertEqual(first_extra_args["concurrency"], 1)
+                self.assertEqual(second_extra_args["concurrency"], 1)
                 first_columns = first_extra_args["columns"]
                 second_columns = second_extra_args["columns"]
                 self.assertIn("videos", first_columns)

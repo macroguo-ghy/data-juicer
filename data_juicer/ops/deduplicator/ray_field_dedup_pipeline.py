@@ -1,11 +1,8 @@
 import hashlib
 import json
-import os
-import time
 from typing import Any, Union
 
 import pyarrow as pa
-from loguru import logger
 
 from data_juicer.core.data import NestedDataset
 from data_juicer.core.task_notification import RuntimeStatsCollector
@@ -20,15 +17,6 @@ from .ray_basic_deduplicator import (
 )
 
 OP_NAME = "ray_field_dedup_pipeline"
-TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
-
-
-def _truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
-
-
-def _dedup_debug_logs_enabled() -> bool:
-    return _truthy_env("DATA_JUICER_RAY_DEBUG_LOGS") or _truthy_env("DATA_JUICER_RAY_DEDUP_DEBUG")
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -66,7 +54,6 @@ class RayFieldDedupPipeline(Pipeline):
         self._condition = RowCondition(condition)
         self.id_key = id_key
         self._id_path = id_key.split(".") if id_key else None
-        self._debug_batch_count = 0
         self.backend = ActorBackend(
             dedup_set_num,
             actor_get_timeout=actor_get_timeout,
@@ -111,84 +98,21 @@ class RayFieldDedupPipeline(Pipeline):
         )
 
     def process_batched(self, samples):
-        self._debug_batch_count += 1
-        batch_index = self._debug_batch_count
-        batch_start = time.monotonic()
-        debug_logs_enabled = _dedup_debug_logs_enabled()
-        should_log = debug_logs_enabled and (batch_index <= 3 or batch_index % 100 == 0)
         if isinstance(samples, pa.Table):
-            input_rows = samples.num_rows
-            input_bytes = int(getattr(samples, "nbytes", 0) or 0)
-            if should_log:
-                self._log_process_batch_event(
-                    "ray_field_dedup_batch_start",
-                    batch_index=batch_index,
-                    input_kind="pyarrow",
-                    input_rows=input_rows,
-                    input_bytes=input_bytes,
-                )
-            to_pylist_start = time.monotonic()
             rows = samples.to_pylist()
-            to_pylist_seconds = time.monotonic() - to_pylist_start
-            keep_start = time.monotonic()
             keep = self._keep_rows(rows)
-            keep_seconds = time.monotonic() - keep_start
-            filter_start = time.monotonic()
-            output = samples.filter(pa.array(keep))
-            filter_seconds = time.monotonic() - filter_start
-            elapsed_seconds = time.monotonic() - batch_start
-            if should_log or (debug_logs_enabled and elapsed_seconds >= 5):
-                self._log_process_batch_event(
-                    "ray_field_dedup_batch_complete",
-                    batch_index=batch_index,
-                    input_kind="pyarrow",
-                    input_rows=input_rows,
-                    input_bytes=input_bytes,
-                    output_rows=output.num_rows,
-                    to_pylist_seconds=round(to_pylist_seconds, 3),
-                    keep_seconds=round(keep_seconds, 3),
-                    filter_seconds=round(filter_seconds, 3),
-                    elapsed_seconds=round(elapsed_seconds, 3),
-                )
-            return output
+            return samples.filter(pa.array(keep))
 
         keys = list(samples.keys())
         if not keys:
             return samples
 
-        input_rows = len(samples[keys[0]])
-        if should_log:
-            self._log_process_batch_event(
-                "ray_field_dedup_batch_start",
-                batch_index=batch_index,
-                input_kind="dict",
-                input_rows=input_rows,
-                columns_count=len(keys),
-            )
-        rows_start = time.monotonic()
         rows = [{key: samples[key][idx] for key in keys} for idx in range(len(samples[keys[0]]))]
-        rows_seconds = time.monotonic() - rows_start
-        keep_start = time.monotonic()
         keep = self._keep_rows(rows)
-        keep_seconds = time.monotonic() - keep_start
-        output = {
+        return {
             key: [value for value, should_keep in zip(samples[key], keep) if should_keep]
             for key in keys
         }
-        elapsed_seconds = time.monotonic() - batch_start
-        if should_log or (debug_logs_enabled and elapsed_seconds >= 5):
-            self._log_process_batch_event(
-                "ray_field_dedup_batch_complete",
-                batch_index=batch_index,
-                input_kind="dict",
-                input_rows=input_rows,
-                columns_count=len(keys),
-                output_rows=len(output[keys[0]]) if keys else 0,
-                rows_build_seconds=round(rows_seconds, 3),
-                keep_seconds=round(keep_seconds, 3),
-                elapsed_seconds=round(elapsed_seconds, 3),
-            )
-        return output
 
     def _keep_rows(self, rows: list[dict[str, Any]]) -> list[bool]:
         eligible_indices = []
@@ -205,7 +129,6 @@ class RayFieldDedupPipeline(Pipeline):
         if not eligible_indices:
             return keep
 
-        actor_start = time.monotonic()
         if hasattr(self.backend, "is_unique_many"):
             eligible_keep = self.backend.is_unique_many(eligible_hashes, eligible_row_ids)
         else:
@@ -213,32 +136,10 @@ class RayFieldDedupPipeline(Pipeline):
                 self.backend.is_unique(hash_value, row_id)
                 for hash_value, row_id in zip(eligible_hashes, eligible_row_ids)
             ]
-        actor_seconds = time.monotonic() - actor_start
-        if actor_seconds >= 5:
-            self._log_process_batch_event(
-                "ray_field_dedup_actor_call_slow",
-                eligible_rows=len(eligible_indices),
-                unique_rows=sum(bool(should_keep) for should_keep in eligible_keep),
-                duplicate_rows=len(eligible_indices) - sum(bool(should_keep) for should_keep in eligible_keep),
-                actor_seconds=round(actor_seconds, 3),
-                dedup_set_num=getattr(self.backend, "dedup_set_num", None),
-                level="warning",
-            )
         self._emit_dedup_rows(len(eligible_indices), eligible_keep)
         for index, should_keep in zip(eligible_indices, eligible_keep):
             keep[index] = should_keep
         return keep
-
-    def _log_process_batch_event(self, event: str, level: str = "info", **payload) -> None:
-        body = {
-            "event": event,
-            "pid": os.getpid(),
-            "op_name": self._name,
-            "field_key": self.field_key,
-            "condition": self.condition,
-            **payload,
-        }
-        getattr(logger, level)(json.dumps(body, sort_keys=True, default=str))
 
     def _emit_dedup_rows(self, eligible_count: int, eligible_keep: list[bool]) -> None:
         unique_count = sum(bool(should_keep) for should_keep in eligible_keep)
