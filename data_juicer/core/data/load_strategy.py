@@ -52,6 +52,8 @@ _RAY_PARQUET_READ_KWARGS = {
     "override_num_blocks",
 }
 
+_RAY_READ_RESOURCE_KWARGS = ("num_cpus", "num_gpus", "memory")
+
 _RAY_JSON_READ_KWARGS = {
     "parallelism",
     "ray_remote_args",
@@ -417,7 +419,24 @@ class DataLoadStrategy(ABC, ConfigValidator):
                 if key in self.ds_config
             }
         )
+        self._move_ray_read_resource_kwargs(read_kwargs)
         return read_kwargs
+
+    @staticmethod
+    def _move_ray_read_resource_kwargs(read_kwargs: Dict[str, Any]) -> None:
+        resource_kwargs = {}
+        for key in _RAY_READ_RESOURCE_KWARGS:
+            if key in read_kwargs:
+                value = read_kwargs.pop(key)
+                if value is not None:
+                    resource_kwargs[key] = value
+        if not resource_kwargs:
+            return
+
+        ray_remote_args = dict(read_kwargs.get("ray_remote_args") or {})
+        for key, value in resource_kwargs.items():
+            ray_remote_args.setdefault(key, value)
+        read_kwargs["ray_remote_args"] = ray_remote_args
 
     def get_ray_json_read_kwargs(self, load_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         read_kwargs = {
