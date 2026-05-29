@@ -218,6 +218,9 @@ def get_abs_path(path, dataset_dir):
 def convert_to_absolute_paths(samples: pyarrow.Table, dataset_dir, path_keys):
     for key in path_keys:
         col_idx = samples.schema.get_field_index(key)
+        if col_idx < 0:
+            logger.debug("Skip absolute-path conversion for missing media column {}", key)
+            continue
         cols = samples.column(col_idx)
 
         def _process_paths():

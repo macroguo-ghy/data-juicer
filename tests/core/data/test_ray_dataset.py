@@ -698,6 +698,25 @@ class RayDatasetFuncsTest(DataJuicerTestCaseBase):
         self.assertEqual(result_dict['videos'][1], [None])
 
     @TEST_TAG('ray')
+    def test_convert_to_absolute_paths_skips_missing_path_keys(self):
+        """Configured export media columns may not exist in the raw input table."""
+        import pyarrow as pa
+
+        table = pa.Table.from_pydict({
+            'item_id': [1, 2],
+            'item_duration': [30.0, 90.0],
+        })
+
+        result_table = self.convert_to_absolute_paths(
+            table,
+            self.tmp_dir,
+            ['images', 'audios'],
+        )
+
+        self.assertEqual(result_table.schema.names, ['item_id', 'item_duration'])
+        self.assertEqual(result_table.to_pydict(), table.to_pydict())
+
+    @TEST_TAG('ray')
     def test_set_dataset_to_absolute_path_skips_binary_media_columns(self):
         """Binary media columns are already materialized data, not paths."""
         import pyarrow as pa
