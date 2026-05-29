@@ -793,6 +793,8 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 "actor_get_retry_times": 2,
                 "max_vids_per_request": 20,
                 "export_concurrency": 128,
+                "min_rows_per_file": 25,
+                "max_rows_per_file": 50,
             },
             "ecom_video_item_video_hdfs_parquet_demo_test.yaml": {
                 "override_num_blocks": 32,
@@ -918,8 +920,12 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     export_extra_args = vars(export_extra_args)
                 if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
                     self.assertEqual(export_extra_args["concurrency"], tuning["export_concurrency"])
+                    self.assertEqual(export_extra_args["min_rows_per_file"], tuning["min_rows_per_file"])
+                    self.assertEqual(export_extra_args["max_rows_per_file"], tuning["max_rows_per_file"])
                 else:
                     self.assertEqual(export_extra_args["concurrency"], 1)
+                    self.assertNotIn("min_rows_per_file", export_extra_args)
+                    self.assertNotIn("max_rows_per_file", export_extra_args)
                 self.assertEqual(export_extra_args["partition_cols"], ["video_duration_group"])
                 schema = export_cfg["schema"]
                 schema_fields = schema["fields"] if isinstance(schema, dict) else schema.fields
