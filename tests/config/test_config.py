@@ -1172,6 +1172,39 @@ class ConfigTest(DataJuicerTestCaseBase):
             finally:
                 os.unlink(temp_config)
 
+    def test_export_shard_size_is_deprecated_and_disabled(self):
+        cases = [
+            ({'export_shard_size': 1024}, 'export_shard_size'),
+            ({'export': {'shard_size': 1024}}, 'export.shard_size'),
+            ({'export': {'export_shard_size': 1024}}, 'export.export_shard_size'),
+        ]
+
+        for overrides, expected_error in cases:
+            with self.subTest(overrides=overrides):
+                export_cfg = {
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_dir',
+                    'type': 'parquet',
+                }
+                export_cfg.update(overrides.get('export', {}))
+                config_data = {
+                    'project_name': 'deprecated_export_shard_size',
+                    'executor_type': 'ray',
+                    'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                    'export': export_cfg,
+                    'process': [],
+                }
+                config_data.update({key: value for key, value in overrides.items() if key != 'export'})
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.safe_dump(config_data, f)
+                    temp_config = f.name
+
+                try:
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        init_configs(args=['--config', temp_config], load_configs_only=True)
+                finally:
+                    os.unlink(temp_config)
+
     def test_structured_export_targets_accepts_checkpoint_append_modes(self):
         base_targets = [
             {

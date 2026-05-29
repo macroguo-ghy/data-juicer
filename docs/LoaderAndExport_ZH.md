@@ -447,7 +447,7 @@ dataset:
 ```yaml
 export_path: ./outputs/result.jsonl
 export_type: jsonl
-export_shard_size: 0
+export_shard_size: 0  # 废弃且禁用；保留 0 作为兼容占位
 export_in_parallel: false
 export_extra_args: {}
 export_aws_credentials: null
@@ -480,7 +480,7 @@ export:
 | `max_rows` | 无 | `null` | 控制传给导出 sink 的行数，必须是正整数。 |
 | `max_rows_mode` | 无 | `limit` | `limit`：默认实现，导出行数不超过 `max_rows`，Ray 模式会在写入前应用 `Dataset.limit(max_rows)` 并尽量保留 lazy limit 下推能力。`quota_reservation`：Ray-only，按 pyarrow batch 整批放行直到至少达到 `max_rows`，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 `max_rows`。 |
 | `max_rows_quota_batch_size` | 无 | 算子默认 batch size | 仅 `max_rows_mode: quota_reservation` 生效。batch 越大，actor 调用越少，但超出 `max_rows` 的行数可能越多。 |
-| `shard_size` | `export_shard_size` | `0` | 废弃字段。旧式本地文件导出仍可识别；新配置不要继续使用。Ray HDFS 分布式导出不支持该字段，需要控制文件大小或行数时使用目标 sink 的 `extra_args`。 |
+| `shard_size` | `export_shard_size` | `0` | 废弃且禁用字段。`export.shard_size` / `export.export_shard_size` 会被配置层拒绝；顶层 `export_shard_size` 只允许保留默认 `0` 作为兼容占位。需要控制文件数或行数时使用目标 sink 的 `extra_args`，例如 `min_rows_per_file` / `num_rows_per_file`。 |
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
 

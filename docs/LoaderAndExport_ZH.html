@@ -437,7 +437,7 @@ dataset:
 <p>旧式配置：</p>
 <pre><code class="language-yaml">export_path: ./outputs/result.jsonl
 export_type: jsonl
-export_shard_size: 0
+export_shard_size: 0  # 废弃且禁用；保留 0 作为兼容占位
 export_in_parallel: false
 export_extra_args: {}
 export_aws_credentials: null
@@ -448,7 +448,6 @@ keep_hashes_in_res_ds: false</code></pre>
   target: local
   path: ./outputs/result.jsonl
   type: jsonl
-  shard_size: 0
   in_parallel: false
   max_rows: null
   max_rows_mode: limit
@@ -461,7 +460,7 @@ keep_hashes_in_res_ds: false</code></pre>
 <tr><td><code>target</code></td><td>从 <code>export_path</code> 推断</td><td>自动推断</td><td>导出目标：<code>local</code>、<code>s3</code>、<code>hdfs</code>、<code>hive</code>、<code>lark</code>、<code>tos</code>、<code>magnus</code>。</td></tr>
 <tr><td><code>path</code></td><td><code>export_path</code></td><td>无</td><td>输出路径。local/s3/hdfs 使用；部分远端目标作为暂存类型推断来源。</td></tr>
 <tr><td><code>type</code></td><td><code>export_type</code></td><td>从路径后缀推断</td><td>输出格式。</td></tr>
-<tr><td><code>shard_size</code></td><td><code>export_shard_size</code></td><td><code>0</code></td><td>废弃字段。旧式本地文件导出仍可识别；新配置不要继续使用。Ray HDFS 分布式导出不支持该字段，需要控制文件大小或行数时使用目标 sink 的 <code>extra_args</code>。</td></tr>
+<tr><td><code>shard_size</code></td><td><code>export_shard_size</code></td><td><code>0</code></td><td>废弃且禁用字段。<code>export.shard_size</code> / <code>export.export_shard_size</code> 会被配置层拒绝；顶层 <code>export_shard_size</code> 只允许保留默认 <code>0</code> 作为兼容占位。需要控制文件数或行数时使用目标 sink 的 <code>extra_args</code>，例如 <code>min_rows_per_file</code> / <code>num_rows_per_file</code>。</td></tr>
 <tr><td><code>in_parallel</code></td><td><code>export_in_parallel</code></td><td><code>false</code></td><td>默认模式单文件导出是否并行。</td></tr>
 <tr><td><code>max_rows</code></td><td>无</td><td><code>null</code></td><td>控制传给导出 sink 的行数，必须是正整数。</td></tr>
 <tr><td><code>max_rows_mode</code></td><td>无</td><td><code>limit</code></td><td><code>limit</code>：默认实现，导出行数不超过 <code>max_rows</code>，Ray 模式会在写入前应用 <code>Dataset.limit(max_rows)</code> 并尽量保留 lazy limit 下推能力。<code>quota_reservation</code>：Ray-only，按 pyarrow batch 整批放行直到至少达到 <code>max_rows</code>，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 <code>max_rows</code>。</td></tr>
