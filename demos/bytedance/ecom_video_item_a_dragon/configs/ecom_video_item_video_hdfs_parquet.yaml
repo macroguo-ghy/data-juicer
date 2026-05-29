@@ -17,9 +17,9 @@ notification_hooks:
     template_id: "AAqtelosmXDl1"
     custom_fields:
       biz: "ecom_video_item_video"
-      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme"
-      short_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_short_dedup"
-      long_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_long"
+      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned"
+      short_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=short"
+      long_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=long"
     custom_stats:
       - key: "dedup.eligible_rows"
         label: "短视频去重候选行数"
@@ -128,48 +128,38 @@ process:
       dedup_set_num: 64
       actor_get_timeout: 600
       actor_get_retry_times: 2
+  - general_field_filter:
+      batch_size: 50
+      num_proc: 1024
+      num_cpus: 1
+      filter_condition: "item_duration > 60 or (item_duration <= 60 and valid_video_count > 0)"
+  - python_lambda_mapper:
+      batch_size: 50
+      num_proc: 1024
+      num_cpus: 1
+      lambda_str: "lambda d: (d.update({'video_duration_group': 'short' if (d.get('item_duration') is not None and d.get('item_duration') <= 60) else 'long'}) or d)"
 
 export:
+  target: "hdfs"
+  type: "parquet"
+  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned"
+  mode: "overwrite"
+  filesystem: "pyarrow"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "urls", type: "list<string>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "md5", type: "string"}
+      - {name: "extra", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "string"}
+      - {name: "audios", type: "string"}
+      - {name: "images", type: "string"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+      - {name: "video_duration_group", type: "string"}
   extra_args:
     concurrency: 128
-  targets:
-    - target: "hdfs"
-      type: "parquet"
-      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_short_dedup"
-      mode: "overwrite"
-      filter_condition: "item_duration <= 60 and valid_video_count > 0"
-      filesystem: "pyarrow"
-      extra_args:
-        concurrency: 1
-        columns:
-          - "id"
-          - "urls"
-          - "videos"
-          - "md5"
-          - "extra"
-          - "source"
-          - "texts"
-          - "audios"
-          - "images"
-          - "has_audio_in_video"
-          - "type"
-    - target: "hdfs"
-      type: "parquet"
-      path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_long"
-      mode: "overwrite"
-      filter_condition: "item_duration > 60"
-      filesystem: "pyarrow"
-      extra_args:
-        concurrency: 1
-        columns:
-          - "id"
-          - "urls"
-          - "videos"
-          - "md5"
-          - "extra"
-          - "source"
-          - "texts"
-          - "audios"
-          - "images"
-          - "has_audio_in_video"
-          - "type"
+    partition_cols:
+      - "video_duration_group"

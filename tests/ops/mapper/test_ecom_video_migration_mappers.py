@@ -774,6 +774,8 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                         "DownloadFileMapper",
                         "BytesExactDedupMapper",
                         "RayFieldDedupPipeline",
+                        "GeneralFieldFilter",
+                        "PythonLambdaMapper",
                     ],
                 )
                 self.assertEqual(op_classes.count("DownloadFileMapper"), 1)
@@ -803,6 +805,18 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 self.assertEqual(ops[5].backend._dedup_set_num_config, tuning["dedup_set_num"])
                 self.assertEqual(ops[5].backend.actor_get_timeout, tuning["actor_get_timeout"])
                 self.assertEqual(ops[5].backend.actor_get_retry_times, tuning["actor_get_retry_times"])
+                self.assertEqual(
+                    ops[6].filter_condition,
+                    "item_duration > 60 or (item_duration <= 60 and valid_video_count > 0)",
+                )
+                self.assertEqual(
+                    ops[7].process_single({"item_duration": 10})["video_duration_group"],
+                    "short",
+                )
+                self.assertEqual(
+                    ops[7].process_single({"item_duration": 90})["video_duration_group"],
+                    "long",
+                )
                 notification_hooks = cfg.notification_hooks
                 if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
                     self.assertEqual(len(notification_hooks), 1)
@@ -831,32 +845,28 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     )
                 else:
                     self.assertEqual(notification_hooks, [])
-                targets = cfg.export["targets"] if isinstance(cfg.export, dict) else cfg.export.targets
-                self.assertEqual(len(targets), 2)
-                self.assertEqual(targets[0]["target"] if isinstance(targets[0], dict) else targets[0].target, "hdfs")
-                self.assertEqual(targets[0]["type"] if isinstance(targets[0], dict) else targets[0].type, "parquet")
-                first_filter = targets[0]["filter_condition"] if isinstance(targets[0], dict) else targets[0].filter_condition
-                second_filter = targets[1]["filter_condition"] if isinstance(targets[1], dict) else targets[1].filter_condition
-                self.assertIn("valid_video_count > 0", first_filter)
-                self.assertEqual(second_filter, "item_duration > 60")
-                first_extra_args = targets[0]["extra_args"] if isinstance(targets[0], dict) else targets[0].extra_args
-                second_extra_args = targets[1]["extra_args"] if isinstance(targets[1], dict) else targets[1].extra_args
+                export_cfg = cfg.export if isinstance(cfg.export, dict) else vars(cfg.export)
+                self.assertNotIn("targets", export_cfg)
+                self.assertEqual(export_cfg["target"], "hdfs")
+                self.assertEqual(export_cfg["type"], "parquet")
+                self.assertEqual(export_cfg["mode"], "overwrite")
+                export_extra_args = export_cfg["extra_args"]
+                if not isinstance(export_extra_args, dict):
+                    export_extra_args = vars(export_extra_args)
                 if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
-                    export_extra_args = cfg.export["extra_args"] if isinstance(cfg.export, dict) else cfg.export.extra_args
-                    export_concurrency = (
-                        export_extra_args["concurrency"]
-                        if isinstance(export_extra_args, dict)
-                        else export_extra_args.concurrency
-                    )
-                    self.assertEqual(export_concurrency, tuning["export_concurrency"])
-                self.assertEqual(first_extra_args["concurrency"], 1)
-                self.assertEqual(second_extra_args["concurrency"], 1)
-                first_columns = first_extra_args["columns"]
-                second_columns = second_extra_args["columns"]
-                self.assertIn("videos", first_columns)
-                self.assertIn("videos", second_columns)
-                self.assertNotIn("duplicate_id_list", first_columns)
-                self.assertNotIn("duplicate_id_list", second_columns)
+                    self.assertEqual(export_extra_args["concurrency"], tuning["export_concurrency"])
+                else:
+                    self.assertEqual(export_extra_args["concurrency"], 1)
+                self.assertEqual(export_extra_args["partition_cols"], ["video_duration_group"])
+                schema = export_cfg["schema"]
+                schema_fields = schema["fields"] if isinstance(schema, dict) else schema.fields
+                schema_columns = [
+                    field["name"] if isinstance(field, dict) else field.name
+                    for field in schema_fields
+                ]
+                self.assertIn("videos", schema_columns)
+                self.assertIn("video_duration_group", schema_columns)
+                self.assertNotIn("duplicate_id_list", schema_columns)
 
 
 class RayFieldDeduplicatorEcomVideoTest(unittest.TestCase):

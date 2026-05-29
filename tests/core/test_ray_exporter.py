@@ -47,6 +47,29 @@ class TestRayExporterCheckpoint(unittest.TestCase):
         dataset.drop_columns.assert_called_once_with([Fields.stats, HashKeys.hash])
         export_method.assert_called_once()
 
+    def test_export_selects_explicit_columns_before_writer(self):
+        class RayLikeDataset:
+            def __init__(self):
+                self.drop_columns = MagicMock(return_value=self)
+                self.select_columns = MagicMock(return_value="selected-dataset")
+                self.columns = MagicMock(side_effect=AssertionError("explicit columns must avoid eager schema fetch"))
+
+        dataset = RayLikeDataset()
+        exporter = RayExporter(
+            "/tmp/partitioned_export.parquet",
+            keep_stats_in_res_ds=False,
+            keep_hashes_in_res_ds=False,
+        )
+        export_method = MagicMock()
+
+        with patch.object(RayExporter, "_router", return_value={"parquet": export_method}):
+            exporter.export(dataset, columns=["id", "video_duration_group", HashKeys.hash])
+
+        dataset.drop_columns.assert_called_once_with([HashKeys.hash])
+        dataset.select_columns.assert_called_once_with(["id", "video_duration_group"])
+        export_method.assert_called_once()
+        self.assertIs(export_method.call_args.args[0], dataset.select_columns.return_value)
+
 
 class TestRayExporterHDFS(unittest.TestCase):
     def test_hdfs_export_resolves_filesystem_path_and_defaults_to_error_if_exists(self):
