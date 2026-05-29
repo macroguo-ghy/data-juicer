@@ -43,8 +43,8 @@ metric 必须同步成下面的结构：
   "operatorNameEn": "BidAdjustmentTimes",
   "operatorNameCn": "是否频繁调整出价",
   "groupName": "ad_flags",
-  "inputParameter": "{\"params\":[]}",
-  "operatorCode": "def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=None):\n    return \"指标名称:是否频繁调整出价, 指标值：计划ID:%s：否\" % id_value"
+  "inputParameter": "{\"params\":[{\"key_name_en\":\"id_value\",\"data_type\":\"placeholder\"}]}",
+  "operatorCode": "def calculate(state, id_value, helpers=None):\n    id_key = helpers.get_id_key(state, id_value)\n    if id_key is None:\n        raise ValueError(\"Unknown id: %s\" % id_value)\n    return \"指标名称:是否频繁调整出价, 指标值：计划ID:%s：否\" % id_value"
 }
 ```
 
@@ -71,7 +71,7 @@ tool 必须同步成下面的结构：
   "groupName": "aux_tools",
   "handlerType": "builtin",
   "handlerName": "customer_info_acquisition",
-  "inputParameter": "{\"params\":[]}",
+  "inputParameter": "{\"params\":[{\"key_name_en\":\"id_value\",\"data_type\":\"placeholder\"}]}",
   "operatorCode": "def calculate(state, id_value, helpers=None):\n    return \"{'adv_id':'%s'}\" % id_value"
 }
 ```
@@ -98,11 +98,13 @@ tool 必须同步成下面的结构：
 推荐函数签名：
 
 ```python
-def calculate(state, id_value, id_key, start_date=None, end_date=None, helpers=None):
+def calculate(state, helpers=None):
     return ""
 ```
 
-允许按需省略没用到的参数，例如 tool 可以写：
+`state` 和 `helpers` 是仅有的 runtime 注入参数。`id_value`、`start_date`、`end_date` 这类值需要作为普通业务参数声明到 `inputParameter.params`，并在 Data-Juicer YAML 的 `operators[].parameter_mapping` 中映射到样本字段。`id_key` 不再作为形参注入，如果需要 ID 类型，用 `helpers.get_id_key(state, id_value)` 主动识别。
+
+允许按需增加普通业务参数，例如需要 ID 的 metric 或 tool 可以写：
 
 ```python
 def calculate(state, id_value, helpers=None):
@@ -133,11 +135,15 @@ def calculate(...):
 不要放入 `inputParameter.params` 的参数：
 
 - `state`
+- `helpers`
+
+必须按普通业务参数声明和映射的常见参数：
+
 - `id_value`
-- `id_key`
 - `start_date`
 - `end_date`
-- `helpers`
+
+不要把 `id_key` 作为形参配置；如果指标需要 ID 类型，使用 `helpers.get_id_key(state, id_value)`。
 
 业务参数示例：
 
@@ -146,6 +152,10 @@ def calculate(...):
   "params": [
     {
       "key_name_en": "bench_roi",
+      "data_type": "placeholder"
+    },
+    {
+      "key_name_en": "id_value",
       "data_type": "placeholder"
     },
     {
@@ -164,7 +174,7 @@ def calculate(...):
 | `placeholder` | 运行时从 Data-Juicer YAML 的 `parameter_mapping` 映射到样本字段。 |
 | `defaultValue` | 运行时直接使用元数据里的 `default_or_placeholder_value`。 |
 
-`calculate(...)` 中每个普通业务形参，都必须能从 `inputParameter.params` 解析，或者属于 runtime 注入参数。
+`calculate(...)` 中每个普通业务形参，都必须能从 `inputParameter.params` 解析，或者属于 runtime 注入参数 `state` / `helpers`。
 
 ## 6. 建议维护一个同步 manifest
 
@@ -407,7 +417,7 @@ Data-Juicer 当前支持两种 `result_mode`：
 | 输出进入 `metrics[]` 而不是 `tools[]` | `operatorType` 缺失或不是 `tool` | 修正元数据 `operatorType=tool`。 |
 | `output` 里有多余 JSON 引号 | `calculate` 返回前手动 `json.dumps` 了字符串 | 字符串直接 return，不做 `json.dumps`。 |
 | 报 DF import 找不到 | operatorCode 原样复制了 DF import | 改成 `helpers.xxx(...)`，缺 helper 时先补 Data-Juicer helper。 |
-| 参数缺失 | `calculate` 形参没有 runtime 注入，也没有写入 `inputParameter.params` | 补 `inputParameter` 或调整函数签名。 |
+| 参数缺失 | `calculate` 形参不是 `state` / `helpers`，也没有写入 `inputParameter.params` | 补 `inputParameter` 和 YAML `parameter_mapping`，或调整函数签名。 |
 | 前端无法区分 metric/tool | 元数据缺 `operatorType` | metric 填 `metric`，tool 填 `tool`。 |
 | 分组展示不对 | `groupName` 缺失或命名不统一 | 按 manifest 统一维护分组。 |
 

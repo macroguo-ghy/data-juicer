@@ -198,7 +198,7 @@ def calculate(state, start_date=None, end_date=None, helpers=None):
 | `parse_duration_seconds` | 解析秒数。 |
 | `average` | 求均值。 |
 | `fmt4` | 小数格式化，最多保留 4 位并去掉尾随 0。 |
-| `get_id_key` | 根据 `state` 和业务传入的 ID 识别 `ad_id` 或 `adv_id`。 |
+| `get_id_key` | 根据 `state` 和业务传入的 ID 识别 `ad_id`、`adv_id` 或 `material_id`。 |
 | `get_id_keys` | 返回当前 ID 在 State 中命中的所有 ID 类型集合。 |
 
 对于模板中“生成含问题发生时间及之前的 14 天数据”的数组字段，例如 `ad_active_materials_count: [5,5,6,6,6,7,7,7,6,6,5,5,6,6]`，`calc_sequential_stats`、`calc_sequential_stats_integer`、`calc_sequential_stats_for_fraction` 和 `calc_sequential_ratio` 会按数组前半段作为上周期、后半段作为本周期计算环比。若字段是 `{YYYY-MM-DD: value}` 字典，则仍按日期范围计算。
@@ -220,8 +220,9 @@ def calculate(state, start_date=None, end_date=None, helpers=None):
 - `state.ad_state[].ad_id`
 - `state.adv_state[].adv_id`
 - `state.adv_state[].meta_data.adv_id`
+- `state.material_state[].material_id`
 
-当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，`helpers.get_id_key(state, id_value)` 会返回 `None`。如果指标依赖 ID 类型，应在指标代码里显式抛出类似 `Unknown id: ...` 的错误。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` 与外部样本 ID 对齐。
+当前不会通过 `state.ad_state[].related_adv_id` 推断 `adv_id`。因此如果模型生成的 State 没有把外部账户 ID 写到 `adv_state[].adv_id`，但只写在 `ad_state[].related_adv_id`，`helpers.get_id_key(state, id_value)` 会返回 `None`。如果指标依赖 ID 类型，应在指标代码里显式抛出类似 `Unknown id: ...` 的错误。生成 State 的 prompt 可以包含题目 ID，但仍需要尽量让生成结果中的 `ad_id` / `adv_id` / `material_id` 与外部样本 ID 对齐。
 
 如果样本字段是字符串：
 
@@ -330,7 +331,7 @@ metric 和 tool 的共同要求：
 
 - 后端能按 `operator_id` 返回元数据。
 - 元数据里有 `operatorCode`，并且能通过 `calculate(...)` 直接得到输出。
-- 入参能通过公共上下文字段、`inputParameter.params`、`parameter_mapping`、State 或 runtime 注入参数解决。
+- 入参能通过公共上下文字段、`inputParameter.params`、`parameter_mapping`、State 或 runtime 注入参数 `state` / `helpers` 解决。
 
 注意：Data-Juicer 当前不会加载 Dataset Factory 的 `run_aux_tools` / `get_tool_handler` 注册表，也不会因为 `handlerType=builtin` 自动调用 DF builtin handler。`handlerType` 和 `handlerName` 只是元信息；真正执行逻辑必须写在 `operatorCode.calculate(...)` 里。
 
@@ -349,7 +350,7 @@ metric 和 tool 的共同要求：
 7. YAML 配置了公共上下文字段：`state_key`、`id_source_key`。`start_date_key`、`end_date_key` 不再自动注入到指标代码，日期参数需要按普通业务参数配置。
 8. 每个业务 `placeholder` 参数都在 YAML `parameter_mapping` 中映射到了真实样本字段。
 9. 不把 `state`、`helpers` 写进 `inputParameter.params`；它们是当前仅有的 runtime 注入参数。
-10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id` 或 `adv_state[].adv_id`。
+10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id`、`adv_state[].adv_id` 或 `material_state[].material_id`。
 11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
 12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
 
