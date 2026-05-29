@@ -58,8 +58,7 @@ dataset:
       format: "parquet"
       override_num_blocks: 2048
       concurrency: 512
-      ray_remote_args:
-        num_cpus: 0.5
+      num_cpus: 0.5
       skip_zero_row_group_files: true
 
 process:
