@@ -546,9 +546,7 @@ class RayHdfsFanoutDatasink(Datasink):
 
     @property
     def min_rows_per_write(self):
-        if not self.compact_config:
-            return None
-        return self.compact_config["target_rows_per_file"]
+        return None
 
     def get_name(self) -> str:
         return "FileFanout"

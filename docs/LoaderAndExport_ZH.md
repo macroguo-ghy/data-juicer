@@ -492,7 +492,7 @@ fan-out target 默认不启用小文件合并。compact 仍是实验能力，如
 executor_type: ray
 export:
   extra_args:
-    concurrency: 1
+    concurrency: 128
   targets:
     - target: hdfs
       type: parquet
@@ -514,9 +514,9 @@ export:
 
 `compact` 只能配置在 `export.targets[]` 顶层，不支持 `compact: true` 或 `enabled`。缺省字段会从默认值补齐；`target_bytes_per_file`、`target_rows_per_file`、`max_buffer_bytes` 都必须为正整数；`max_buffer_bytes` 默认 `2 * target_bytes_per_file`，且必须大于等于 `target_bytes_per_file`。compact 支持 fan-out 的 `parquet` 与 `jsonl`，同一个任务里 compact target 与默认关闭或 `compact: false` target 可以混用；如果配置多个 compact target，归一化后的 compact 配置必须完全一致，否则会提前报错。
 
-compact 是每个 Ray writer task 内的 best-effort buffer，不做全局 strict repartition，也不承诺全局文件大小、文件数或顺序。compact 文件名形如 `part-{target_index}-{write_uuid}-{task_idx}-compact-{flush_idx}.{parquet|jsonl}`。flush 条件为 OR：buffer bytes 达到 `target_bytes_per_file`、buffer rows 达到 `target_rows_per_file`、或当前 write task 结束仍有残留。单个 filtered table 超过 `max_buffer_bytes` 时会按行 slice；单行超限时只能单行单文件并输出 warning。Parquet compact 使用 Arrow table buffer 并按 `table.nbytes` 估算 bytes；JSONL compact 使用序列化后的 UTF-8 bytes 估算。Parquet schema 不兼容时会先 flush 已有 buffer，再从当前 table 开始，并在 export summary 的 compact 字段里记录 `schema_mismatch_flushes`。
+compact 是每个 Ray writer task 内的 best-effort buffer，不做全局 strict repartition，也不承诺全局文件大小、文件数或顺序。compact 文件名形如 `part-{target_index}-{write_uuid}-{task_idx}-compact-{flush_idx}.{parquet|jsonl}`。flush 条件为 OR：buffer bytes 达到 `target_bytes_per_file`、buffer rows 达到 `target_rows_per_file`、或当前 write task 结束仍有残留。`target_bytes_per_file` 与 `target_rows_per_file` 只控制 writer 内部 flush，不控制 Ray Data 输入 bundle 大小或 writer task 调度粒度。单个 filtered table 超过 `max_buffer_bytes` 时会按行 slice；单行超限时只能单行单文件并输出 warning。Parquet compact 使用 Arrow table buffer 并按 `table.nbytes` 估算 bytes；JSONL compact 使用序列化后的 UTF-8 bytes 估算。Parquet schema 不兼容时会先 flush 已有 buffer，再从当前 table 开始，并在 export summary 的 compact 字段里记录 `schema_mismatch_flushes`。
 
-启用 compact 后，datasink 的 `min_rows_per_write` 会返回 `target_rows_per_file`，让 Ray 尽量把更多 rows 交给同一个 write task；这是 datasink-wide hint，不是严格保证。`mode: append`、task retry、checkpoint 恢复与用户重跑仍沿用 fan-out 的 at-least-once 语义，可能产生重复 compact part 文件；`ray_data_checkpoint.delete_no_checkpoint_files: true` 不会把 custom fan-out datasink 升级成 exactly-once。
+启用 compact 不会设置 Ray datasink 的 `min_rows_per_write` 行数 hint；`target_rows_per_file` 只作为 writer task 内部的 row flush threshold。包含较大二进制 payload 的 target 需要重点依赖 `target_bytes_per_file` 与 `max_buffer_bytes` 控制单个 writer task 内的 buffer，并监控 worker 内存；如果仍有内存风险，应关闭 compact。`mode: append`、task retry、checkpoint 恢复与用户重跑仍沿用 fan-out 的 at-least-once 语义，可能产生重复 compact part 文件；`ray_data_checkpoint.delete_no_checkpoint_files: true` 不会把 custom fan-out datasink 升级成 exactly-once。
 
 ```yaml
 executor_type: ray

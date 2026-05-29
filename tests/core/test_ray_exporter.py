@@ -726,7 +726,7 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             ]
 
             datasink.on_write_start(blocks[0].schema)
-            self.assertEqual(datasink.min_rows_per_write, 10)
+            self.assertIsNone(datasink.min_rows_per_write)
             write_return = datasink.write(blocks, self._ctx(task_idx=7))
             summary = datasink.on_write_complete(type("WriteResult", (), {"write_returns": [write_return]})())
 
@@ -876,6 +876,7 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
                 pa.table({"id": [3]}),
             ]
             rows_datasink.on_write_start(row_blocks[0].schema)
+            self.assertIsNone(rows_datasink.min_rows_per_write)
             rows_datasink.write(row_blocks, self._ctx())
 
             bytes_dir = os.path.join(tmp_dir, "bytes")
@@ -894,6 +895,7 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
                 pa.table({"id": [2], "text": ["y" * 32]}),
             ]
             bytes_datasink.on_write_start(byte_blocks[0].schema)
+            self.assertIsNone(bytes_datasink.min_rows_per_write)
             bytes_datasink.write(byte_blocks, self._ctx())
 
             self.assertEqual(len(self._data_files(rows_dir, ".jsonl")), 2)
