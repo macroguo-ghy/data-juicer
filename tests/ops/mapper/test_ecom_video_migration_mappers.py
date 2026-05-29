@@ -784,7 +784,9 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
     def test_ecom_video_hdfs_parquet_configs_use_targets_and_new_ops(self):
         expected_tuning = {
             "ecom_video_item_video_hdfs_parquet.yaml": {
-                "override_num_blocks": 4096,
+                "override_num_blocks": 2048,
+                "read_concurrency": 512,
+                "read_num_cpus": 0.5,
                 "num_proc": 1024,
                 "dedup_set_num": 64,
                 "actor_get_timeout": 600,
@@ -820,6 +822,12 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
 
                 self.assertFalse(cfg.ray_data_checkpoint.enabled)
                 self.assertEqual(dataset_config["override_num_blocks"], tuning["override_num_blocks"])
+                if "read_concurrency" in tuning:
+                    self.assertEqual(dataset_config["concurrency"], tuning["read_concurrency"])
+                    self.assertEqual(dataset_config["num_cpus"], tuning["read_num_cpus"])
+                else:
+                    self.assertNotIn("concurrency", dataset_config)
+                    self.assertNotIn("num_cpus", dataset_config)
                 self.assertEqual(
                     op_classes,
                     [

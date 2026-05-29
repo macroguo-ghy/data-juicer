@@ -56,7 +56,9 @@ dataset:
       source: hdfs
       path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid"
       format: "parquet"
-      override_num_blocks: 4096
+      override_num_blocks: 2048
+      concurrency: 512
+      num_cpus: 0.5
       skip_zero_row_group_files: true
 
 process:
