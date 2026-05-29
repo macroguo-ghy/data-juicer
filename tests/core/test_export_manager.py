@@ -211,6 +211,49 @@ class ExportManagerTest(unittest.TestCase):
         mock_ray_exporter.assert_called_once()
         self.assertEqual(mock_ray_exporter.call_args.args[:3], ("hdfs://cluster/path/output_jsonl_dir", "jsonl", 0))
 
+    @patch("data_juicer.core.export_manager.RayExporter")
+    @patch("data_juicer.core.export_manager.summarize_filesystem_path")
+    def test_ray_hdfs_single_target_current_export_summary_reads_active_exporter(
+        self,
+        mock_summarize_filesystem_path,
+        mock_ray_exporter,
+    ):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+                "filesystem": "pyarrow",
+                "mode": "overwrite",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset(["text"])
+        fake_filesystem = MagicMock()
+        observed = []
+
+        exporter = MagicMock()
+        exporter.pyarrow_filesystem = fake_filesystem
+        exporter.writer_export_path = "/path/output_dir"
+
+        def export(*args, **kwargs):
+            observed.append(manager.current_export_summary())
+
+        exporter.export.side_effect = export
+        mock_ray_exporter.return_value = exporter
+        mock_summarize_filesystem_path.return_value = {"output_files": 2, "output_bytes": 64}
+
+        manager.export(dataset, columns=["text"])
+
+        self.assertEqual(observed[0]["output_rows"], None)
+        self.assertEqual(observed[0]["output_files"], 2)
+        self.assertEqual(observed[0]["output_bytes"], 64)
+        self.assertTrue(observed[0]["partial"])
+        self.assertEqual(observed[0]["targets"][0]["path"], "hdfs://cluster/path/output_dir")
+        self.assertEqual(observed[0]["targets"][0]["output_files"], 2)
+        self.assertEqual(manager.current_export_summary()["output_files"], 2)
+        self.assertNotIn("partial", manager.current_export_summary())
+
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
     def test_ray_hdfs_multi_target_export_uses_single_fanout_datasink(
