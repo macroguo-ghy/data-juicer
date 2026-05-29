@@ -826,6 +826,74 @@ process:
         self.assertEqual(output["end_date"], "mapped-end")
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_calculate_can_receive_input_parameter_details(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 226,
+                    "operatorNameEn": "detail_params_metric",
+                    "operatorNameCn": "详情参数指标",
+                    "inputParameterDetails": [
+                        {
+                            "keyId": 2,
+                            "keyNameEn": "startDate",
+                            "keyNameCn": "开始时间",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "startDate",
+                        },
+                        {
+                            "keyId": 1,
+                            "keyNameEn": "endDate",
+                            "keyNameCn": "结束时间",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "endDate",
+                        },
+                        {
+                            "keyId": 8,
+                            "keyNameEn": "unknown_id",
+                            "keyNameCn": "未知ID",
+                            "keyType": "AMBIGUOUS",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "unknown_id",
+                        },
+                    ],
+                    "operatorCode": (
+                        "def calculate(state, unknown_id, startDate=None, endDate=None):\n"
+                        "    return {'unknown_id': unknown_id, 'startDate': startDate, 'endDate': endDate}\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            id_source_key="id",
+            operators=[{
+                "operator_id": 226,
+                "parameter_mapping": {
+                    "unknown_id": "id",
+                    "startDate": "startDate",
+                    "endDate": "endDate",
+                },
+            }],
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "id": "1837647382987362",
+            "startDate": "2026-05-01",
+            "endDate": "2026-05-14",
+            "state": {"adv_state": [{"adv_id": "1837647382987362"}]},
+        })
+
+        output = json.loads(self._summary(result)["1837647382987362"]["metrics"][0]["output"])
+        self.assertEqual(output["unknown_id"], "1837647382987362")
+        self.assertEqual(output["startDate"], "2026-05-01")
+        self.assertEqual(output["endDate"], "2026-05-14")
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_context_date_key_is_not_injected_without_configured_parameter(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [

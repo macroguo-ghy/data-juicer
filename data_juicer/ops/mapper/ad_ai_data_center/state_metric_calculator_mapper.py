@@ -656,6 +656,10 @@ class StateMetricCalculatorMapper(Mapper):
 
     @staticmethod
     def _parse_input_parameters(detail: dict[str, Any]) -> list[dict[str, Any]]:
+        parameter_details = detail.get("inputParameterDetails")
+        if parameter_details is not None:
+            return StateMetricCalculatorMapper._parse_input_parameter_details(parameter_details)
+
         input_parameter = detail.get("inputParameter")
         if isinstance(input_parameter, str):
             try:
@@ -670,6 +674,21 @@ class StateMetricCalculatorMapper(Mapper):
         for parameter in parameters:
             if not isinstance(parameter, dict) or not parameter.get("key_name_en"):
                 raise ValueError("inputParameter.params item must contain key_name_en")
+        return parameters
+
+    @staticmethod
+    def _parse_input_parameter_details(parameter_details: Any) -> list[dict[str, Any]]:
+        if not isinstance(parameter_details, list):
+            raise ValueError("inputParameterDetails must be a list")
+        parameters = []
+        for parameter in parameter_details:
+            if not isinstance(parameter, dict) or not parameter.get("keyNameEn"):
+                raise ValueError("inputParameterDetails item must contain keyNameEn")
+            parameters.append({
+                "key_name_en": parameter.get("keyNameEn"),
+                "data_type": parameter.get("dataType"),
+                "default_or_placeholder_value": parameter.get("defaultOrPlaceholderValue"),
+            })
         return parameters
 
     def _get_operator_execution_callback_client(self):
