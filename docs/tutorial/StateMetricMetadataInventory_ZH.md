@@ -11,9 +11,9 @@
 | 字段 | 说明 |
 | --- | --- |
 | `state_key` | State 所在样本字段，默认 `state`。 |
-| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；summary 顶层 key 和 runtime 注入的 `id_value` 都来自该字段。 |
-| `start_date_key` | 样本里的起始日期字段，供 `calculate(..., start_date, ...)` 注入。 |
-| `end_date_key` | 样本里的结束日期字段，供 `calculate(..., end_date, ...)` 注入。 |
+| `id_source_key` | 样本里的公共 ID 字段，支持逗号分隔多个 ID；用于拆分 summary 顶层 key，不会再自动注入 `id_value`。 |
+| `start_date_key` | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请按普通 placeholder 配置。 |
+| `end_date_key` | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请按普通 placeholder 配置。 |
 | `output_key` | 输出字段，默认 `query_metric_data_outputs`。 |
 | `result_mode` | 支持 `summary` 和 `object`；两者结构一致，只差 JSON 序列化。 |
 | `summary_success_only` | 默认 `false`，保留成功和失败结果以及 `error` 字段。 |

@@ -32,6 +32,17 @@ class StateMetricRuntimeTest(unittest.TestCase):
 
         self.assertEqual(detect_id_key(state, "456"), "adv_id")
 
+    def test_helpers_get_id_key_exposes_id_detection(self):
+        helpers = MetricHelpers()
+        state = {
+            "ad_state": [{"ad_id": "123"}],
+            "adv_state": [{"adv_id": "456"}],
+        }
+
+        self.assertEqual(helpers.get_id_key(state, "123"), "ad_id")
+        self.assertEqual(helpers.get_id_key(state, "456"), "adv_id")
+        self.assertIsNone(helpers.get_id_key(state, "789"))
+
     def test_helpers_safe_divide_and_parse_percent(self):
         helpers = MetricHelpers()
 

@@ -66,6 +66,14 @@ def detect_id_key(state_data: dict[str, Any], id_value: Any) -> str | None:
 class MetricHelpers:
 
     @staticmethod
+    def get_id_keys(state_data, id_value):
+        return detect_id_keys(state_data, id_value)
+
+    @staticmethod
+    def get_id_key(state_data, id_value):
+        return detect_id_key(state_data, id_value)
+
+    @staticmethod
     def extract_numeric_values_in_range(series_map, start_date, end_date):
         if not series_map:
             return []

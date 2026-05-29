@@ -329,8 +329,6 @@ process:
       output_key: query_metric_data_outputs
       result_mode: summary
       summary_success_only: false
-      start_date_key: start_time
-      end_date_key: end_time
       operators:
         - operator_id: 201
           parameter_mapping: {}
