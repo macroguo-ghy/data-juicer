@@ -660,6 +660,139 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_accepts_single_target_compact_defaults_and_opt_out(self):
+        cases = [
+            (
+                {
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_dir',
+                    'type': 'parquet',
+                    'compact': {},
+                },
+                {
+                    'target_bytes_per_file': 64 * 1024 * 1024,
+                    'target_rows_per_file': 200000,
+                    'max_buffer_bytes': 128 * 1024 * 1024,
+                },
+            ),
+            (
+                {
+                    'target': 'local',
+                    'path': './outputs/compact_disabled',
+                    'type': 'jsonl',
+                    'compact': False,
+                },
+                False,
+            ),
+        ]
+
+        for export_cfg, expected_compact in cases:
+            config_data = {
+                'project_name': 'structured_export_single_target_compact',
+                'executor_type': 'ray',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'export': export_cfg,
+                'process': [],
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+                if expected_compact is False:
+                    self.assertIs(cfg.export.compact, False)
+                else:
+                    self.assertEqual(
+                        cfg.export.compact.target_bytes_per_file,
+                        expected_compact['target_bytes_per_file'],
+                    )
+                    self.assertEqual(cfg.export.compact.target_rows_per_file, expected_compact['target_rows_per_file'])
+                    self.assertEqual(cfg.export.compact.max_buffer_bytes, expected_compact['max_buffer_bytes'])
+            finally:
+                os.unlink(temp_config)
+
+    def test_structured_export_rejects_invalid_single_target_compact_config(self):
+        cases = [
+            (
+                {
+                    'executor_type': 'ray',
+                    'export': {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_dir',
+                        'type': 'parquet',
+                        'compact': True,
+                    },
+                },
+                'compact',
+            ),
+            (
+                {
+                    'executor_type': 'ray',
+                    'export': {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_dir',
+                        'type': 'parquet',
+                        'extra_args': {'compact': {'target_bytes_per_file': 1024}},
+                    },
+                },
+                'top level',
+            ),
+            (
+                {
+                    'executor_type': 'default',
+                    'export': {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_dir',
+                        'type': 'parquet',
+                        'compact': {},
+                    },
+                },
+                'executor_type: ray',
+            ),
+            (
+                {
+                    'executor_type': 'ray',
+                    'export': {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_dir',
+                        'type': 'csv',
+                        'compact': {},
+                    },
+                },
+                'parquet/jsonl',
+            ),
+            (
+                {
+                    'executor_type': 'ray',
+                    'export': {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output.parquet',
+                        'type': 'parquet',
+                        'compact': {},
+                    },
+                },
+                'directory path',
+            ),
+        ]
+
+        for config_data, expected_error in cases:
+            config_data = {
+                'project_name': 'structured_export_single_target_bad_compact',
+                'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                'process': [],
+                **config_data,
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                yaml.safe_dump(config_data, f)
+                temp_config = f.name
+
+            try:
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    init_configs(args=['--config', temp_config], load_configs_only=True)
+            finally:
+                os.unlink(temp_config)
+
     def test_structured_export_targets_default_compact_disabled(self):
         config_data = {
             'project_name': 'structured_export_targets_compact',
