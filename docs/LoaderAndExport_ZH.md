@@ -303,6 +303,8 @@ dataset:
 | `tqs_cluster` | 否 | `cn` | client_result 模式 TQS cluster。 |
 | `tqs_enable_domain` | 否 | 无 | client_result 模式 domain 开关。 |
 | `tqs_timeout` | 否 | `120` | client_result 模式超时秒数。 |
+| `limit` | 否 | 无 | Ray 模式支持。限制 loader 输出给下游的数据行数；`client_result` 会同时把 TQS 拉取行数收窄为 `min(max_result_rows, limit)`。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。在应用 `limit` 后立即 `materialize()`，用于释放上游已读数据引用；`ray_dry_run_plan: true` 时会跳过真实 materialize。 |
 
 默认 executor 支持 `materialized` 和 `client_result`；`materialized_remote` 只支持 `executor_type: ray`。Ray 的 `client_result` 会用 `ray.data.from_items` 构造 Ray Dataset；`materialized` 会先落地再走 staged loader；`materialized_remote` 不调用本地 staging/copy，TQS 输出按 Parquet 物化到 HDFS 后由 Ray HDFS loader 读取。
 
@@ -341,6 +343,8 @@ dataset:
 | `ray_remote_args` | 否 | 无 | Ray remote 参数。 |
 | `arrow_parquet_args` | 否 | `{}` | 透传给底层 Arrow/Parquet reader 的参数。 |
 | `load_kwargs` | 否 | `{}` | 先合入 read kwargs，再被显式字段覆盖。 |
+| `limit` | 否 | 无 | 读取后对 Ray Dataset 应用 `limit(n)`；不透传给 `read_hive_table`。 |
+| `materialize_after_limit` | 否 | `false` | 应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 明确不再支持的旧字段：`sql`、`table`、`output_uri`、`tqs_output_uri`、`read_mode`、`max_result_rows`、`tqs_app_id`、`tqs_app_key`、`user_name`、`tqs_cluster`、`tqs_enable_domain`、`tqs_timeout`、`catalog`、`cast_columns`。
 
@@ -391,6 +395,8 @@ dataset:
 | `file_extension` | 否 | `csv` | 当前只支持 `csv`。 |
 | `document_type` | 否 | `sheet` | 当前只支持 `sheet`。 |
 | `wait_export_time_seconds` | 否 | `60` | 等待 Drive 导出任务完成的最长秒数。 |
+| `limit` | 否 | 无 | Ray 模式支持。Lark 仍会先导出/读取到本地暂存 CSV，再对构造出的 Ray Dataset 应用 `limit(n)`。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 读取行为：
 
@@ -425,6 +431,8 @@ dataset:
 | `table_name` | 是 | 无 | Magnus 表名。 |
 | `filter` | 否 | 无 | 下推过滤条件。 |
 | `magnus_conf` | 否 | `{}` | 传给 Magnus/PyIceberg 的配置。 |
+| `limit` | 否 | 无 | Ray 模式支持。读取为 Ray Dataset 后应用 `limit(n)`；不会作为 Magnus/PyIceberg SDK 原生参数下传。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 默认模式会读成 pandas 再转 HuggingFace Dataset；Ray 模式会读成 Ray Dataset。
 
