@@ -41,7 +41,7 @@ process:
 | `state_key` | 否 | State 所在样本字段，默认 `state`。 |
 | `id_source_key` | 否 | 样本里的公共 ID 字段，支持逗号分隔多个 ID。 |
 | `output_key` | 否 | 输出字段，默认 `query_metric_data_outputs`。 |
-| `result_mode` | 否 | 输出模式，支持 `summary` 和 `object`，默认 `summary`。 |
+| `result_mode` | 否 | 输出模式，支持 `summary`、`object` 和 `metric_list`，默认 `summary`。 |
 | `summary_success_only` | 否 | 仅 `summary` 模式生效；默认 `false` 保留成功和失败结果，`true` 时只输出 DF 成功字段。 |
 | `start_date_key` | 否 | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请通过 `inputParameter.params` 和 `parameter_mapping` 配置。 |
 | `end_date_key` | 否 | 兼容保留字段；不会再自动注入 `calculate(...)`。日期参数请通过 `inputParameter.params` 和 `parameter_mapping` 配置。 |
@@ -238,7 +238,11 @@ def calculate(state, start_date=None, end_date=None, helpers=None):
 
 ## 5. 输出格式
 
-`result_mode=summary` 时，`output_key` 字段写入的是 JSON 字符串。下游需要先 `json.loads(...)`。这是推荐模式，适合写 Lance/Magnus 表，schema 更稳定。
+`result_mode=summary` 时，`output_key` 字段写入的是 JSON 字符串。下游需要先 `json.loads(...)`。这是兼容 Dataset Factory summary 的模式，适合写 Lance/Magnus 表，schema 更稳定。
+
+`result_mode=metric_list` 时，`output_key` 字段写入的是对象数组。数组中每个对象对应一个被选择的 metric 或 tool operator，tool 也统一放入 `metric_list`。这个模式适合前端按派生字段展示每次计算的 `input`、`output` 和 `error`。
+
+`metric_list` 模式只会展开 `inputParameterDetails[].multiValue=true` 的参数。`multiValue=false` 或缺省的参数会作为单值广播，即使字符串里包含英文逗号也不会被拆分。
 
 默认 `summary_success_only=false`，summary 会保留成功和失败结果，并保留 `error`、`toolName` 等扩展字段，方便排查。
 
@@ -352,13 +356,13 @@ metric 和 tool 的共同要求：
 9. 不把 `state`、`helpers` 写进 `inputParameter.params`；它们是当前仅有的 runtime 注入参数。
 10. 如果 metric/tool 依赖 ID 类型，使用 `helpers.get_id_key(state, id_value)`，并确认 State 里有对应 ID：`ad_state[].ad_id`、`adv_state[].adv_id` 或 `material_state[].material_id`。
 11. 多 ID 样本确认 `id_source_key` 字段能用逗号或数组表达，并确认下游按多个 summary key 消费。
-12. 推荐使用 `result_mode=summary`；下游读取 `query_metric_data_outputs` 时先 `json.loads`。如果需要对象形态，可以使用 `result_mode=object`。
+12. 兼容 Dataset Factory summary 时使用 `result_mode=summary`；需要按派生字段展示入参和多值展开结果时使用 `result_mode=metric_list`。如果只需要旧 summary 对象形态，可以使用 `result_mode=object`。
 
 ## 8. 常见问题
 
 ### `result_mode` 应该配什么？
 
-默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`object` 也支持，会输出同一套 summary 的对象形态。两者结构一致，只差一次 JSON 序列化。
+默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`metric_list` 会输出面向前端展示的新结构，最外层是对象数组，每个对象包含 `meta` 和 `metric_list`。`object` 也支持，会输出旧 summary 的对象形态。
 
 `summary` 模式输出字符串：
 
@@ -377,7 +381,32 @@ metric 和 tool 的共同要求：
 }
 ```
 
-生产写表场景仍优先用 `summary`，因为字符串列的 schema 最稳定；`object` 更适合本地调试或不需要写复杂嵌套表结构的场景。
+`metric_list` 模式输出对象数组：
+
+```json
+[
+  {
+    "meta": {
+      "operator_id": 47,
+      "operator_type": "metric",
+      "metric_code": "EcpCost",
+      "metric_name": "计划消耗环比",
+      "params": {}
+    },
+    "metric_list": [
+      {
+        "input": {
+          "unknown_id": "123"
+        },
+        "output": "...",
+        "error": ""
+      }
+    ]
+  }
+]
+```
+
+生产写表场景仍优先用 `summary`，因为字符串列的 schema 最稳定；`metric_list` 更适合前端展示，`object` 更适合本地调试或不需要写复杂嵌套表结构的场景。
 
 ### 为什么指标代码里拿不到 `start_date`？
 
