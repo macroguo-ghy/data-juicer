@@ -440,6 +440,12 @@ def build_base_parser() -> ArgumentParser:
         default=None,
         help="Optional Ray Data checkpoint metadata write interval. Leave unset to use Ray's default.",
     )
+    parser.add_argument(
+        "--ray_data_context.target_max_block_size",
+        type=PositiveInt,
+        default=None,
+        help="Optional Ray Data target max block size in bytes. Leave unset to use Ray's default.",
+    )
     # Enhanced checkpoint configuration for PartitionedRayExecutor
     parser.add_argument(
         "--checkpoint.enabled",

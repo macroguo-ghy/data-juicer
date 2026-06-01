@@ -53,6 +53,8 @@ ray_data_checkpoint:                                        # Ray Data source-to
   dir: null                                                 # checkpoint directory for this dataset. Supports {work_dir} and {job_id}; use an isolated path per task/run.
   delete_no_checkpoint_files: false                         # whether to delete sink files that are not recorded in checkpoint metadata after a successful Ray Data write.
   write_interval: null                                      # optional Ray Data checkpoint metadata write interval. Null uses Ray's default.
+ray_data_context:                                           # Ray Data context runtime configuration.
+  target_max_block_size: null                               # optional max target block size in bytes for Ray Data reads and transformations. Null uses Ray's default.
 temp_dir: null                                              # the path to the temp directory to store intermediate caches when cache is disabled, these cache files will be removed on-the-fly. In default, it's None, so the temp dir will be specified by system. NOTICE: you should be caution when setting this argument because it might cause unexpected program behaviors when this path is set to an unsafe directory.
 open_tracer: false                                          # whether to open the tracer to trace the changes during process. It might take more time when opening tracer
 op_list_to_trace: []                                        # only ops in this list will be traced by tracer. If it's empty, all ops will be traced. Only available when tracer is opened.
