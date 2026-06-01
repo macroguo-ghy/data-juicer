@@ -2064,9 +2064,97 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
             override_num_blocks=16,
         )
         fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
         self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
         row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
         self.assertEqual(row_count_getter(), 1)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_materializes_after_limit_when_enabled(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        materialized_dataset = MagicMock(name="materialized_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00001.parquet"],
+            row_count=10,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertEqual(mock_ray_dataset.call_args.args, (materialized_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_skips_materialize_after_limit_during_dry_run(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00001.parquet"],
+            row_count=10,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+        self.cfg.ray_dry_run_plan = True
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")
@@ -2746,7 +2834,56 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
 
         self.assertEqual(result, wrapped_dataset)
         fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
         self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_materializes_after_limit_when_enabled(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        materialized_dataset = MagicMock(name="materialized_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/json")
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/json",
+            "format": ".jsonl",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertEqual(mock_ray_dataset.call_args.args, (materialized_dataset,))
+
+    def test_load_rejects_non_bool_materialize_after_limit(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "materialize_after_limit": "true",
+        }
+
+        with self.assertRaises(ConfigValidationError):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg)
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("data_juicer.core.data.ray_dataset.read_json_stream")

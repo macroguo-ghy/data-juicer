@@ -228,6 +228,7 @@ dataset:
       filesystem: pyarrow
       columns: ["text", "label"]
       limit: 1000
+      materialize_after_limit: false
       on_bad_files: error
       skip_zero_row_group_files: true
       override_num_blocks: 128
@@ -257,6 +258,7 @@ dataset:
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
 | `limit` | 否 | 无 | 限制进入后续 process/export 的行数。Parquet 会先基于文件级 metadata 裁剪到足够覆盖 `limit` 的最短文件列表，再应用 `Dataset.limit(limit)` 精确截断最后一个文件；如果配置了 `shuffle` 或 `partition_filter`，为保持随机化/分区过滤语义，不做预裁剪。JSON/JSONL 无可靠行数 metadata，仅在直读后应用 `Dataset.limit(limit)`。 |
+| `materialize_after_limit` | 否 | `false` | 仅在配置了 `limit` 时生效。开启后会在 `Dataset.limit(limit)` 后立即执行 `materialize()`，把 loader 输出固定为已裁剪后的 Ray Dataset，适合 debug/smoke 或需要释放上游 lineage 的场景。默认关闭以保留 lazy pipeline；`ray_dry_run_plan: true` 时会跳过该物化。 |
 | `on_bad_files` | 否 | `error` | 坏文件处理策略。`error` 保持 fail-fast。Parquet 下，`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。JSON/JSONL 下，`skip` 会在 worker 读取时跳过空文件、非法 JSON 文件，以及读到中途才发现非法内容的整文件；该模式是文件级跳过，不做单行容错。如果所有文件都被跳过，则返回空 Ray Dataset。 |
 | `skip_zero_row_group_files` | 否 | `true` | 仅对 Parquet 生效。是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |
@@ -304,7 +306,7 @@ dataset:
 
 默认 executor 支持 `materialized` 和 `client_result`；`materialized_remote` 只支持 `executor_type: ray`。Ray 的 `client_result` 会用 `ray.data.from_items` 构造 Ray Dataset；`materialized` 会先落地再走 staged loader；`materialized_remote` 不调用本地 staging/copy，TQS 输出按 Parquet 物化到 HDFS 后由 Ray HDFS loader 读取。
 
-`materialized_remote` 会把以下 HDFS 读取参数转发给 Ray HDFS loader：`filesystem`、`webhdfs`、`columns`、`concurrency`、`override_num_blocks`、`ray_remote_args`、`limit`、`skip_zero_row_group_files`、`on_bad_files`、`load_kwargs`。如需重跑或恢复，请直接把已物化路径配置为 `source: hdfs` / `path: hdfs://...`；`ray_data_checkpoint.enabled: true` 不支持 `source: tqs`。
+`materialized_remote` 会把以下 HDFS 读取参数转发给 Ray HDFS loader：`filesystem`、`webhdfs`、`columns`、`concurrency`、`override_num_blocks`、`ray_remote_args`、`limit`、`materialize_after_limit`、`skip_zero_row_group_files`、`on_bad_files`、`load_kwargs`。如需重跑或恢复，请直接把已物化路径配置为 `source: hdfs` / `path: hdfs://...`；`ray_data_checkpoint.enabled: true` 不支持 `source: tqs`。
 
 ## Hive Loader
 

@@ -365,6 +365,24 @@ def _limit_parquet_row_count(row_count: int | None, limit: int | None) -> int | 
     return min(row_count, limit)
 
 
+def _apply_ray_loader_limit(dataset, limit: int | None, materialize_after_limit: bool, cfg: Namespace):
+    if limit is None:
+        return dataset
+
+    dataset = dataset.limit(limit)
+    if not materialize_after_limit:
+        return dataset
+
+    if bool(getattr(cfg, "ray_dry_run_plan", False)):
+        logger.info(
+            "Skipping `materialize_after_limit` because `ray_dry_run_plan` is enabled."
+        )
+        return dataset
+
+    logger.info("Materializing Ray Dataset after loader limit={}.", limit)
+    return dataset.materialize()
+
+
 @dataclass(frozen=True)
 class StrategyKey:
     """
@@ -1216,6 +1234,7 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
             "limit": int,
             "skip_zero_row_group_files": bool,
             "on_bad_files": str,
+            "materialize_after_limit": bool,
         },
         "custom_validators": {
             "path": _validate_hdfs_path_config,
@@ -1289,8 +1308,12 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                     **read_kwargs,
                 )
                 limit = self.ds_config.get("limit")
-                if limit is not None:
-                    dataset = dataset.limit(limit)
+                dataset = _apply_ray_loader_limit(
+                    dataset,
+                    limit,
+                    self.ds_config.get("materialize_after_limit", False),
+                    self.cfg,
+                )
                 return RayDataset(
                     dataset,
                     dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
@@ -1342,7 +1365,12 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
             else:
                 dataset = ray.data.read_parquet(read_plan.paths, filesystem=filesystem, **read_kwargs)
             if limit is not None:
-                dataset = dataset.limit(limit)
+                dataset = _apply_ray_loader_limit(
+                    dataset,
+                    limit,
+                    self.ds_config.get("materialize_after_limit", False),
+                    self.cfg,
+                )
             return RayDataset(
                 dataset,
                 dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
@@ -1381,6 +1409,7 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
         "limit",
         "skip_zero_row_group_files",
         "on_bad_files",
+        "materialize_after_limit",
         "load_kwargs",
     }
 
