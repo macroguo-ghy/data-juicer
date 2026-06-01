@@ -58,7 +58,8 @@ class StateMetricCalculatorMapper(Mapper):
         :param id_source_key: optional common sample field containing metric item IDs.
         :param output_key: sample field used to store metric outputs.
         :param result_mode: ``summary`` for Dataset Factory summary string output,
-            or ``object`` for the intermediate object output.
+            ``object`` for the intermediate object output, or ``metric_list`` for
+            operator-grouped output.
         :param fail_policy: first version supports ``continue`` only.
         :param operators: selected derived metric operator configs.
         :param ctx: platform context injected by backend when NEED_CTX is True.
@@ -80,8 +81,8 @@ class StateMetricCalculatorMapper(Mapper):
             raise ValueError("id_source_key must be a non-empty string")
         if not output_key:
             raise ValueError("output_key must be provided")
-        if result_mode not in ("summary", "object"):
-            raise ValueError("result_mode must be summary or object")
+        if result_mode not in ("summary", "object", "metric_list"):
+            raise ValueError("result_mode must be summary, object or metric_list")
         if fail_policy != "continue":
             raise ValueError("fail_policy must be continue")
         if retry_attempts < 0:
@@ -144,13 +145,16 @@ class StateMetricCalculatorMapper(Mapper):
         try:
             self._get_ctx()
             output_sample = copy.deepcopy(sample)
-            metric_outputs = self._calculate_metric_outputs(sample)
+            if self.result_mode == "metric_list":
+                output_sample[self.output_key] = self._calculate_metric_list_outputs(sample)
+            else:
+                metric_outputs = self._calculate_metric_outputs(sample)
             if self.result_mode == "summary":
                 output_sample[self.output_key] = self._build_summary_output(
                     metric_outputs,
                     success_only=self.summary_success_only,
                 )
-            else:
+            elif self.result_mode == "object":
                 output_sample[self.output_key] = self._build_summary_object(
                     metric_outputs,
                     success_only=self.summary_success_only,
@@ -249,6 +253,88 @@ class StateMetricCalculatorMapper(Mapper):
         return {
             "id": output_id,
             "items": items,
+        }
+
+    def _calculate_metric_list_outputs(self, sample: dict[str, Any]) -> list[dict[str, Any]]:
+        details = self._get_operator_details(sample)
+        self._validate_state_key_when_all_metrics_depend_on_state(sample, details)
+        state_present = self._has_state_value(sample)
+        state_data = self._resolve_state_value(sample) if state_present else {}
+        helpers = MetricHelpers()
+        outputs = []
+        for operator_config in self.operators:
+            operator_id = operator_config["operator_id"]
+            detail = details.get(operator_id)
+            outputs.append(
+                self._calculate_one_metric_list_operator(
+                    sample,
+                    operator_config,
+                    operator_id,
+                    detail,
+                    state_data=state_data,
+                    state_present=state_present,
+                    helpers=helpers,
+                )
+            )
+        return outputs
+
+    def _calculate_one_metric_list_operator(
+        self,
+        sample: dict[str, Any],
+        operator_config: dict[str, Any],
+        operator_id: int,
+        detail: dict[str, Any] | None,
+        state_data: Any = None,
+        state_present: bool = False,
+        helpers: MetricHelpers | None = None,
+    ) -> dict[str, Any]:
+        meta = self._build_metric_list_meta(operator_id, detail)
+        metric_list = []
+        try:
+            if self._operator_details_error:
+                raise ValueError(self._operator_details_error)
+            if detail is None:
+                raise ValueError(f"operator detail not found: {operator_id}")
+            self._operator_type(detail)
+            parameters = self._parse_input_parameters(detail)
+            runner = self._get_calculate_runner(operator_id, detail)
+            invocations = self._resolve_metric_list_invocations(
+                sample,
+                operator_config,
+                parameters,
+                inspect.signature(runner.process_func),
+                state_data=state_data,
+                state_present=state_present,
+                helpers=helpers,
+            )
+        except Exception as exc:
+            return {
+                "meta": meta,
+                "metric_list": [{
+                    "input": self._raw_metric_list_input(sample, operator_config, detail),
+                    "output": self._stringify_metric_output(None),
+                    "error": str(exc),
+                }],
+            }
+
+        for args, input_values in invocations:
+            try:
+                value = runner.run_with_args(*args)
+                metric_list.append({
+                    "input": input_values,
+                    "output": self._stringify_metric_output(value),
+                    "error": "",
+                })
+            except Exception as exc:
+                metric_list.append({
+                    "input": input_values,
+                    "output": self._stringify_metric_output(None),
+                    "error": str(exc),
+                })
+
+        return {
+            "meta": meta,
+            "metric_list": metric_list,
         }
 
     @staticmethod
@@ -499,6 +585,64 @@ class StateMetricCalculatorMapper(Mapper):
                 raise ValueError(f"inputParameter.params missing parameter: {name}")
         return args
 
+    def _resolve_metric_list_invocations(
+        self,
+        sample: dict[str, Any],
+        operator_config: dict[str, Any],
+        parameters: list[dict[str, Any]],
+        signature: inspect.Signature,
+        state_data: Any = None,
+        state_present: bool = False,
+        helpers: MetricHelpers | None = None,
+    ) -> list[tuple[list[Any], dict[str, Any]]]:
+        parameters_by_name = {
+            parameter["key_name_en"]: parameter
+            for parameter in parameters
+        }
+        argument_specs = []
+        input_values = {}
+        for func_parameter in signature.parameters.values():
+            if func_parameter.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                raise ValueError("calculate does not support *args or **kwargs")
+            if func_parameter.kind == inspect.Parameter.KEYWORD_ONLY:
+                raise ValueError("calculate does not support keyword-only parameters")
+
+            name = func_parameter.name
+            if name == "state":
+                argument_specs.append((
+                    "constant",
+                    state_data if state_present else self._resolve_state_value(sample),
+                ))
+            elif name == "helpers":
+                argument_specs.append(("constant", helpers or MetricHelpers()))
+            elif name in parameters_by_name:
+                value = self._resolve_parameter_value(
+                    sample,
+                    operator_config,
+                    parameters_by_name[name],
+                )
+                input_values[name] = value
+                argument_specs.append(("input", name))
+            elif func_parameter.default is not inspect.Parameter.empty:
+                argument_specs.append(("constant", func_parameter.default))
+            else:
+                raise ValueError(f"inputParameter.params missing parameter: {name}")
+
+        expanded_inputs = self._expand_metric_list_inputs(input_values)
+        invocations = []
+        for expanded_input in expanded_inputs:
+            args = []
+            for spec in argument_specs:
+                if spec[0] == "input":
+                    args.append(expanded_input[spec[1]])
+                else:
+                    args.append(spec[1])
+            invocations.append((args, expanded_input))
+        return invocations
+
     def _resolve_parameter_value(
         self,
         sample: dict[str, Any],
@@ -521,6 +665,64 @@ class StateMetricCalculatorMapper(Mapper):
         if value is missing:
             raise ValueError(f"missing required parameter: {name}")
         return value
+
+    @classmethod
+    def _expand_metric_list_inputs(cls, input_values: dict[str, Any]) -> list[dict[str, Any]]:
+        if not input_values:
+            return [{}]
+        split_values = {
+            name: cls._split_metric_list_input_value(value)
+            for name, value in input_values.items()
+        }
+        empty_names = [
+            name
+            for name, values in split_values.items()
+            if not values
+        ]
+        if empty_names:
+            raise ValueError(
+                "multi-value parameters have no values: "
+                + ", ".join(empty_names)
+            )
+        multi_lengths = {
+            name: len(values)
+            for name, values in split_values.items()
+            if len(values) > 1
+        }
+        if len(set(multi_lengths.values())) > 1:
+            detail = ", ".join(
+                f"{name}={length}"
+                for name, length in multi_lengths.items()
+            )
+            raise ValueError(f"multi-value parameters have different lengths: {detail}")
+        target_len = next(iter(multi_lengths.values()), 1)
+        expanded = []
+        for index in range(target_len):
+            expanded.append({
+                name: values[index] if len(values) > 1 else values[0]
+                for name, values in split_values.items()
+            })
+        return expanded
+
+    @staticmethod
+    def _split_metric_list_input_value(value: Any) -> list[Any]:
+        if isinstance(value, (list, tuple)):
+            return [
+                item
+                for item in value
+                if item is not None and item != ""
+            ]
+        if isinstance(value, str):
+            if "," not in value:
+                return [value] if value != "" else []
+            return [
+                item.strip()
+                for item in value.split(",")
+                if item.strip()
+            ]
+        if value is None:
+            return []
+        return [value]
 
     def _resolve_state_value(self, sample: dict[str, Any]):
         missing = object()
@@ -691,6 +893,23 @@ class StateMetricCalculatorMapper(Mapper):
             })
         return parameters
 
+    @staticmethod
+    def _build_metric_list_params(detail: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+        if not isinstance(detail, dict):
+            return {}
+        parameter_details = detail.get("inputParameterDetails")
+        if not isinstance(parameter_details, list):
+            return {}
+        params = {}
+        for parameter in parameter_details:
+            if not isinstance(parameter, dict) or not parameter.get("keyNameEn"):
+                continue
+            params[str(parameter["keyNameEn"])] = {
+                "type": str(parameter.get("keyType") or ""),
+                "name": str(parameter.get("keyNameCn") or ""),
+            }
+        return params
+
     def _get_operator_execution_callback_client(self):
         if self._operator_execution_callback_client is None:
             callback_client = OperatorExecutionCallbackClient(self.ctx)
@@ -716,6 +935,57 @@ class StateMetricCalculatorMapper(Mapper):
             "operators": copy.deepcopy(self.operators),
             "repartition_num_blocks": self.repartition_num_blocks,
         }
+
+    @classmethod
+    def _build_metric_list_meta(
+        cls,
+        operator_id: int,
+        detail: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        operator_type = "metric"
+        if isinstance(detail, dict):
+            operator_type = str(detail.get("operatorType") or "metric").strip().lower()
+            if operator_type not in ("metric", "tool"):
+                operator_type = "metric"
+        if operator_type == "tool":
+            metric_code = cls._tool_key(detail, operator_id)
+            metric_name = detail.get("toolNameCn") if isinstance(detail, dict) else ""
+        else:
+            metric_code = cls._result_key(detail, operator_id)
+            metric_name = detail.get("operatorNameCn") if isinstance(detail, dict) else ""
+        return {
+            "operator_id": operator_id,
+            "operator_type": operator_type,
+            "metric_code": metric_code,
+            "metric_name": str(metric_name or ""),
+            "params": cls._build_metric_list_params(detail),
+        }
+
+    @classmethod
+    def _raw_metric_list_input(
+        cls,
+        sample: dict[str, Any],
+        operator_config: dict[str, Any],
+        detail: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(detail, dict):
+            return {}
+        parameter_details = detail.get("inputParameterDetails")
+        if not isinstance(parameter_details, list):
+            return {}
+        mapping = operator_config.get("parameter_mapping") or {}
+        raw_input = {}
+        for parameter in parameter_details:
+            if not isinstance(parameter, dict) or not parameter.get("keyNameEn"):
+                continue
+            name = str(parameter["keyNameEn"])
+            if parameter.get("dataType") == "defaultValue":
+                raw_input[name] = parameter.get("defaultOrPlaceholderValue")
+                continue
+            field_name = mapping.get(name)
+            if field_name and field_name in sample:
+                raw_input[name] = sample[field_name]
+        return raw_input
 
     def _report_record_success(self, input_sample, output_sample, started_at):
         try:

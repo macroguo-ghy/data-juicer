@@ -1,10 +1,10 @@
 # State 指标计算输出契约设计
 
-本文说明 `state_metric_calculator` 后续输出展示建议。目标是适配“每个指标或工具单独声明入参 key”的模型，不再依赖全局 `id_source_key` 决定所有结果的展示分组。
+本文说明 `state_metric_calculator` 的 `result_mode=metric_list` 输出展示结构。目标是适配“每个指标或工具单独声明入参 key”的模型，不再依赖全局 `id_source_key` 决定所有结果的展示分组。
 
-## 1. 设计结论
+## 1. 输出结构
 
-输出最外层建议是对象数组：
+输出最外层是对象数组：
 
 ```json
 [

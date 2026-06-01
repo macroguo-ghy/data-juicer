@@ -361,6 +361,264 @@ process:
         })
 
     @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_metric_list_result_mode_groups_by_operator_and_keeps_tool_in_metric_list(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 226,
+                    "operatorType": "metric",
+                    "operatorNameEn": "cost_ratio",
+                    "operatorNameCn": "消耗环比",
+                    "inputParameterDetails": [
+                        {
+                            "keyNameEn": "unknown_id",
+                            "keyNameCn": "未知ID",
+                            "keyType": "AMBIGUOUS",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "unknown_id",
+                        },
+                        {
+                            "keyNameEn": "startDate",
+                            "keyNameCn": "开始时间",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "startDate",
+                        },
+                    ],
+                    "operatorCode": (
+                        "def calculate(state, unknown_id, startDate=None):\n"
+                        "    return f'metric:{unknown_id}:{startDate}'\n"
+                    ),
+                },
+                {
+                    "id": 227,
+                    "operatorType": "tool",
+                    "toolName": "customer_info",
+                    "toolNameCn": "客户信息",
+                    "inputParameterDetails": [
+                        {
+                            "keyNameEn": "adv_id",
+                            "keyNameCn": "广告主ID",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "adv_id",
+                        },
+                    ],
+                    "operatorCode": "def calculate(adv_id):\n    return f'tool:{adv_id}'\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[
+                {
+                    "operator_id": 226,
+                    "parameter_mapping": {
+                        "unknown_id": "id",
+                        "startDate": "startDate",
+                    },
+                },
+                {
+                    "operator_id": 227,
+                    "parameter_mapping": {
+                        "adv_id": "adv_id",
+                    },
+                },
+            ],
+            result_mode="metric_list",
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "id": "123",
+            "adv_id": "999",
+            "startDate": "2026-05-01",
+            "state": {},
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"], [
+            {
+                "meta": {
+                    "operator_id": 226,
+                    "operator_type": "metric",
+                    "metric_code": "cost_ratio",
+                    "metric_name": "消耗环比",
+                    "params": {
+                        "unknown_id": {
+                            "type": "AMBIGUOUS",
+                            "name": "未知ID",
+                        },
+                        "startDate": {
+                            "type": "CONCRETE",
+                            "name": "开始时间",
+                        },
+                    },
+                },
+                "metric_list": [
+                    {
+                        "input": {
+                            "unknown_id": "123",
+                            "startDate": "2026-05-01",
+                        },
+                        "output": "metric:123:2026-05-01",
+                        "error": "",
+                    },
+                ],
+            },
+            {
+                "meta": {
+                    "operator_id": 227,
+                    "operator_type": "tool",
+                    "metric_code": "customer_info",
+                    "metric_name": "客户信息",
+                    "params": {
+                        "adv_id": {
+                            "type": "CONCRETE",
+                            "name": "广告主ID",
+                        },
+                    },
+                },
+                "metric_list": [
+                    {
+                        "input": {
+                            "adv_id": "999",
+                        },
+                        "output": "tool:999",
+                        "error": "",
+                    },
+                ],
+            },
+        ])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_metric_list_result_mode_expands_multi_value_parameters(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 228,
+                    "operatorNameEn": "ad_material_metric",
+                    "operatorNameCn": "素材指标",
+                    "inputParameterDetails": [
+                        {
+                            "keyNameEn": "ad_id",
+                            "keyNameCn": "计划ID",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "ad_id",
+                        },
+                        {
+                            "keyNameEn": "material_id",
+                            "keyNameCn": "素材ID",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "material_id",
+                        },
+                        {
+                            "keyNameEn": "startDate",
+                            "keyNameCn": "开始时间",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "startDate",
+                        },
+                    ],
+                    "operatorCode": (
+                        "def calculate(ad_id, material_id, startDate):\n"
+                        "    return f'{ad_id}:{material_id}:{startDate}'\n"
+                    ),
+                },
+                {
+                    "id": 229,
+                    "operatorNameEn": "bad_lengths",
+                    "operatorNameCn": "长度错误",
+                    "inputParameterDetails": [
+                        {
+                            "keyNameEn": "ad_id",
+                            "keyNameCn": "计划ID",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "ad_id",
+                        },
+                        {
+                            "keyNameEn": "material_id",
+                            "keyNameCn": "素材ID",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "material_id",
+                        },
+                    ],
+                    "operatorCode": "def calculate(ad_id, material_id):\n    return 'unused'\n",
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[
+                {
+                    "operator_id": 228,
+                    "parameter_mapping": {
+                        "ad_id": "ad_ids",
+                        "material_id": "material_ids",
+                        "startDate": "startDate",
+                    },
+                },
+                {
+                    "operator_id": 229,
+                    "parameter_mapping": {
+                        "ad_id": "bad_ad_ids",
+                        "material_id": "bad_material_ids",
+                    },
+                },
+            ],
+            result_mode="metric_list",
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "ad_ids": "123,456",
+            "material_ids": "m1,m2",
+            "bad_ad_ids": "123,456,789",
+            "bad_material_ids": "m1,m2",
+            "startDate": "2026-05-01",
+            "state": {},
+        })
+
+        self.assertEqual(
+            result["query_metric_data_outputs"][0]["metric_list"],
+            [
+                {
+                    "input": {
+                        "ad_id": "123",
+                        "material_id": "m1",
+                        "startDate": "2026-05-01",
+                    },
+                    "output": "123:m1:2026-05-01",
+                    "error": "",
+                },
+                {
+                    "input": {
+                        "ad_id": "456",
+                        "material_id": "m2",
+                        "startDate": "2026-05-01",
+                    },
+                    "output": "456:m2:2026-05-01",
+                    "error": "",
+                },
+            ],
+        )
+        self.assertEqual(result["query_metric_data_outputs"][1]["metric_list"], [
+            {
+                "input": {
+                    "ad_id": "123,456,789",
+                    "material_id": "m1,m2",
+                },
+                "output": "null",
+                "error": "multi-value parameters have different lengths: ad_id=3, material_id=2",
+            },
+        ])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
     def test_summary_result_includes_tool_outputs(self, mock_client_cls):
         fake_client = FakeHttpClient(success_envelope({
             "operators": [
