@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 import posixpath
+import sys
 import uuid
 from functools import partial
 
@@ -143,6 +144,139 @@ class _AppendFilenameProvider(FilenameProvider):
         raise TypeError("Unexpected FilenameProvider row callback signature.")
 
 
+class _FanoutRollingParquetWriter:
+    def __init__(self, target, *, write_uuid: str, task_index: int):
+        self.target = target
+        self.write_uuid = write_uuid
+        self.task_index = task_index
+        self.target_bytes_per_file = target["compact"]["target_bytes_per_file"]
+        self.file_index = 0
+        self.stream = None
+        self.writer = None
+        self.current_path = None
+        self.current_schema = None
+        self.current_estimated_bytes = 0
+        self.output_files = 0
+        self.output_bytes = 0
+        self.parquet_writer_args, self.parquet_write_table_args = self._split_parquet_args(
+            target.get("extra_args") or {}
+        )
+
+    def write_table(self, table) -> int:
+        if table.num_rows == 0:
+            return 0
+
+        rows = 0
+        for table_slice in self._table_slices(table):
+            if self._should_roll_for_schema(table_slice.schema):
+                self._close_current_file()
+            if self.writer is not None and self._current_file_size() >= self.target_bytes_per_file:
+                self._close_current_file()
+            if self.writer is None:
+                self._open_new_file(table_slice.schema)
+
+            self.writer.write_table(table_slice, **self.parquet_write_table_args)
+            self.current_estimated_bytes += int(getattr(table_slice, "nbytes", 0) or 0)
+            rows += table_slice.num_rows
+
+            if self._current_file_size() >= self.target_bytes_per_file:
+                self._close_current_file()
+        return rows
+
+    def close(self) -> dict[str, int]:
+        self._close_current_file()
+        return {"output_files": self.output_files, "output_bytes": self.output_bytes}
+
+    def _table_slices(self, table):
+        table_nbytes = int(getattr(table, "nbytes", 0) or 0)
+        if table.num_rows == 0 or table_nbytes <= self.target_bytes_per_file:
+            yield table
+            return
+
+        row_bytes = max(1, (table_nbytes + table.num_rows - 1) // table.num_rows)
+        rows_per_slice = max(1, self.target_bytes_per_file // row_bytes)
+        for offset in range(0, table.num_rows, rows_per_slice):
+            yield table.slice(offset, min(rows_per_slice, table.num_rows - offset))
+
+    def _should_roll_for_schema(self, schema) -> bool:
+        return self.current_schema is not None and not self.current_schema.equals(schema, check_metadata=False)
+
+    def _open_new_file(self, schema) -> None:
+        import pyarrow.parquet as pq
+
+        filename = (
+            f"part-{self.target['index']:02d}-{self.write_uuid}-"
+            f"{self.task_index:06d}-{self.file_index:06d}.parquet"
+        )
+        self.file_index += 1
+        self.current_path = posixpath.join(self.target["path"], filename)
+        stream = self.target["filesystem"].open_output_stream(self.current_path)
+        try:
+            writer = pq.ParquetWriter(stream, schema, **self.parquet_writer_args)
+        except Exception:
+            self._close_stream(stream)
+            raise
+        self.stream = stream
+        self.writer = writer
+        self.current_schema = schema
+        self.current_estimated_bytes = 0
+
+    def _close_current_file(self) -> None:
+        if self.writer is None:
+            return
+
+        writer = self.writer
+        stream = self.stream
+        output_path = self.current_path
+        self.writer = None
+        self.stream = None
+        self.current_path = None
+        self.current_schema = None
+        try:
+            writer.close()
+        finally:
+            self._close_stream(stream)
+
+        metadata = RayHdfsFanoutDatasink._summarize_written_file(self.target, output_path)
+        self.output_files += metadata["output_files"]
+        self.output_bytes += metadata["output_bytes"]
+        self.current_estimated_bytes = 0
+
+    def _current_file_size(self) -> int:
+        tell = getattr(self.stream, "tell", None)
+        if callable(tell):
+            try:
+                return int(tell())
+            except Exception:  # noqa: BLE001
+                pass
+        return self.current_estimated_bytes
+
+    @staticmethod
+    def _close_stream(stream) -> None:
+        if stream is None:
+            return
+        try:
+            stream.close()
+        except ValueError:
+            pass
+
+    @staticmethod
+    def _split_parquet_args(extra_args):
+        import pyarrow.parquet as pq
+
+        write_table_allowed = set(inspect.signature(pq.write_table).parameters)
+        parquet_args = {key: value for key, value in extra_args.items() if key in write_table_allowed}
+        writer_args = {
+            key: value
+            for key, value in parquet_args.items()
+            if key not in {"table", "where", "filesystem", "row_group_size"}
+        }
+        write_table_args = {}
+        if "row_group_size" in parquet_args:
+            write_table_args["row_group_size"] = parquet_args["row_group_size"]
+        return writer_args, write_table_args
+
+
 class RayHdfsFanoutDatasink(Datasink):
     """A Ray datasink that writes one input dataset to multiple file sinks."""
 
@@ -154,6 +288,8 @@ class RayHdfsFanoutDatasink(Datasink):
             condition = target.get("condition", target.get("filter_condition", ""))
             from data_juicer.ops.filter.general_field_filter import compile_filter_condition
 
+            extra_args = dict(target.get("extra_args") or {})
+            compact = self._parse_compact_config(extra_args, target.get("type"), index)
             self.targets.append(
                 {
                     **target,
@@ -161,7 +297,8 @@ class RayHdfsFanoutDatasink(Datasink):
                     "condition": condition,
                     "compiled_condition": compile_filter_condition(condition),
                     "mode": target.get("mode") or "error_if_exists",
-                    "extra_args": dict(target.get("extra_args") or {}),
+                    "extra_args": extra_args,
+                    "compact": compact,
                     "created_dir": False,
                 }
             )
@@ -210,6 +347,12 @@ class RayHdfsFanoutDatasink(Datasink):
         partial_rows = {target["index"]: 0 for target in self.targets}
         partial_files = {target["index"]: 0 for target in self.targets}
         partial_bytes = {target["index"]: 0 for target in self.targets}
+        task_index = getattr(ctx, "task_idx", 0)
+        rolling_writers = {
+            target["index"]: _FanoutRollingParquetWriter(target, write_uuid=self.write_uuid, task_index=task_index)
+            for target in self.targets
+            if self._compact_enabled(target)
+        }
         try:
             for block_index, block in enumerate(blocks):
                 table = self._block_to_table(block)
@@ -218,19 +361,35 @@ class RayHdfsFanoutDatasink(Datasink):
                     if filtered_table.num_rows == 0:
                         continue
                     filtered_table = self._select_export_columns(filtered_table, target)
-                    filename = self._filename(target, getattr(ctx, "task_idx", 0), block_index)
-                    output_path = posixpath.join(target["path"], filename)
-                    self._write_table(target, filtered_table, output_path)
-                    metadata = self._summarize_written_file(target, output_path)
                     target_index = target["index"]
                     rows = filtered_table.num_rows
+                    if self._compact_enabled(target):
+                        rows = rolling_writers[target_index].write_table(filtered_table)
+                    else:
+                        filename = self._filename(target, task_index, block_index)
+                        output_path = posixpath.join(target["path"], filename)
+                        self._write_table(target, filtered_table, output_path)
+                        metadata = self._summarize_written_file(target, output_path)
+                        partial_files[target_index] += metadata["output_files"]
+                        partial_bytes[target_index] += metadata["output_bytes"]
                     results[target_index] += rows
                     partial_rows[target_index] += rows
-                    partial_files[target_index] += metadata["output_files"]
-                    partial_bytes[target_index] += metadata["output_bytes"]
             return results
         finally:
+            active_error = sys.exc_info()[1]
+            close_error = None
+            for target_index, writer in rolling_writers.items():
+                try:
+                    metadata = writer.close()
+                except Exception as exc:  # noqa: BLE001
+                    if close_error is None:
+                        close_error = exc
+                    continue
+                partial_files[target_index] += metadata["output_files"]
+                partial_bytes[target_index] += metadata["output_bytes"]
             self._record_partial_write_stats(partial_rows, partial_files, partial_bytes)
+            if close_error is not None and active_error is None:
+                raise close_error
 
     def on_write_complete(self, write_result):
         from pyarrow.fs import FileType
@@ -319,6 +478,45 @@ class RayHdfsFanoutDatasink(Datasink):
 
     def _stats_key(self, *parts) -> str:
         return ".".join(["fanout", self.write_uuid, *(str(part) for part in parts)])
+
+    @staticmethod
+    def _parse_compact_config(extra_args, export_type, target_index: int) -> dict:
+        compact = extra_args.pop("compact", None)
+        if compact is None:
+            return {"enabled": False, "target_bytes_per_file": None}
+        if not isinstance(compact, dict):
+            raise ValueError(
+                "`export.targets[].extra_args.compact` must be a mapping "
+                f"for fan-out target index {target_index}."
+            )
+
+        enabled = compact.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                "`export.targets[].extra_args.compact.enabled` must be a boolean "
+                f"for fan-out target index {target_index}."
+            )
+        if enabled and export_type != "parquet":
+            raise ValueError("fan-out `compact` is only supported for parquet targets.")
+
+        target_bytes = compact.get("target_bytes_per_file")
+        if enabled and target_bytes is None:
+            raise ValueError(
+                "`export.targets[].extra_args.compact.target_bytes_per_file` is required "
+                f"for fan-out target index {target_index}."
+            )
+        if target_bytes is not None and (
+            isinstance(target_bytes, bool) or not isinstance(target_bytes, int) or target_bytes <= 0
+        ):
+            raise ValueError(
+                "`export.targets[].extra_args.compact.target_bytes_per_file` must be a positive integer "
+                f"for fan-out target index {target_index}."
+            )
+        return {"enabled": enabled, "target_bytes_per_file": target_bytes}
+
+    @staticmethod
+    def _compact_enabled(target) -> bool:
+        return bool(target.get("compact", {}).get("enabled"))
 
     @staticmethod
     def _summarize_written_file(target, output_path: str) -> dict[str, int]:
