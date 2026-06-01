@@ -65,6 +65,8 @@ class ExportManager:
         self.path = self.export_cfg.get("path") or getattr(cfg, "export_path", "")
         self.last_export_summary = None
         self._active_fanout_datasink = None
+        self._active_file_exporter = None
+        self._active_file_export_uri = None
 
         self.file_exporter = None
         if not self.export_targets and self.target in {"local", "s3"}:
@@ -111,7 +113,32 @@ class ExportManager:
                 return partial_write_summary()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to collect active Ray fan-out export summary: {}", exc)
+        summary = self._active_file_export_summary()
+        if summary:
+            return summary
         return None
+
+    def _active_file_export_summary(self) -> dict | None:
+        exporter = self._active_file_exporter
+        if exporter is None:
+            return None
+
+        filesystem = getattr(exporter, "pyarrow_filesystem", None)
+        writer_path = getattr(exporter, "writer_export_path", None)
+        if filesystem is None or not writer_path:
+            return None
+
+        try:
+            summary = self._filesystem_export_summary(
+                filesystem,
+                writer_path,
+                original_uri=self._active_file_export_uri or self.path,
+            )
+            summary["partial"] = True
+            return summary
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect active Ray file export summary: {}", exc)
+            return None
 
     def _limit_dataset_for_export(self, dataset):
         max_rows = self.export_cfg.get("max_rows")
@@ -271,7 +298,17 @@ class ExportManager:
                 mode=self.export_cfg.get("mode"),
                 **extra_args,
             )
-            result = hdfs_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+            self._active_file_exporter = hdfs_exporter
+            self._active_file_export_uri = self.path
+            try:
+                result = hdfs_exporter.export(dataset, columns=self._ray_file_export_columns(columns))
+            except Exception:
+                self.last_export_summary = self._active_file_export_summary()
+                raise
+            finally:
+                if self._active_file_exporter is hdfs_exporter:
+                    self._active_file_exporter = None
+                    self._active_file_export_uri = None
             self.last_export_summary = self._filesystem_export_summary(
                 hdfs_exporter.pyarrow_filesystem,
                 hdfs_exporter.writer_export_path,

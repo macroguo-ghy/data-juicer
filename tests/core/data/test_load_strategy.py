@@ -18,6 +18,7 @@ from data_juicer.core.data.load_strategy import (
     RayHiveDataLoadStrategy,
     DefaultTQSDataLoadStrategy,
     RayTQSDataLoadStrategy,
+    RayMagnusDataLoadStrategy,
     _is_countable_parquet_metadata_file,
     _build_hive_cast_block_udf,
     _build_parquet_read_plan_from_filesystem,
@@ -441,6 +442,63 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(ImportError, "bytedray"):
             strategy.load_data()
 
+    @patch("data_juicer.core.data.load_strategy._load_ray_hive_catalog_cls")
+    @patch("ray.data.read_hive_table", create=True)
+    def test_ray_hive_loader_applies_limit_and_materialize_after_limit(
+        self,
+        mock_read_hive_table,
+        mock_load_hive_catalog_cls,
+    ):
+        catalog = MagicMock(name="catalog")
+        mock_hive_catalog_cls = MagicMock(return_value=catalog)
+        mock_load_hive_catalog_cls.return_value = mock_hive_catalog_cls
+        source_dataset = MagicMock(name="source_dataset")
+        limited_dataset = MagicMock(name="limited_dataset")
+        materialized_dataset = MagicMock(name="materialized_dataset")
+        source_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_read_hive_table.return_value = source_dataset
+        ds_config = {
+            "type": "remote",
+            "source": "hive",
+            "table_name": "db.table",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        dataset = RayHiveDataLoadStrategy(
+            ds_config,
+            Namespace(work_dir=WORK_DIR, auto_op_parallelism=None),
+        ).load_data()
+
+        mock_read_hive_table.assert_called_once_with(table_name="db.table", catalog=catalog)
+        source_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertIs(dataset.data, materialized_dataset)
+
+    def test_ray_hive_loader_validates_limit_config(self):
+        with self.assertRaisesRegex(ConfigValidationError, "Field 'limit'"):
+            RayHiveDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "hive",
+                    "table_name": "db.table",
+                    "limit": "1",
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
+
+        with self.assertRaisesRegex(ConfigValidationError, "materialize_after_limit"):
+            RayHiveDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "hive",
+                    "table_name": "db.table",
+                    "materialize_after_limit": "true",
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
+
     @patch("data_juicer.core.data.load_strategy.run_tqs_query_to_records")
     def test_tqs_client_result_uses_query_field(self, mock_run_tqs_query_to_records):
         mock_run_tqs_query_to_records.return_value = [{"id": 1}]
@@ -502,6 +560,7 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
             "override_num_blocks": 8,
             "ray_remote_args": {"num_cpus": 1},
             "limit": 10,
+            "materialize_after_limit": True,
             "skip_zero_row_group_files": False,
             "on_bad_files": "skip",
             "load_kwargs": {"shuffle": "files"},
@@ -538,6 +597,7 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
                 "override_num_blocks": 8,
                 "ray_remote_args": {"num_cpus": 1},
                 "limit": 10,
+                "materialize_after_limit": True,
                 "skip_zero_row_group_files": False,
                 "on_bad_files": "skip",
                 "load_kwargs": {"shuffle": "files"},
@@ -582,6 +642,121 @@ class DataLoadStrategyRegistryTest(DataJuicerTestCaseBase):
 
         with self.assertRaisesRegex(ValueError, "executor_type: ray"):
             DefaultTQSDataLoadStrategy(ds_config, Namespace(work_dir=WORK_DIR)).load_data()
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.from_items")
+    @patch("data_juicer.core.data.load_strategy.run_tqs_query_to_records")
+    def test_ray_tqs_client_result_applies_limit_and_materialize_after_limit(
+        self,
+        mock_run_tqs_query_to_records,
+        mock_from_items,
+        mock_ray_dataset,
+    ):
+        mock_run_tqs_query_to_records.return_value = [{"id": 1}]
+        source_dataset = MagicMock(name="source_dataset")
+        limited_dataset = MagicMock(name="limited_dataset")
+        materialized_dataset = MagicMock(name="materialized_dataset")
+        source_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_from_items.return_value = source_dataset
+        wrapped_dataset = MagicMock(name="wrapped_dataset")
+        mock_ray_dataset.return_value = wrapped_dataset
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "client_result",
+            "query": "select id from db.table",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+            "max_result_rows": 10,
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+        cfg = Namespace(work_dir=WORK_DIR, auto_op_parallelism=None)
+
+        result = RayTQSDataLoadStrategy(ds_config, cfg).load_data()
+
+        self.assertIs(result, wrapped_dataset)
+        mock_run_tqs_query_to_records.assert_called_once()
+        self.assertEqual(mock_run_tqs_query_to_records.call_args.kwargs["max_result_rows"], 1)
+        mock_from_items.assert_called_once_with([{"id": 1}])
+        source_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        mock_ray_dataset.assert_called_once_with(materialized_dataset, cfg=cfg)
+
+    @patch("data_juicer.core.data.load_strategy.RayLocalJsonDataLoadStrategy.load_data")
+    @patch("data_juicer.core.data.load_strategy.copy_uri_to_local")
+    @patch("data_juicer.core.data.load_strategy.run_tqs_query")
+    def test_ray_tqs_materialized_applies_limit_after_staged_load(
+        self,
+        mock_run_tqs_query,
+        mock_copy_uri_to_local,
+        mock_ray_local_load_data,
+    ):
+        source_dataset = MagicMock(name="source_dataset")
+        limited_dataset = MagicMock(name="limited_dataset")
+        materialized_dataset = MagicMock(name="materialized_dataset")
+        source_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        wrapped_dataset = MagicMock(name="wrapped_dataset")
+        wrapped_dataset.data = source_dataset
+        mock_ray_local_load_data.return_value = wrapped_dataset
+        mock_copy_uri_to_local.return_value = "/tmp/staged.jsonl"
+        ds_config = {
+            "type": "remote",
+            "source": "tqs",
+            "read_mode": "materialized",
+            "query": "select id from db.table",
+            "output_uri": "hdfs://haruna/tmp/dj_tqs_result",
+            "tqs_app_id": "app-id",
+            "tqs_app_key": "app-key",
+            "user_name": "user",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+        cfg = Namespace(work_dir=WORK_DIR, auto_op_parallelism=None)
+
+        result = RayTQSDataLoadStrategy(ds_config, cfg).load_data()
+
+        self.assertIs(result, wrapped_dataset)
+        mock_run_tqs_query.assert_called_once()
+        mock_copy_uri_to_local.assert_called_once()
+        mock_ray_local_load_data.assert_called_once()
+        source_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertIs(wrapped_dataset.data, materialized_dataset)
+
+    def test_ray_tqs_loader_validates_limit_config(self):
+        with self.assertRaisesRegex(ConfigValidationError, "Field 'limit'"):
+            RayTQSDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "tqs",
+                    "read_mode": "client_result",
+                    "query": "select 1",
+                    "tqs_app_id": "app-id",
+                    "tqs_app_key": "app-key",
+                    "user_name": "user",
+                    "limit": "1",
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
+
+        with self.assertRaisesRegex(ConfigValidationError, "materialize_after_limit"):
+            RayTQSDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "tqs",
+                    "read_mode": "client_result",
+                    "query": "select 1",
+                    "tqs_app_id": "app-id",
+                    "tqs_app_key": "app-key",
+                    "user_name": "user",
+                    "materialize_after_limit": "true",
+                },
+                Namespace(work_dir=WORK_DIR),
+            )
 
     def test_tqs_client_result_forwards_client_options(self):
         captured_queries = []
@@ -1529,6 +1704,13 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(ConfigValidationError, "sheet_id.*conflict"):
             DefaultLarkDataLoadStrategy(ds_config, self.cfg)
 
+    def test_ray_lark_loader_validates_limit_config(self):
+        with self.assertRaisesRegex(ConfigValidationError, "Field 'limit'"):
+            RayLarkDataLoadStrategy(dict(self.base_config, limit="1"), self.cfg)
+
+        with self.assertRaisesRegex(ConfigValidationError, "materialize_after_limit"):
+            RayLarkDataLoadStrategy(dict(self.base_config, materialize_after_limit="true"), self.cfg)
+
     @patch("data_juicer.core.data.load_strategy.DefaultLocalDataLoadStrategy.load_data")
     @patch("data_juicer.core.data.load_strategy.export_lark_sheet_to_local")
     def test_default_lark_loader_exports_csv_then_loads_staged_local_dataset(
@@ -1586,6 +1768,105 @@ class TestLarkDataLoadStrategy(DataJuicerTestCaseBase):
         ray_dataset_kwargs = mock_ray_dataset.call_args.kwargs
         self.assertTrue(ray_dataset_kwargs["dataset_path"].endswith("dataset.csv"))
         self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.from_arrow")
+    @patch("data_juicer.core.data.load_strategy.DefaultLocalDataLoadStrategy.load_data")
+    @patch("data_juicer.core.data.load_strategy.export_lark_sheet_to_local")
+    def test_ray_lark_loader_applies_limit_and_materialize_after_limit(
+        self,
+        mock_export_lark_sheet_to_local,
+        mock_default_load_data,
+        mock_ray_from_arrow,
+        mock_ray_dataset,
+    ):
+        local_dataset = MagicMock(name="local_dataset")
+        arrow_table = MagicMock(name="arrow_table")
+        source_dataset = MagicMock(name="source_dataset")
+        limited_dataset = MagicMock(name="limited_dataset")
+        materialized_dataset = MagicMock(name="materialized_dataset")
+        wrapped_dataset = MagicMock(name="wrapped_ray_dataset")
+        local_dataset.data.table = arrow_table
+        source_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_default_load_data.return_value = local_dataset
+        mock_ray_from_arrow.return_value = source_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+        mock_export_lark_sheet_to_local.side_effect = lambda **kwargs: kwargs["output_path"]
+        ds_config = dict(self.base_config, limit=1, materialize_after_limit=True)
+
+        result = RayLarkDataLoadStrategy(ds_config, self.cfg).load_data(num_proc=2)
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_default_load_data.assert_called_once_with(num_proc=2)
+        mock_ray_from_arrow.assert_called_once_with(arrow_table)
+        source_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        mock_ray_dataset.assert_called_once()
+        self.assertEqual(mock_ray_dataset.call_args.args, (materialized_dataset,))
+        self.assertTrue(mock_ray_dataset.call_args.kwargs["dataset_path"].endswith("dataset.csv"))
+        self.assertIs(mock_ray_dataset.call_args.kwargs["cfg"], self.cfg)
+
+
+class TestRayMagnusDataLoadStrategy(DataJuicerTestCaseBase):
+    def setUp(self):
+        super().setUp()
+        self.cfg = get_default_cfg()
+
+    @patch("data_juicer.core.data.load_strategy.read_magnus_to_ray")
+    def test_ray_magnus_loader_applies_limit_and_materialize_after_limit(
+        self,
+        mock_read_magnus_to_ray,
+    ):
+        source_dataset = MagicMock(name="source_dataset")
+        limited_dataset = MagicMock(name="limited_dataset")
+        materialized_dataset = MagicMock(name="materialized_dataset")
+        source_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_read_magnus_to_ray.return_value = source_dataset
+        ds_config = {
+            "type": "remote",
+            "source": "magnus",
+            "table_name": "db.table",
+            "filter": "date = '20260515'",
+            "magnus_conf": {"catalog": "prod"},
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        dataset = RayMagnusDataLoadStrategy(ds_config, self.cfg).load_data(num_proc=2)
+
+        mock_read_magnus_to_ray.assert_called_once_with(
+            "db.table",
+            filter="date = '20260515'",
+            magnus_conf={"catalog": "prod"},
+        )
+        source_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertIs(dataset.data, materialized_dataset)
+
+    def test_ray_magnus_loader_validates_limit_config(self):
+        with self.assertRaisesRegex(ConfigValidationError, "Field 'limit'"):
+            RayMagnusDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "magnus",
+                    "table_name": "db.table",
+                    "limit": "1",
+                },
+                self.cfg,
+            )
+
+        with self.assertRaisesRegex(ConfigValidationError, "materialize_after_limit"):
+            RayMagnusDataLoadStrategy(
+                {
+                    "type": "remote",
+                    "source": "magnus",
+                    "table_name": "db.table",
+                    "materialize_after_limit": "true",
+                },
+                self.cfg,
+            )
 
 
 class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
@@ -1672,6 +1953,56 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
             self.assertEqual(plan.row_count, 2)
             self.assertEqual(plan.skipped_empty_file_count, 1)
             self.assertNotIn(zero_byte_path, [call.args[0] for call in read_metadata.call_args_list])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_limit_prunes_paths_before_ray_read(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_limit_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        first_path = osp.join(tmp_dir, "part-00000.parquet")
+        second_path = osp.join(tmp_dir, "part-00001.parquet")
+        third_path = osp.join(tmp_dir, "part-00002.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), first_path)
+            pq.write_table(pa.table({"id": [3, 4, 5]}), second_path)
+            pq.write_table(pa.table({"id": [6, 7, 8, 9]}), third_path)
+
+            plan = _build_parquet_read_plan_from_filesystem(
+                pa_fs.LocalFileSystem(),
+                tmp_dir,
+                limit=3,
+            )
+
+            self.assertEqual(plan.paths, [first_path, second_path])
+            self.assertEqual(plan.row_count, 5)
+            self.assertEqual(plan.skipped_empty_file_count, 0)
+            self.assertEqual(plan.schema, pa.schema([("id", pa.int64())]))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_hdfs_parquet_read_plan_limit_keeps_all_paths_when_limit_exceeds_total(self):
+        import pyarrow.fs as pa_fs
+        import pyarrow.parquet as pq
+
+        tmp_dir = osp.join(WORK_DIR, f"tmp_hdfs_limit_all_{uuid.uuid4().hex}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        first_path = osp.join(tmp_dir, "part-00000.parquet")
+        second_path = osp.join(tmp_dir, "part-00001.parquet")
+        try:
+            pq.write_table(pa.table({"id": [1, 2]}), first_path)
+            pq.write_table(pa.table({"id": [3, 4, 5]}), second_path)
+
+            plan = _build_parquet_read_plan_from_filesystem(
+                pa_fs.LocalFileSystem(),
+                tmp_dir,
+                limit=10,
+            )
+
+            self.assertEqual(plan.paths, [first_path, second_path])
+            self.assertEqual(plan.row_count, 5)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1966,7 +2297,7 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
     @patch("ray.data.read_parquet")
     @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
     @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
-    def test_load_parquet_applies_limit_after_read_and_caps_row_count(
+    def test_load_parquet_prunes_read_plan_before_limit_and_caps_row_count(
         self,
         mock_get_pyarrow_filesystem,
         mock_build_read_plan,
@@ -2001,15 +2332,289 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
 
         self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/parts",
+            filter_for_ray_sampling_only=True,
+            limit=1,
+            allow_empty=False,
+        )
         mock_read_parquet.assert_called_once_with(
             ["/user/demo/parts/part-00001.parquet"],
             filesystem=fake_filesystem,
             override_num_blocks=16,
         )
         fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
         self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
         row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
         self.assertEqual(row_count_getter(), 1)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_materializes_after_limit_when_enabled(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        materialized_dataset = MagicMock(name="materialized_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00001.parquet"],
+            row_count=10,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertEqual(mock_ray_dataset.call_args.args, (materialized_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_skips_materialize_after_limit_during_dry_run(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=["/user/demo/parts/part-00001.parquet"],
+            row_count=10,
+        )
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+        self.cfg.ray_dry_run_plan = True
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_with_shuffle_does_not_prune_read_plan_before_limit(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(paths="/user/demo/parts", row_count=None)
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "shuffle": "files",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/parts",
+            filter_for_ray_sampling_only=True,
+        )
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/parts",
+            filesystem=fake_filesystem,
+            shuffle="files",
+        )
+        fake_dataset.limit.assert_called_once_with(1)
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_with_partition_filter_does_not_prune_read_plan_before_limit(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        partition_filter = lambda path: path.endswith("date=20260529")
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(paths="/user/demo/parts", row_count=None)
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "partition_filter": partition_filter,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/parts",
+            filter_for_ray_sampling_only=True,
+        )
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/parts",
+            filesystem=fake_filesystem,
+            partition_filter=partition_filter,
+        )
+        fake_dataset.limit.assert_called_once_with(1)
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_with_limit_and_skip_zero_row_group_disabled_uses_ray_read_path(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "skip_zero_row_group_files": False,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_not_called()
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/parts",
+            filesystem=fake_filesystem,
+        )
+        fake_dataset.limit.assert_called_once_with(1)
+        self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_with_limit_and_empty_path_preserves_ray_read_error_path(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/missing")
+        mock_build_read_plan.return_value = _ParquetReadPlan(paths="/user/demo/missing", row_count=None)
+        mock_read_parquet.side_effect = FileNotFoundError("missing")
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/missing",
+            "format": "parquet",
+            "limit": 1,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/missing",
+            filter_for_ray_sampling_only=True,
+            limit=1,
+            allow_empty=False,
+        )
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/missing",
+            filesystem=fake_filesystem,
+        )
+        mock_ray_dataset.assert_not_called()
 
     def test_load_parquet_rejects_invalid_limit(self):
         base_config = {
@@ -2129,6 +2734,57 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_on_bad_files_skip_with_limit_allows_empty_plan(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        from data_juicer.core.data.load_strategy import _ParquetReadPlan
+
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_build_read_plan.return_value = _ParquetReadPlan(
+            paths=[],
+            schema=pa.schema([("id", pa.int64())]),
+            row_count=0,
+            skipped_empty_file_count=1,
+        )
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "limit": 1,
+            "on_bad_files": "skip",
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_called_once_with(
+            fake_filesystem,
+            "/user/demo/parts",
+            skip_bad_files=True,
+            limit=1,
+            allow_empty=True,
+        )
+        mock_read_parquet.assert_not_called()
+        fake_dataset.limit.assert_not_called()
+        row_count_getter = mock_ray_dataset.call_args.kwargs["row_count_getter"]
+        self.assertEqual(row_count_getter(), 0)
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
     @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
     @patch("pyarrow.fs.FSSpecHandler")
     @patch("pyarrow.fs.PyFileSystem")
@@ -2238,6 +2894,48 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
         self.assertEqual(ray_dataset_kwargs["dataset_path"], "hdfs://haruna/user/demo/parts")
         self.assertIs(ray_dataset_kwargs["cfg"], self.cfg)
         self.assertTrue(callable(ray_dataset_kwargs["row_count_getter"]))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("ray.data.read_parquet")
+    @patch("data_juicer.core.data.load_strategy._build_parquet_read_plan_from_filesystem")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_parquet_moves_top_level_resource_args_to_ray_remote_args(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_build_read_plan,
+        mock_read_parquet,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/parts")
+        mock_read_parquet.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "override_num_blocks": 16,
+            "concurrency": 4,
+            "num_cpus": 0.5,
+            "ray_remote_args": {"resources": {"hdfs": 1}},
+            "skip_zero_row_group_files": False,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        mock_build_read_plan.assert_not_called()
+        mock_read_parquet.assert_called_once_with(
+            "/user/demo/parts",
+            filesystem=fake_filesystem,
+            override_num_blocks=16,
+            concurrency=4,
+            ray_remote_args={"resources": {"hdfs": 1}, "num_cpus": 0.5},
+        )
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("ray.data.read_parquet")
@@ -2417,7 +3115,56 @@ class TestRayHDFSDataLoadStrategy(DataJuicerTestCaseBase):
 
         self.assertEqual(result, wrapped_dataset)
         fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_not_called()
         self.assertEqual(mock_ray_dataset.call_args.args, (limited_dataset,))
+
+    @patch("data_juicer.core.data.ray_dataset.RayDataset")
+    @patch("data_juicer.core.data.ray_dataset.read_json_stream")
+    @patch("data_juicer.core.data.load_strategy.get_pyarrow_filesystem")
+    def test_load_jsonl_materializes_after_limit_when_enabled(
+        self,
+        mock_get_pyarrow_filesystem,
+        mock_read_json_stream,
+        mock_ray_dataset,
+    ):
+        fake_filesystem = MagicMock(name="hdfs_filesystem")
+        fake_dataset = MagicMock(name="ray_dataset")
+        limited_dataset = MagicMock(name="limited_ray_dataset")
+        materialized_dataset = MagicMock(name="materialized_ray_dataset")
+        wrapped_dataset = MagicMock(name="dj_ray_dataset")
+        fake_dataset.limit.return_value = limited_dataset
+        limited_dataset.materialize.return_value = materialized_dataset
+        mock_get_pyarrow_filesystem.return_value = (fake_filesystem, "/user/demo/json")
+        mock_read_json_stream.return_value = fake_dataset
+        mock_ray_dataset.return_value = wrapped_dataset
+
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/json",
+            "format": ".jsonl",
+            "limit": 1,
+            "materialize_after_limit": True,
+        }
+
+        result = RayHDFSDataLoadStrategy(ds_config, self.cfg).load_data()
+
+        self.assertEqual(result, wrapped_dataset)
+        fake_dataset.limit.assert_called_once_with(1)
+        limited_dataset.materialize.assert_called_once_with()
+        self.assertEqual(mock_ray_dataset.call_args.args, (materialized_dataset,))
+
+    def test_load_rejects_non_bool_materialize_after_limit(self):
+        ds_config = {
+            "type": "remote",
+            "source": "hdfs",
+            "path": "hdfs://haruna/user/demo/parts",
+            "format": "parquet",
+            "materialize_after_limit": "true",
+        }
+
+        with self.assertRaises(ConfigValidationError):
+            RayHDFSDataLoadStrategy(ds_config, self.cfg)
 
     @patch("data_juicer.core.data.ray_dataset.RayDataset")
     @patch("data_juicer.core.data.ray_dataset.read_json_stream")

@@ -7,7 +7,7 @@ This document describes how DataJuicer exports processed datasets, including sup
 After processing, DataJuicer exports the result dataset to disk using the `Exporter` (default mode) or `RayExporter` (Ray mode). The export system supports:
 
 - **Multiple output formats** — JSONL, JSON, Parquet, and more in Ray mode
-- **Shard export** — split large datasets into multiple files by size
+- **Writer row/file controls** — pass supported sink-specific writer options through `export.extra_args`
 - **Parallel export** — speed up single-file export with multiprocessing
 - **S3 export** — write results directly to Amazon S3 or S3-compatible storage
 - **Row limit** — cap the number of rows passed to the export sink with structured export config
@@ -20,7 +20,7 @@ After processing, DataJuicer exports the result dataset to disk using the `Expor
 ```yaml
 export_path: ./outputs/result.jsonl       # Output file path (required)
 export_type: jsonl                         # Format type (auto-detected from path if omitted)
-export_shard_size: 0                       # Shard size in bytes (0 = single file)
+export_shard_size: 0                       # Deprecated and disabled; keep 0 as a compatibility placeholder
 export_in_parallel: false                  # Parallel export for single-file mode
 keep_stats_in_res_ds: false                # Keep computed stats in output
 keep_hashes_in_res_ds: false               # Keep computed hashes in output
@@ -48,8 +48,8 @@ dj-process --config config.yaml --export_path ./outputs/result.jsonl
 # Export as Parquet
 dj-process --config config.yaml --export_path ./outputs/result.parquet
 
-# Export with sharding (256MB per shard)
-dj-process --config config.yaml --export_shard_size 268435456
+# Control writer file sizes/row groups with supported sink-specific extra_args
+# (for example, min_rows_per_file or num_rows_per_file in Ray writers)
 
 # Keep stats in output
 dj-process --config config.yaml --keep_stats_in_res_ds true
@@ -79,53 +79,33 @@ dj-process --config config.yaml --keep_stats_in_res_ds true
 
 ## Shard Export
 
-For large datasets, split the output into multiple shard files based on size:
+`export_shard_size`, `export.shard_size`, and `export.export_shard_size` are deprecated and disabled. Keep the top-level `export_shard_size` value at `0` only as a compatibility placeholder.
+
+For Ray HDFS and Ray file writers, control output file counts with supported writer options in `export.extra_args`, for example:
 
 ```yaml
-export_path: ./outputs/result.jsonl
-export_shard_size: 268435456              # 256 MB per shard
+export:
+  target: hdfs
+  path: hdfs://cluster/path/output_dir
+  type: parquet
+  extra_args:
+    min_rows_per_file: 200000
+    concurrency: 128
 ```
-
-This produces files like:
-```
-outputs/
-├── result-00-of-04.jsonl
-├── result-01-of-04.jsonl
-├── result-02-of-04.jsonl
-└── result-03-of-04.jsonl
-```
-
-**How shard size is calculated:**
-1. The total dataset size in bytes is estimated
-2. Number of shards = `ceil(dataset_bytes / export_shard_size)`
-3. The dataset is split into contiguous shards
-4. Each shard is exported in parallel using multiprocessing
-
-**Recommended shard sizes:**
-
-| Dataset Size | Recommended Shard Size | Notes |
-|-------------|----------------------|-------|
-| < 1 GB | 0 (single file) | No need to shard |
-| 1-10 GB | 256 MB - 512 MB | Good balance |
-| 10-100 GB | 512 MB - 1 GB | Fewer files |
-| > 100 GB | 1 GB - 10 GB | Avoid too many shards |
-
-Shard sizes below 1 MiB or above 1 TiB will trigger warnings.
 
 ## Parallel Export
 
-For single-file export (`export_shard_size: 0`), enable parallel writing to speed up the process:
+For single-file export, enable parallel writing to speed up the process:
 
 ```yaml
 export_path: ./outputs/result.jsonl
-export_shard_size: 0
 export_in_parallel: true
 np: 4                                     # Number of parallel processes
 ```
 
 **Important**: Parallel export can sometimes be **slower** than sequential export due to IO blocking, especially for very large datasets. If you observe this, set `export_in_parallel: false`.
 
-When `export_shard_size > 0`, shards are always exported in parallel regardless of this setting.
+`export_shard_size > 0` is no longer supported.
 
 ## S3 Export
 
@@ -158,22 +138,7 @@ The Ray exporter uses PyArrow's S3 filesystem for S3 access.
 
 ### S3 with Sharding
 
-When using S3 with shard export, shard files are written directly to S3:
-
-```yaml
-export_path: "s3://my-bucket/outputs/result.jsonl"
-export_shard_size: 268435456
-export_aws_credentials:
-  aws_access_key_id: "AKIA..."
-  aws_secret_access_key: "secret..."
-```
-
-This produces S3 objects like:
-```
-s3://my-bucket/outputs/result-00-of-04.jsonl
-s3://my-bucket/outputs/result-01-of-04.jsonl
-...
-```
+`export_shard_size` based sharding is deprecated and disabled. Use supported writer arguments in `export_extra_args` or `export.extra_args` where the selected writer supports them.
 
 ### Credential Resolution
 
@@ -286,7 +251,6 @@ from data_juicer.core.exporter import Exporter
 exporter = Exporter(
     export_path="./outputs/result.jsonl",
     export_type="jsonl",
-    export_shard_size=0,
     export_in_parallel=True,
     num_proc=4,
     keep_stats_in_res_ds=False,
@@ -304,7 +268,6 @@ from data_juicer.core.ray_exporter import RayExporter
 exporter = RayExporter(
     export_path="./outputs/result.jsonl",
     export_type="jsonl",
-    export_shard_size=268435456,
     keep_stats_in_res_ds=False,
     keep_hashes_in_res_ds=False,
 )
@@ -335,10 +298,12 @@ aws s3 ls s3://your-bucket/
 # Check that export_aws_credentials is configured
 ```
 
-**Too many shard files generated:**
+**Too many output files generated:**
 ```yaml
-# Increase shard size
-export_shard_size: 1073741824             # 1 GB
+# Use supported Ray writer options, when available
+export:
+  extra_args:
+    min_rows_per_file: 200000
 ```
 
 **Stats missing from exported dataset:**

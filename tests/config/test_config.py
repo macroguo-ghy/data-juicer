@@ -974,6 +974,39 @@ class ConfigTest(DataJuicerTestCaseBase):
             finally:
                 os.unlink(temp_config)
 
+    def test_export_shard_size_is_deprecated_and_disabled(self):
+        cases = [
+            ({'export_shard_size': 1024}, 'export_shard_size'),
+            ({'export': {'shard_size': 1024}}, 'export.shard_size'),
+            ({'export': {'export_shard_size': 1024}}, 'export.export_shard_size'),
+        ]
+
+        for overrides, expected_error in cases:
+            with self.subTest(overrides=overrides):
+                export_cfg = {
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_dir',
+                    'type': 'parquet',
+                }
+                export_cfg.update(overrides.get('export', {}))
+                config_data = {
+                    'project_name': 'deprecated_export_shard_size',
+                    'executor_type': 'ray',
+                    'dataset_path': './tests/core/data/test_data/sample.jsonl',
+                    'export': export_cfg,
+                    'process': [],
+                }
+                config_data.update({key: value for key, value in overrides.items() if key != 'export'})
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.safe_dump(config_data, f)
+                    temp_config = f.name
+
+                try:
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        init_configs(args=['--config', temp_config], load_configs_only=True)
+                finally:
+                    os.unlink(temp_config)
+
     def test_structured_export_targets_accepts_checkpoint_append_modes(self):
         base_targets = [
             {
@@ -1635,6 +1668,29 @@ from . import new_op4
                 self.assertTrue(cfg.ray_data_checkpoint.delete_no_checkpoint_files)
                 self.assertEqual(cfg.ray_data_checkpoint.write_interval, 9)
                 
+        finally:
+            os.unlink(temp_config_path)
+
+    def test_ray_data_context_config_loads_target_max_block_size(self):
+        config_data = {
+            'project_name': 'ray_data_context_block_size',
+            'executor_type': 'ray',
+            'dataset_path': './demos/data/demo-dataset.jsonl',
+            'ray_data_context': {
+                'target_max_block_size': 256 * 1024 * 1024,
+            },
+            'process': [
+                {'whitespace_normalization_mapper': {'text_key': 'text'}}
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config_path = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config_path], load_configs_only=True)
+            self.assertEqual(cfg.ray_data_context.target_max_block_size, 256 * 1024 * 1024)
         finally:
             os.unlink(temp_config_path)
 

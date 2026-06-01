@@ -41,10 +41,16 @@ dataset:
       path: hdfs://cluster/path/to/jsonl_dir
       format: jsonl
       filesystem: pyarrow
+      limit: 1000
+      materialize_after_limit: false
       on_bad_files: skip
 ```
 
 `on_bad_files: skip` 是文件级跳过。JSON/JSONL 下会跳过空文件、非法 JSON 文件，以及读取到中途才发现非法内容的整文件；不提供单行级恢复。
+
+配置了 `limit` 时，`materialize_after_limit: true` 会在 loader 内执行
+`Dataset.limit(limit).materialize()`，让后续 Ray 算子从已裁剪后的 Dataset
+继续执行。该选项适合 debug/smoke 或需要在加载后释放上游 lineage 的场景，默认关闭以保留 Ray lazy 执行。
 
 ### Remote Huggingface 数据集
 

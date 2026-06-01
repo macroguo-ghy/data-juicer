@@ -29,12 +29,14 @@ _HADOOP_HIVE_ENV_KEYS = [
     "HIVE_CONF_DIR",
     "ARROW_LIBHDFS_DIR",
     "HADOOP_COMMON_LIB_NATIVE_DIR",
+    "LIBHDFS_OPTS",
     "LD_LIBRARY_PATH",
 ]
 _METRICS_ENV_KEYS = [
     METRICS_JOB_ID_ENV_VAR,
     METRICS_RAY_ADDRESS_ENV_VAR,
 ]
+_DEFAULT_LIBHDFS_LOGGER_OPTION = "-Dhadoop.root.logger=WARN,console"
 
 
 def _get_data_juicer_import_root():
@@ -81,7 +83,20 @@ def _get_hadoop_classpath():
         return None
 
 
+def _ensure_libhdfs_warning_logging_env():
+    libhdfs_opts = os.environ.get("LIBHDFS_OPTS", "").strip()
+    if "hadoop.root.logger=" in libhdfs_opts:
+        return
+
+    if libhdfs_opts:
+        os.environ["LIBHDFS_OPTS"] = f"{libhdfs_opts} {_DEFAULT_LIBHDFS_LOGGER_OPTION}"
+    else:
+        os.environ["LIBHDFS_OPTS"] = _DEFAULT_LIBHDFS_LOGGER_OPTION
+
+
 def ensure_hadoop_classpath_env():
+    _ensure_libhdfs_warning_logging_env()
+
     if os.environ.get("CLASSPATH"):
         return
 

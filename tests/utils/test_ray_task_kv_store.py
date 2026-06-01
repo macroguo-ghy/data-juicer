@@ -61,6 +61,44 @@ class TaskKVStoreActorTest(unittest.TestCase):
             self.assertEqual(snapshot_task_kv(), {})
             self.assertIsNone(clear_task_kv())
 
+    def test_snapshot_is_best_effort_when_actor_get_fails(self):
+        class FakeActorMethod:
+            def remote(self, *args):
+                return "ref"
+
+        class FakeActor:
+            snapshot = FakeActorMethod()
+
+        class RayWithFailingGet:
+            @staticmethod
+            def get(ref):
+                raise RuntimeError(f"actor died while reading {ref}")
+
+        with (
+            patch("data_juicer.utils.ray_task_kv_store.get_task_kv_store_actor", return_value=FakeActor()),
+            patch("data_juicer.utils.ray_task_kv_store._try_import_ray", return_value=RayWithFailingGet),
+        ):
+            self.assertEqual(snapshot_task_kv("runtime_stats"), {})
+
+    def test_waiting_increment_is_best_effort_when_actor_get_fails(self):
+        class FakeActorMethod:
+            def remote(self, *args):
+                return "ref"
+
+        class FakeActor:
+            incr = FakeActorMethod()
+
+        class RayWithFailingGet:
+            @staticmethod
+            def get(ref):
+                raise RuntimeError(f"actor died while reading {ref}")
+
+        with (
+            patch("data_juicer.utils.ray_task_kv_store.get_task_kv_store_actor", return_value=FakeActor()),
+            patch("data_juicer.utils.ray_task_kv_store._try_import_ray", return_value=RayWithFailingGet),
+        ):
+            self.assertIsNone(incr_task_kv("count", namespace="runtime_stats", wait=True))
+
 
 class RayTaskKVStoreIntegrationTest(unittest.TestCase):
     @classmethod

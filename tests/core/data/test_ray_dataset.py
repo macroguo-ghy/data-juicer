@@ -698,6 +698,25 @@ class RayDatasetFuncsTest(DataJuicerTestCaseBase):
         self.assertEqual(result_dict['videos'][1], [None])
 
     @TEST_TAG('ray')
+    def test_convert_to_absolute_paths_skips_missing_path_keys(self):
+        """Configured export media columns may not exist in the raw input table."""
+        import pyarrow as pa
+
+        table = pa.Table.from_pydict({
+            'item_id': [1, 2],
+            'item_duration': [30.0, 90.0],
+        })
+
+        result_table = self.convert_to_absolute_paths(
+            table,
+            self.tmp_dir,
+            ['images', 'audios'],
+        )
+
+        self.assertEqual(result_table.schema.names, ['item_id', 'item_duration'])
+        self.assertEqual(result_table.to_pydict(), table.to_pydict())
+
+    @TEST_TAG('ray')
     def test_set_dataset_to_absolute_path_skips_binary_media_columns(self):
         """Binary media columns are already materialized data, not paths."""
         import pyarrow as pa
@@ -841,6 +860,47 @@ class RayDatasetFuncsTest(DataJuicerTestCaseBase):
         result = self.get_abs_path(path, dataset_dir)
         self.assertEqual(result, tgt_path)
         self.assertNotEqual(result, non_tgt_path)
+
+
+class RayDatasetMapperHookTest(unittest.TestCase):
+    def test_mapper_prepare_backend_for_ray_tasks_hook_runs_before_map_batches(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        events = []
+
+        class FakeRayDataset:
+            def columns(self):
+                return ["text"]
+
+            def map_batches(self, fn, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+        class BackendPreparingMapper(Mapper):
+            _name = "backend_preparing_mapper"
+
+            def prepare_backend_for_ray_tasks(self):
+                events.append(("prepare_backend_for_ray_tasks", None))
+
+            def process_single(self, sample):
+                return sample
+
+        fake_dataset = FakeRayDataset()
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = fake_dataset
+
+        op = BackendPreparingMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset._run_single_op(op, cached_columns=set(fake_dataset.columns()))
+
+        self.assertEqual(
+            events,
+            [
+                ("prepare_backend_for_ray_tasks", None),
+                ("map_batches", "pyarrow"),
+            ],
+        )
+
 
 class TestRayDataset(DataJuicerTestCaseBase):
     def setUp(self):

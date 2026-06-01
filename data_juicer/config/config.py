@@ -231,19 +231,15 @@ def build_base_parser() -> ArgumentParser:
         "--export_shard_size",
         type=NonNegativeInt,
         default=0,
-        help="Shard size of exported dataset in Byte. In default, it's 0, "  # noqa: E251
-        "which means export the whole dataset into only one file. If "
-        "it's set a positive number, the exported dataset will be split "
-        "into several sub-dataset shards, and the max size of each shard "
-        "won't larger than the export_shard_size",
+        help="Deprecated and disabled. Keep this value at 0. Use export.extra_args "
+        "Ray writer row/file options such as min_rows_per_file or num_rows_per_file instead.",
     )
     parser.add_argument(
         "--export_in_parallel",
         type=bool,
         default=False,
         help="Whether to export the result dataset in parallel to a single "  # noqa: E251
-        "file, which usually takes less time. It only works when "
-        "export_shard_size is 0, and its default number of processes is "
+        "file, which usually takes less time. Its default number of processes is "
         "the same as the argument np. **Notice**: If it's True, "
         "sometimes exporting in parallel might require much more time "
         "due to the IO blocking, especially for very large datasets. "
@@ -443,6 +439,12 @@ def build_base_parser() -> ArgumentParser:
         type=int,
         default=None,
         help="Optional Ray Data checkpoint metadata write interval. Leave unset to use Ray's default.",
+    )
+    parser.add_argument(
+        "--ray_data_context.target_max_block_size",
+        type=PositiveInt,
+        default=None,
+        help="Optional Ray Data target max block size in bytes. Leave unset to use Ray's default.",
     )
     # Enhanced checkpoint configuration for PartitionedRayExecutor
     parser.add_argument(
@@ -965,9 +967,11 @@ def _substitute_nested_placeholders(value, placeholders):
 def normalize_export_config(cfg: Namespace) -> Namespace:
     export_cfg = _plain_cfg_value(getattr(cfg, "export", None))
     if not export_cfg:
+        _validate_deprecated_export_shard_size(cfg, {})
         return cfg
     if not isinstance(export_cfg, dict):
         raise ValueError("Structured `export` config must be a dictionary")
+    _validate_deprecated_export_shard_size(cfg, export_cfg)
     if "targets" in export_cfg:
         _validate_export_targets(export_cfg, cfg)
         cfg.export_path = export_cfg["targets"][0]["path"]
@@ -980,8 +984,6 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         cfg.export_path = path
     if "type" in export_cfg or "export_type" in export_cfg:
         cfg.export_type = export_cfg.get("type", export_cfg.get("export_type"))
-    if "shard_size" in export_cfg or "export_shard_size" in export_cfg:
-        cfg.export_shard_size = export_cfg.get("shard_size", export_cfg.get("export_shard_size"))
     if "in_parallel" in export_cfg or "export_in_parallel" in export_cfg:
         cfg.export_in_parallel = export_cfg.get("in_parallel", export_cfg.get("export_in_parallel"))
     if "extra_args" in export_cfg:
@@ -991,6 +993,24 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
 
     cfg.export = dict_to_namespace(export_cfg)
     return cfg
+
+
+def _validate_deprecated_export_shard_size(cfg: Namespace, export_cfg: dict) -> None:
+    if getattr(cfg, "export_shard_size", 0):
+        raise ValueError(
+            "`export_shard_size` is deprecated and disabled. Use Ray writer row/file options in "
+            "`export.extra_args`, such as `min_rows_per_file` or `num_rows_per_file`, instead."
+        )
+    if "shard_size" in export_cfg:
+        raise ValueError(
+            "`export.shard_size` is deprecated and disabled. Use Ray writer row/file options in "
+            "`export.extra_args`, such as `min_rows_per_file` or `num_rows_per_file`, instead."
+        )
+    if "export_shard_size" in export_cfg:
+        raise ValueError(
+            "`export.export_shard_size` is deprecated and disabled. Use Ray writer row/file options in "
+            "`export.extra_args`, such as `min_rows_per_file` or `num_rows_per_file`, instead."
+        )
 
 
 def normalize_notification_hooks_config(cfg: Namespace) -> Namespace:

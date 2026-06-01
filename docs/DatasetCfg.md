@@ -44,12 +44,19 @@ dataset:
       path: hdfs://cluster/path/to/jsonl_dir
       format: jsonl
       filesystem: pyarrow
+      limit: 1000
+      materialize_after_limit: false
       on_bad_files: skip
 ```
 
 `on_bad_files: skip` skips bad files at file granularity. For JSON/JSONL this
 includes empty files, invalid JSON files, and files that become invalid midway
 through parsing. It does not provide per-line recovery.
+
+When `limit` is set, `materialize_after_limit: true` forces
+`Dataset.limit(limit).materialize()` in the loader before later Ray operators
+run. This is useful for debug and smoke runs that need a hard barrier after
+loading, but it is disabled by default to preserve Ray's lazy execution.
 
 ### Remote Huggingface Dataset
 
