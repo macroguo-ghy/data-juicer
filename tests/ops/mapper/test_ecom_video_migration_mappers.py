@@ -622,6 +622,15 @@ class VideoUrlRpcMapperTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Euler RPC runtime"):
                 VideoUrlRpcMapper()._create_client_and_thrift()
 
+    def test_ray_backend_hook_sets_up_shared_qps_limiter(self):
+        mapper = VideoUrlRpcMapper(vid_key="vid", output_key="urls", qps=100)
+        setup_calls = []
+        mapper._rpc_qps_limiter = types.SimpleNamespace(setup_ray_actor=lambda: setup_calls.append("setup"))
+
+        mapper.prepare_backend_for_ray_tasks()
+
+        self.assertEqual(setup_calls, ["setup"])
+
     def test_video_info_selection_edges(self):
         original_meta = types.SimpleNamespace(Width=1920, Definition="ori", EncodedType="original")
         original = types.SimpleNamespace(MainUrl="ori", VideoMeta=original_meta)

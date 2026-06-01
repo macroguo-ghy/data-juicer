@@ -861,6 +861,47 @@ class RayDatasetFuncsTest(DataJuicerTestCaseBase):
         self.assertEqual(result, tgt_path)
         self.assertNotEqual(result, non_tgt_path)
 
+
+class RayDatasetMapperHookTest(unittest.TestCase):
+    def test_mapper_prepare_backend_for_ray_tasks_hook_runs_before_map_batches(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.base_op import Mapper
+
+        events = []
+
+        class FakeRayDataset:
+            def columns(self):
+                return ["text"]
+
+            def map_batches(self, fn, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+        class BackendPreparingMapper(Mapper):
+            _name = "backend_preparing_mapper"
+
+            def prepare_backend_for_ray_tasks(self):
+                events.append(("prepare_backend_for_ray_tasks", None))
+
+            def process_single(self, sample):
+                return sample
+
+        fake_dataset = FakeRayDataset()
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.data = fake_dataset
+
+        op = BackendPreparingMapper(auto_op_parallelism=False, num_proc=1)
+        ray_dataset._run_single_op(op, cached_columns=set(fake_dataset.columns()))
+
+        self.assertEqual(
+            events,
+            [
+                ("prepare_backend_for_ray_tasks", None),
+                ("map_batches", "pyarrow"),
+            ],
+        )
+
+
 class TestRayDataset(DataJuicerTestCaseBase):
     def setUp(self):
         """Set up test data"""

@@ -551,6 +551,10 @@ class RayDataset(DJDataset):
                 if callable(prepare_ray_dataset):
                     self.data = prepare_ray_dataset(self.data)
 
+                prepare_for_ray_tasks = getattr(op, "prepare_backend_for_ray_tasks", None)
+                if callable(prepare_for_ray_tasks):
+                    prepare_for_ray_tasks()
+
                 # Wrap process method with tracer for sample-level collection
                 original_process = None
                 if tracer and should_trace_op(tracer, op._name):
