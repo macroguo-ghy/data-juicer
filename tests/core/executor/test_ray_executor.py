@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from data_juicer.core.executor.ray_executor import (
     RayDataCheckpointManager,
+    RayDataContextConfigManager,
     RayExecutor,
     build_dry_run_ray_dataset,
     format_ray_data_plan,
@@ -754,6 +755,85 @@ class RayExecutorTest(DataJuicerTestCaseBase):
         with self.assertRaisesRegex(ValueError, "`ray_data_checkpoint.dir` must be set"):
             with RayDataCheckpointManager(cfg):
                 pass
+
+    def test_ray_data_context_config_sets_and_restores_target_max_block_size(self):
+        ray_data_context_cfg = SimpleNamespace(target_max_block_size=256 * 1024 * 1024)
+        cfg = SimpleNamespace(ray_data_context=ray_data_context_cfg)
+
+        fake_context = SimpleNamespace(target_max_block_size=128 * 1024 * 1024)
+        fake_data_context = SimpleNamespace(
+            get_current=MagicMock(return_value=fake_context),
+            _set_current=MagicMock(),
+        )
+        fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
+
+        with patch('data_juicer.core.executor.ray_executor.ray', fake_ray):
+            with RayDataContextConfigManager(cfg) as context_config:
+                self.assertTrue(context_config.enabled)
+                self.assertEqual(fake_context.target_max_block_size, 256 * 1024 * 1024)
+
+        self.assertEqual(fake_context.target_max_block_size, 128 * 1024 * 1024)
+        fake_data_context.get_current.assert_called_once()
+        self.assertEqual(fake_data_context._set_current.call_count, 2)
+
+    def test_run_applies_ray_data_context_before_loading_dataset(self):
+        class FakeData:
+            def columns(self):
+                return ['text']
+
+        class FakeDataset:
+            def __init__(self):
+                self.data = FakeData()
+
+            def process(self, ops, **kwargs):
+                return self
+
+        dataset = FakeDataset()
+        fake_context = SimpleNamespace(target_max_block_size=128 * 1024 * 1024)
+        fake_data_context = SimpleNamespace(
+            get_current=MagicMock(return_value=fake_context),
+            _set_current=MagicMock(),
+        )
+        fake_ray = SimpleNamespace(data=SimpleNamespace(DataContext=fake_data_context))
+
+        def load_dataset_with_context_applied(num_proc=None):
+            self.assertEqual(fake_context.target_max_block_size, 256 * 1024 * 1024)
+            return dataset
+
+        executor = RayExecutor.__new__(RayExecutor)
+        executor.cfg = SimpleNamespace(
+            process=[{'noop': {}}],
+            op_fusion=False,
+            export_path=os.path.join(self.tmp_dir, 'unused.jsonl'),
+            dataset={"configs": [{"columns": ["text"]}]},
+            dataset_path=None,
+            ray_collect_real_metrics=False,
+            ray_data_checkpoint=SimpleNamespace(enabled=False),
+            ray_data_context=SimpleNamespace(target_max_block_size=256 * 1024 * 1024),
+        )
+        executor.datasetbuilder = SimpleNamespace(load_dataset=MagicMock(side_effect=load_dataset_with_context_applied))
+        executor.work_dir = self.tmp_dir
+        executor.executor_type = 'ray'
+        executor.tmp_dir = os.path.join(self.tmp_dir, '.tmp')
+        executor.op_env_manager = None
+        executor.tracer = None
+        executor.pipeline_dag = None
+        executor.log_job_start = MagicMock()
+        executor._initialize_dag_execution = MagicMock()
+        executor.log_job_complete = MagicMock()
+        executor.exporter = SimpleNamespace(export=MagicMock(), last_export_summary=None, current_export_summary=None)
+
+        with (
+            patch('data_juicer.core.executor.ray_executor.ray', fake_ray),
+            patch('data_juicer.core.executor.ray_executor.load_ops', return_value=[]),
+        ):
+            result = executor.run(skip_export=True)
+
+        self.assertIs(result, dataset)
+        executor.datasetbuilder.load_dataset.assert_called_once_with(num_proc=None)
+        self.assertEqual(fake_context.target_max_block_size, 128 * 1024 * 1024)
+        fake_data_context.get_current.assert_called_once()
+        self.assertEqual(fake_data_context._set_current.call_count, 2)
 
     def test_run_with_ray_data_checkpoint_enabled_keeps_lazy_export_path(self):
         class FakeData:

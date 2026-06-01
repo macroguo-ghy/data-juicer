@@ -208,6 +208,15 @@ class ItemIdImageUrlMapperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "qps"):
             ItemIdImageUrlMapper(qps=0)
 
+    def test_ray_backend_hook_sets_up_shared_qps_limiter(self):
+        op = ItemIdImageUrlMapper(qps=100, auto_op_parallelism=False, num_proc=1)
+        setup_calls = []
+        op._rpc_qps_limiter = SimpleNamespace(setup_ray_actor=lambda: setup_calls.append("setup"))
+
+        op.prepare_backend_for_ray_tasks()
+
+        self.assertEqual(setup_calls, ["setup"])
+
     def test_process_single_outputs_empty_list_when_rpc_empty_or_item_id_missing(self):
         empty_row = _op_with_clients(FakeItemRpc([None]), FakeItemRpc([[]])).process_single({"item_id": 1})
         missing_id_row = _op_with_clients(FakeItemRpc([["unused"]]), FakeItemRpc([["unused"]])).process_single(

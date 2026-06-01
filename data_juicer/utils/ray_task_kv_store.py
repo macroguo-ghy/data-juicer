@@ -1,9 +1,14 @@
 import re
+import threading
 from typing import Any
+
+from loguru import logger
 
 DEFAULT_NAMESPACE = "default"
 _ACTOR_NAME_PREFIX = "dj_task_kv_store"
 _ACTOR_HANDLE_CACHE: dict[str, Any] = {}
+_WARNING_KEYS: set[str] = set()
+_WARNING_KEYS_LOCK = threading.Lock()
 
 
 class TaskKVStoreActor:
@@ -90,26 +95,74 @@ def get_task_kv_store_actor():
     return actor
 
 
+def _log_kv_store_warning_once(action: str, exc: BaseException) -> None:
+    key = f"{action}:{type(exc).__name__}:{str(exc)[:200]}"
+    with _WARNING_KEYS_LOCK:
+        if key in _WARNING_KEYS:
+            return
+        _WARNING_KEYS.add(key)
+    logger.warning(
+        "Task KV store [{}] failed; continuing without job-scoped runtime state: {}",
+        action,
+        exc,
+    )
+
+
+def _discard_cached_actor(actor) -> None:
+    for actor_name, cached_actor in list(_ACTOR_HANDLE_CACHE.items()):
+        if cached_actor is actor:
+            _ACTOR_HANDLE_CACHE.pop(actor_name, None)
+
+
+def _actor_or_none(action: str):
+    try:
+        return get_task_kv_store_actor()
+    except Exception as exc:  # noqa: BLE001
+        _log_kv_store_warning_once(f"{action}.get_actor", exc)
+        return None
+
+
+def _call_actor_method(action: str, actor, method_name: str, *args, wait: bool = False, default=None):
+    try:
+        ref = getattr(actor, method_name).remote(*args)
+    except Exception as exc:  # noqa: BLE001
+        _discard_cached_actor(actor)
+        _log_kv_store_warning_once(f"{action}.remote", exc)
+        return default
+
+    if not wait:
+        return ref
+
+    ray = _try_import_ray()
+    if ray is None:
+        return default
+    try:
+        return ray.get(ref)
+    except Exception as exc:  # noqa: BLE001
+        _discard_cached_actor(actor)
+        _log_kv_store_warning_once(f"{action}.get", exc)
+        return default
+
+
 def put_task_kv(key: str, value: Any, namespace: str = DEFAULT_NAMESPACE, wait: bool = False):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("put")
     if actor is None:
         return None
-    ref = actor.put.remote(_normalize_namespace(namespace), key, value)
-    if wait:
-        ray = _try_import_ray()
-        return ray.get(ref)
-    return ref
+    return _call_actor_method("put", actor, "put", _normalize_namespace(namespace), key, value, wait=wait)
 
 
 def put_many_task_kv(mapping: dict[str, Any], namespace: str = DEFAULT_NAMESPACE, wait: bool = False):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("put_many")
     if actor is None:
         return None
-    ref = actor.put_many.remote(_normalize_namespace(namespace), dict(mapping or {}))
-    if wait:
-        ray = _try_import_ray()
-        return ray.get(ref)
-    return ref
+    return _call_actor_method(
+        "put_many",
+        actor,
+        "put_many",
+        _normalize_namespace(namespace),
+        dict(mapping or {}),
+        wait=wait,
+    )
 
 
 def incr_task_kv(
@@ -118,40 +171,39 @@ def incr_task_kv(
     namespace: str = DEFAULT_NAMESPACE,
     wait: bool = False,
 ):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("incr")
     if actor is None:
         return None
-    ref = actor.incr.remote(_normalize_namespace(namespace), key, delta)
-    if wait:
-        ray = _try_import_ray()
-        return ray.get(ref)
-    return ref
+    return _call_actor_method("incr", actor, "incr", _normalize_namespace(namespace), key, delta, wait=wait)
 
 
 def get_task_kv(key: str, default: Any = None, namespace: str = DEFAULT_NAMESPACE):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("get")
     if actor is None:
         return default
-    ray = _try_import_ray()
-    return ray.get(actor.get.remote(_normalize_namespace(namespace), key, default))
+    return _call_actor_method(
+        "get",
+        actor,
+        "get",
+        _normalize_namespace(namespace),
+        key,
+        default,
+        wait=True,
+        default=default,
+    )
 
 
 def snapshot_task_kv(namespace: str | None = None):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("snapshot")
     if actor is None:
         return {}
-    ray = _try_import_ray()
     normalized_namespace = None if namespace is None else _normalize_namespace(namespace)
-    return ray.get(actor.snapshot.remote(normalized_namespace))
+    return _call_actor_method("snapshot", actor, "snapshot", normalized_namespace, wait=True, default={})
 
 
 def clear_task_kv(namespace: str | None = None, wait: bool = True):
-    actor = get_task_kv_store_actor()
+    actor = _actor_or_none("clear")
     if actor is None:
         return None
     normalized_namespace = None if namespace is None else _normalize_namespace(namespace)
-    ref = actor.clear.remote(normalized_namespace)
-    if wait:
-        ray = _try_import_ray()
-        return ray.get(ref)
-    return ref
+    return _call_actor_method("clear", actor, "clear", normalized_namespace, wait=wait)

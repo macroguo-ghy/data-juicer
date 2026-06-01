@@ -9,6 +9,7 @@ from data_juicer.utils.constant import (
     METRICS_JOB_ID_ENV_VAR,
     METRICS_RAY_ADDRESS_ENV_VAR,
 )
+from data_juicer.utils.ray_task_kv_store import incr_task_kv
 
 METRICS_PREFIX = "ad.ai.data_forge"
 RPC_QPS_METRIC = "rpc.qps"
@@ -20,6 +21,7 @@ VLM_RATE_LIMIT_EVENT_METRIC = "vlm.rate_limit.event"
 VLM_RATE_LIMIT_VALUE_METRIC = "vlm.rate_limit.value"
 DEDUP_ROWS_METRIC = "dedup.rows"
 UNKNOWN_TAG_VALUE = "unknown"
+RUNTIME_STATS_NAMESPACE = "runtime_stats"
 
 _metrics_client = None
 _metrics_client_initialized = False
@@ -48,6 +50,7 @@ def emit_rpc_qps(
     status: str,
     extra_tags: dict[str, Any] | None = None,
 ) -> None:
+    _emit_runtime_operation_count("rpc", op_name=op_name, status=status)
     _emit_qps(
         RPC_QPS_METRIC,
         {
@@ -68,6 +71,7 @@ def emit_vlm_qps(
     status: str,
     extra_tags: dict[str, Any] | None = None,
 ) -> None:
+    _emit_runtime_operation_count("vlm", op_name=op_name, status=status)
     _emit_qps(
         VLM_QPS_METRIC,
         {
@@ -212,6 +216,50 @@ def emit_dedup_rows(
 
 def _emit_qps(metric_name: str, tags: dict[str, Any]) -> None:
     _emit_rate_counter(metric_name, tags)
+
+
+def _emit_runtime_operation_count(family: str, *, op_name: str, status: str) -> None:
+    status_name = "success" if str(status) == "success" else "failed"
+    record_runtime_operation_counts(
+        family,
+        op_name=op_name,
+        total=1,
+        success=1 if status_name == "success" else 0,
+        failed=1 if status_name == "failed" else 0,
+    )
+
+
+def record_runtime_operation_counts(
+    family: str,
+    *,
+    op_name: str,
+    total: int | float = 0,
+    success: int | float = 0,
+    failed: int | float = 0,
+) -> None:
+    family = _runtime_key_part(family)
+    op_name = _runtime_key_part(op_name)
+    deltas = {
+        f"{family}.total_count": total,
+        f"{family}.{op_name}.total_count": total,
+        f"{family}.success_count": success,
+        f"{family}.{op_name}.success_count": success,
+        f"{family}.failed_count": failed,
+        f"{family}.{op_name}.failed_count": failed,
+    }
+    for key, delta in deltas.items():
+        if not delta:
+            continue
+        try:
+            incr_task_kv(key, delta, namespace=RUNTIME_STATS_NAMESPACE, wait=False)
+        except Exception as err:  # noqa: BLE001
+            _log_metrics_warning_once(f"Failed to update runtime stats counter: {err}")
+            return
+
+
+def _runtime_key_part(value: Any) -> str:
+    text = str(value or UNKNOWN_TAG_VALUE).strip()
+    return text if text else UNKNOWN_TAG_VALUE
 
 
 def _emit_rate_counter(metric_name: str, tags: dict[str, Any], value: int | float = 1) -> None:

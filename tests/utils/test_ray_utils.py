@@ -32,6 +32,7 @@ class RayUtilsTest(unittest.TestCase):
                 "HIVE_CONF_DIR",
                 "ARROW_LIBHDFS_DIR",
                 "HADOOP_COMMON_LIB_NATIVE_DIR",
+                "LIBHDFS_OPTS",
                 "LD_LIBRARY_PATH",
                 "PYTHONPATH",
                 METRICS_JOB_ID_ENV_VAR,
@@ -113,6 +114,22 @@ class RayUtilsTest(unittest.TestCase):
             "/opt/tiger/hive_deploy/conf:/opt/tiger/hive_deploy/lib/*",
         )
 
+    @patch("data_juicer.utils.ray_utils._get_hadoop_classpath", return_value=None)
+    def test_ensure_hadoop_classpath_env_defaults_libhdfs_to_warning_logging(self, mock_get_hadoop_classpath):
+        os.environ.pop("LIBHDFS_OPTS", None)
+
+        ray_utils.ensure_hadoop_classpath_env()
+
+        self.assertIn("-Dhadoop.root.logger=WARN,console", os.environ["LIBHDFS_OPTS"])
+
+    @patch("data_juicer.utils.ray_utils._get_hadoop_classpath", return_value=None)
+    def test_ensure_hadoop_classpath_env_keeps_existing_libhdfs_logger_level(self, mock_get_hadoop_classpath):
+        os.environ["LIBHDFS_OPTS"] = "-Xmx1g -Dhadoop.root.logger=WARN,console"
+
+        ray_utils.ensure_hadoop_classpath_env()
+
+        self.assertEqual(os.environ["LIBHDFS_OPTS"], "-Xmx1g -Dhadoop.root.logger=WARN,console")
+
     @patch("data_juicer.utils.ray_utils._get_hadoop_classpath")
     def test_initialize_ray_forwards_hadoop_hive_env_vars(self, mock_get_hadoop_classpath):
         mock_get_hadoop_classpath.return_value = "/hadoop/classpath"
@@ -135,6 +152,7 @@ class RayUtilsTest(unittest.TestCase):
         self.assertEqual(env_vars["HADOOP_CONF_DIR"], "/opt/tiger/yarn_deploy/hadoop/conf")
         self.assertEqual(env_vars["HIVE_CONF_DIR"], "/opt/tiger/hive_deploy/conf")
         self.assertEqual(env_vars["ARROW_LIBHDFS_DIR"], "/opt/tiger/yarn_deploy/hadoop/lib/native")
+        self.assertEqual(env_vars["LIBHDFS_OPTS"], "-Dhadoop.root.logger=WARN,console")
         self.assertNotIn("job_config", kwargs)
 
     @patch("data_juicer.utils.ray_utils._get_hadoop_classpath")

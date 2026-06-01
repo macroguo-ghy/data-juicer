@@ -246,6 +246,52 @@ class TaskNotificationTest(unittest.TestCase):
         snapshot_mock.assert_called_once_with(namespace="runtime_stats")
         self.assertEqual(snapshot["dedup.duplicate_rows"], 2)
 
+    @patch("data_juicer.core.task_notification.snapshot_task_kv")
+    @patch("data_juicer.core.task_notification.incr_task_kv")
+    def test_runtime_stats_collector_is_best_effort_when_task_actor_fails(self, incr_mock, snapshot_mock):
+        incr_mock.side_effect = RuntimeError("actor died")
+        snapshot_mock.side_effect = RuntimeError("actor died")
+        collector = RuntimeStatsCollector()
+
+        collector.increment("dedup.duplicate_rows", 2)
+        snapshot = collector.snapshot()
+
+        incr_mock.assert_called_once_with("dedup.duplicate_rows", 2, namespace="runtime_stats", wait=False)
+        snapshot_mock.assert_called_once_with(namespace="runtime_stats")
+        self.assertEqual(snapshot, {})
+
+    @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
+    def test_manager_finish_keeps_notification_best_effort_when_stats_snapshot_fails(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cfg = SimpleNamespace(
+                notification_hooks=[self._hook_cfg(interval=None)],
+                job_id="job-1",
+                project_name="project",
+                executor_type="ray",
+                export_path="hdfs://cluster/output",
+                work_dir=tmp_dir,
+            )
+            collector = RuntimeStatsCollector()
+            collector.snapshot = MagicMock(side_effect=RuntimeError("actor died"))
+            manager = TaskNotificationManager(cfg, stats_collector=collector)
+
+            manager.finish(
+                success=True,
+                export_summary={
+                    "output_rows": 4,
+                    "output_files": 2,
+                    "output_bytes": 128,
+                },
+            )
+
+            with open(os.path.join(tmp_dir, "notification_snapshot.json"), "r", encoding="utf-8") as file:
+                snapshot = json.load(file)
+            self.assertEqual(snapshot["status"], "success")
+            self.assertEqual(snapshot["phase"], "finished")
+            self.assertEqual(snapshot["output_rows"], 4)
+            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 0})
+            self.assertEqual(len(FakeHttpClient.requests), 1)
+
     @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
     def test_manager_writes_snapshot_file_with_export_summary_and_custom_stats(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -268,6 +314,20 @@ class TaskNotificationTest(unittest.TestCase):
                     "output_rows": 4,
                     "output_files": 2,
                     "output_bytes": 128,
+                    "targets": [
+                        {
+                            "path": "hdfs://cluster/output_short",
+                            "rows": 3,
+                            "output_files": 1,
+                            "output_bytes": 64,
+                        },
+                        {
+                            "path": "hdfs://cluster/output_long",
+                            "rows": 1,
+                            "output_files": 1,
+                            "output_bytes": 64,
+                        },
+                    ],
                 },
             )
 
@@ -276,7 +336,13 @@ class TaskNotificationTest(unittest.TestCase):
             self.assertEqual(snapshot["status"], "success")
             self.assertEqual(snapshot["phase"], "finished")
             self.assertEqual(snapshot["output_rows"], 4)
-            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4})
+            self.assertEqual(len(snapshot["export_targets"]), 2)
+            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4, "other": 9})
+            variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+            self.assertIn("1. 行数：3；文件数：1；大小：64 B", variables["export_targets_text"])
+            self.assertIn("hdfs://cluster/output_short", variables["export_targets_text"])
+            self.assertIn("2. 行数：1；文件数：1；大小：64 B", variables["exportTargetsText"])
+            self.assertIn("hdfs://cluster/output_long", variables["exportTargetsText"])
 
     def test_manager_snapshot_uses_live_export_summary_provider(self):
         cfg = SimpleNamespace(
@@ -327,15 +393,138 @@ class TaskNotificationTest(unittest.TestCase):
 
             with open(os.path.join(tmp_dir, "notification_snapshot.json"), "r", encoding="utf-8") as file:
                 snapshot = json.load(file)
-            self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 0})
+            self.assertEqual(
+                snapshot["custom_stats"],
+                {
+                    "dedup.eligible_rows": 160,
+                    "dedup.unique_rows": 160,
+                    "dedup.duplicate_rows": 0,
+                },
+            )
             variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
-            self.assertEqual(variables["customStatsMap"], {"dedup.duplicate_rows": 0})
+            self.assertEqual(
+                variables["customStatsMap"],
+                {
+                    "dedup.eligible_rows": 160,
+                    "dedup.unique_rows": 160,
+                    "dedup.duplicate_rows": 0,
+                },
+            )
             self.assertEqual(variables["dedup_duplicate_rows"], 0)
             self.assertEqual(variables["dedup_duplicate_rows_text"], "0")
+            self.assertIn("• duplicate rows：0", variables["custom_stats_text"])
+            self.assertIn("• dedup.eligible_rows：160", variables["custom_stats_text"])
+            self.assertIn("• dedup.unique_rows：160", variables["custom_stats_text"])
             self.assertEqual(
                 variables["customStats"],
-                [{"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 0}],
+                [
+                    {"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 0},
+                    {"key": "dedup.eligible_rows", "label": "dedup.eligible_rows", "value": 160},
+                    {"key": "dedup.unique_rows", "label": "dedup.unique_rows", "value": 160},
+                ],
             )
+
+    @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
+    def test_custom_stats_text_includes_unconfigured_runtime_kvs(self):
+        cfg = SimpleNamespace(
+            notification_hooks=[self._hook_cfg(interval=None)],
+            job_id="job-1",
+            project_name="project",
+            executor_type="ray",
+            export_path="hdfs://cluster/output",
+            work_dir="/unused",
+        )
+        collector = RuntimeStatsCollector()
+        collector.snapshot = MagicMock(
+            return_value={
+                "dedup.duplicate_rows": 3,
+                "download.bytes": 2048,
+            }
+        )
+        manager = TaskNotificationManager(cfg, stats_collector=collector)
+
+        manager.finish(success=True)
+
+        variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+        self.assertEqual(variables["customStatsMap"], {"dedup.duplicate_rows": 3, "download.bytes": 2048})
+        self.assertEqual(variables["custom_stats_map"], variables["customStatsMap"])
+        self.assertEqual(variables["customStatsText"], variables["custom_stats_text"])
+        self.assertIn("• duplicate rows：3", variables["custom_stats_text"])
+        self.assertIn("• download.bytes：2048", variables["custom_stats_text"])
+        self.assertEqual(
+            variables["customStats"],
+            [
+                {"key": "dedup.duplicate_rows", "label": "duplicate rows", "value": 3},
+                {"key": "download.bytes", "label": "download.bytes", "value": 2048},
+            ],
+        )
+
+    @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
+    def test_manager_computes_ratio_custom_stats(self):
+        cfg = SimpleNamespace(
+            notification_hooks=[
+                self._hook_cfg(
+                    interval=None,
+                    custom_stats=[
+                        {"key": "rpc.video_url_rpc_mapper.total_count", "label": "RPC 总次数"},
+                        {"key": "rpc.video_url_rpc_mapper.success_count", "label": "RPC 成功次数"},
+                        {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数"},
+                        {
+                            "key": "rpc.video_url_rpc_mapper.failure_rate",
+                            "label": "RPC 失败率",
+                            "type": "ratio",
+                            "numerator": "rpc.video_url_rpc_mapper.failed_count",
+                            "denominator": "rpc.video_url_rpc_mapper.total_count",
+                        },
+                    ],
+                )
+            ],
+            job_id="job-1",
+            project_name="project",
+            executor_type="ray",
+            export_path="hdfs://cluster/output",
+            work_dir="/unused",
+        )
+        collector = RuntimeStatsCollector()
+        collector.snapshot = MagicMock(
+            return_value={
+                "rpc.total_count": 20,
+                "rpc.success_count": 17,
+                "rpc.failed_count": 3,
+                "rpc.video_url_rpc_mapper.total_count": 20,
+                "rpc.video_url_rpc_mapper.success_count": 17,
+                "rpc.video_url_rpc_mapper.failed_count": 3,
+            }
+        )
+        manager = TaskNotificationManager(cfg, stats_collector=collector)
+
+        manager.finish(success=True)
+
+        variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
+        self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failed_count"], 3)
+        self.assertEqual(variables["customStatsMap"]["rpc.video_url_rpc_mapper.failure_rate"], "15.00%")
+        self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate"], "15.00%")
+        self.assertEqual(variables["rpc_video_url_rpc_mapper_failure_rate_text"], "15.00%")
+        self.assertIn("• RPC 总次数：20", variables["custom_stats_text"])
+        self.assertIn("• RPC 成功次数：17", variables["custom_stats_text"])
+        self.assertIn("• RPC 失败次数：3", variables["custom_stats_text"])
+        self.assertIn("• RPC 失败率：15.00%", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.total_count：20", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.failed_count：3", variables["custom_stats_text"])
+        self.assertNotIn("• rpc.success_count：17", variables["custom_stats_text"])
+        self.assertEqual(
+            variables["customStats"],
+            [
+                {"key": "rpc.video_url_rpc_mapper.total_count", "label": "RPC 总次数", "value": 20},
+                {"key": "rpc.video_url_rpc_mapper.success_count", "label": "RPC 成功次数", "value": 17},
+                {"key": "rpc.video_url_rpc_mapper.failed_count", "label": "RPC 失败次数", "value": 3},
+                {
+                    "key": "rpc.video_url_rpc_mapper.failure_rate",
+                    "label": "RPC 失败率",
+                    "value": "15.00%",
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":
