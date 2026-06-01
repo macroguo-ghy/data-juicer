@@ -619,12 +619,16 @@ class StateMetricCalculatorMapper(Mapper):
             elif name == "helpers":
                 argument_specs.append(("constant", helpers or MetricHelpers()))
             elif name in parameters_by_name:
+                parameter = parameters_by_name[name]
                 value = self._resolve_parameter_value(
                     sample,
                     operator_config,
-                    parameters_by_name[name],
+                    parameter,
                 )
-                input_values[name] = value
+                input_values[name] = {
+                    "value": value,
+                    "multi_value": bool(parameter.get("multi_value")),
+                }
                 argument_specs.append(("input", name))
             elif func_parameter.default is not inspect.Parameter.empty:
                 argument_specs.append(("constant", func_parameter.default))
@@ -671,8 +675,11 @@ class StateMetricCalculatorMapper(Mapper):
         if not input_values:
             return [{}]
         split_values = {
-            name: cls._split_metric_list_input_value(value)
-            for name, value in input_values.items()
+            name: cls._split_metric_list_input_value(
+                spec["value"],
+                multi_value=spec["multi_value"],
+            )
+            for name, spec in input_values.items()
         }
         empty_names = [
             name
@@ -705,7 +712,11 @@ class StateMetricCalculatorMapper(Mapper):
         return expanded
 
     @staticmethod
-    def _split_metric_list_input_value(value: Any) -> list[Any]:
+    def _split_metric_list_input_value(value: Any, multi_value: bool = False) -> list[Any]:
+        if not multi_value:
+            if value is None:
+                return []
+            return [value]
         if isinstance(value, (list, tuple)):
             return [
                 item
@@ -890,11 +901,12 @@ class StateMetricCalculatorMapper(Mapper):
                 "key_name_en": parameter.get("keyNameEn"),
                 "data_type": parameter.get("dataType"),
                 "default_or_placeholder_value": parameter.get("defaultOrPlaceholderValue"),
+                "multi_value": bool(parameter.get("multiValue")),
             })
         return parameters
 
     @staticmethod
-    def _build_metric_list_params(detail: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    def _build_metric_list_params(detail: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
         if not isinstance(detail, dict):
             return {}
         parameter_details = detail.get("inputParameterDetails")
@@ -907,6 +919,7 @@ class StateMetricCalculatorMapper(Mapper):
             params[str(parameter["keyNameEn"])] = {
                 "type": str(parameter.get("keyType") or ""),
                 "name": str(parameter.get("keyNameCn") or ""),
+                "multiValue": bool(parameter.get("multiValue")),
             }
         return params
 

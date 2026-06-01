@@ -17,7 +17,8 @@
       "params": {
         "unknown_id": {
           "type": "AMBIGUOUS",
-          "name": "未知ID"
+          "name": "未知ID",
+          "multiValue": true
         }
       }
     },
@@ -133,11 +134,13 @@ tool 只通过 `meta.operator_type` 区分：
 {
   "unknown_id": {
     "type": "AMBIGUOUS",
-    "name": "未知ID"
+    "name": "未知ID",
+    "multiValue": true
   },
   "startDate": {
     "type": "CONCRETE",
-    "name": "开始时间"
+    "name": "开始时间",
+    "multiValue": false
   }
 }
 ```
@@ -148,16 +151,12 @@ tool 只通过 `meta.operator_type` 区分：
 | --- | --- |
 | `type` | `inputParameterDetails[].keyType`，例如 `CONCRETE`、`AMBIGUOUS`。 |
 | `name` | `inputParameterDetails[].keyNameCn`。 |
+| `multiValue` | `inputParameterDetails[].multiValue`，缺省时按 `false` 处理。 |
 
-如果后端只提供旧版 `inputParameter.params`，`params` 也可以退化为：
+`meta.params` 只从 `inputParameterDetails` 构造。如果后端没有提供 `inputParameterDetails`，`params` 输出为空对象：
 
 ```json
-{
-  "unknown_id": {
-    "type": "",
-    "name": ""
-  }
-}
+{}
 ```
 
 ### 4.4 `metric_list[]`
@@ -172,7 +171,9 @@ tool 只通过 `meta.operator_type` 区分：
 
 ## 5. 多值参数展开规则
 
-当某个参数映射到的样本字段包含多个值，例如 `"123,456"`，算子应该拆成多次执行，并在 `metric_list` 里生成多条结果。
+只有 `inputParameterDetails[].multiValue=true` 的参数会被识别为多值参数。当多值参数映射到的样本字段包含多个值，例如 `"123,456"`，算子会拆成多次执行，并在 `metric_list` 里生成多条结果。
+
+`multiValue=false` 或缺省的参数永远按单值处理。即使字符串里包含英文逗号，也会原样传给 `calculate(...)`，并广播到每一次多值调用。
 
 ### 5.1 单个多值参数
 
@@ -373,12 +374,14 @@ parameter_mapping:
 
 ## 6. 多值拆分建议
 
-多值字段建议按下面方式识别：
+仅当参数元数据 `multiValue=true` 时，多值字段按下面方式识别：
 
 - 字符串中用英文逗号 `,` 分隔。
 - 分隔后去掉首尾空白。
 - 空值丢弃。
 - 如果值本身是数组，也可以直接按数组元素展开。
+
+`multiValue=false` 的参数不适用这些拆分规则，始终作为单值传入。
 
 示例：
 
@@ -425,7 +428,8 @@ parameter_mapping:
       "params": {
         "unknown_id": {
           "type": "AMBIGUOUS",
-          "name": "未知ID"
+          "name": "未知ID",
+          "multiValue": true
         }
       }
     },

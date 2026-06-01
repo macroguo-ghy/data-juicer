@@ -242,6 +242,8 @@ def calculate(state, start_date=None, end_date=None, helpers=None):
 
 `result_mode=metric_list` 时，`output_key` 字段写入的是对象数组。数组中每个对象对应一个被选择的 metric 或 tool operator，tool 也统一放入 `metric_list`。这个模式适合前端按派生字段展示每次计算的 `input`、`output` 和 `error`。
 
+`metric_list` 模式只会展开 `inputParameterDetails[].multiValue=true` 的参数。`multiValue=false` 或缺省的参数会作为单值广播，即使字符串里包含英文逗号也不会被拆分。
+
 默认 `summary_success_only=false`，summary 会保留成功和失败结果，并保留 `error`、`toolName` 等扩展字段，方便排查。
 
 示例输出：

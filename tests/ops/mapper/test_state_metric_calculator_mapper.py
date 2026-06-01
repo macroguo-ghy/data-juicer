@@ -448,10 +448,12 @@ process:
                         "unknown_id": {
                             "type": "AMBIGUOUS",
                             "name": "未知ID",
+                            "multiValue": False,
                         },
                         "startDate": {
                             "type": "CONCRETE",
                             "name": "开始时间",
+                            "multiValue": False,
                         },
                     },
                 },
@@ -476,6 +478,7 @@ process:
                         "adv_id": {
                             "type": "CONCRETE",
                             "name": "广告主ID",
+                            "multiValue": False,
                         },
                     },
                 },
@@ -506,6 +509,7 @@ process:
                             "keyType": "CONCRETE",
                             "dataType": "placeholder",
                             "defaultOrPlaceholderValue": "ad_id",
+                            "multiValue": True,
                         },
                         {
                             "keyNameEn": "material_id",
@@ -513,6 +517,7 @@ process:
                             "keyType": "CONCRETE",
                             "dataType": "placeholder",
                             "defaultOrPlaceholderValue": "material_id",
+                            "multiValue": True,
                         },
                         {
                             "keyNameEn": "startDate",
@@ -538,6 +543,7 @@ process:
                             "keyType": "CONCRETE",
                             "dataType": "placeholder",
                             "defaultOrPlaceholderValue": "ad_id",
+                            "multiValue": True,
                         },
                         {
                             "keyNameEn": "material_id",
@@ -545,6 +551,7 @@ process:
                             "keyType": "CONCRETE",
                             "dataType": "placeholder",
                             "defaultOrPlaceholderValue": "material_id",
+                            "multiValue": True,
                         },
                     ],
                     "operatorCode": "def calculate(ad_id, material_id):\n    return 'unused'\n",
@@ -615,6 +622,78 @@ process:
                 },
                 "output": "null",
                 "error": "multi-value parameters have different lengths: ad_id=3, material_id=2",
+            },
+        ])
+
+    @patch("data_juicer.ops.mapper.ad_ai_data_center.state_metric_calculator_mapper.HttpClient")
+    def test_metric_list_result_mode_only_expands_multi_value_parameters(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "operators": [
+                {
+                    "id": 230,
+                    "operatorNameEn": "query_metric",
+                    "operatorNameCn": "查询指标",
+                    "inputParameterDetails": [
+                        {
+                            "keyNameEn": "unknown_id",
+                            "keyNameCn": "未知ID",
+                            "keyType": "AMBIGUOUS",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "unknown_id",
+                            "multiValue": True,
+                        },
+                        {
+                            "keyNameEn": "query",
+                            "keyNameCn": "查询文本",
+                            "keyType": "CONCRETE",
+                            "dataType": "placeholder",
+                            "defaultOrPlaceholderValue": "query",
+                            "multiValue": False,
+                        },
+                    ],
+                    "operatorCode": (
+                        "def calculate(unknown_id, query):\n"
+                        "    return f'{unknown_id}:{query}'\n"
+                    ),
+                },
+            ],
+        }))
+        mock_client_cls.return_value = fake_client
+        op = StateMetricCalculatorMapper(
+            operators=[{
+                "operator_id": 230,
+                "parameter_mapping": {
+                    "unknown_id": "id",
+                    "query": "query",
+                },
+            }],
+            result_mode="metric_list",
+            ctx=self._ctx(),
+        )
+
+        result = op.process_single({
+            RECORD_KEY_FIELD: "record-1",
+            "id": "123,456",
+            "query": "foo,bar",
+            "state": {},
+        })
+
+        self.assertEqual(result["query_metric_data_outputs"][0]["metric_list"], [
+            {
+                "input": {
+                    "unknown_id": "123",
+                    "query": "foo,bar",
+                },
+                "output": "123:foo,bar",
+                "error": "",
+            },
+            {
+                "input": {
+                    "unknown_id": "456",
+                    "query": "foo,bar",
+                },
+                "output": "456:foo,bar",
+                "error": "",
             },
         ])
 
