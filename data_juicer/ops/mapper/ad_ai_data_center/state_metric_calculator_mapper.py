@@ -309,7 +309,7 @@ class StateMetricCalculatorMapper(Mapper):
             )
         except Exception as exc:
             return {
-                **meta,
+                "meta": meta,
                 "metric_list": [{
                     "input": self._raw_metric_list_input(sample, operator_config, detail),
                     "output": self._stringify_metric_output(None),
@@ -333,7 +333,7 @@ class StateMetricCalculatorMapper(Mapper):
                 })
 
         return {
-            **meta,
+            "meta": meta,
             "metric_list": metric_list,
         }
 

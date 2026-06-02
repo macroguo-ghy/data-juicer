@@ -362,7 +362,7 @@ metric 和 tool 的共同要求：
 
 ### `result_mode` 应该配什么？
 
-默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`metric_list` 会输出面向 LLM Prompt 和前端展示的新结构，最外层是对象数组，每个对象包含 `metric_code`、`metric_name`、`params` 和 `metric_list`。`object` 也支持，会输出旧 summary 的对象形态。
+默认推荐 `summary`，会输出 Dataset Factory summary JSON 字符串。`metric_list` 会输出面向 LLM Prompt 和前端展示的新结构，最外层是对象数组，每个对象包含 `meta` 和 `metric_list`。`meta` 里保留 `metric_code`、`metric_name` 和 `params`，实际计算结果放在 `metric_list`。`object` 也支持，会输出旧 summary 的对象形态。
 
 `summary` 模式输出字符串：
 
@@ -386,9 +386,11 @@ metric 和 tool 的共同要求：
 ```json
 [
   {
-    "metric_code": "EcpCost",
-    "metric_name": "计划消耗环比",
-    "params": {},
+    "meta": {
+      "metric_code": "EcpCost",
+      "metric_name": "计划消耗环比",
+      "params": {}
+    },
     "metric_list": [
       {
         "input": {
