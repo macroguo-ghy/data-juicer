@@ -127,16 +127,23 @@ class DerivedInputParameterContextMapper(Mapper):
                 "input key metadata response data must contain "
                 "inputParameterDetails list"
             )
-        return self._build_parameter_columns(data["inputParameterDetails"])
+        return self._build_parameter_columns(
+            data["inputParameterDetails"],
+            expected_key_ids=self.input_key_ids,
+        )
 
     @classmethod
-    def _build_parameter_columns(cls, details: list[dict[str, Any]]):
+    def _build_parameter_columns(
+        cls,
+        details: list[dict[str, Any]],
+        expected_key_ids: list[int] | None = None,
+    ):
         by_key_id = {}
         key_name_to_id = {}
         columns = {}
         for detail in details:
             if not isinstance(detail, dict):
-                continue
+                raise ValueError("inputParameterDetails item must be an object")
             key_id = detail.get("keyId")
             key_name = detail.get("keyNameEn")
             if key_id is None:
@@ -157,6 +164,12 @@ class DerivedInputParameterContextMapper(Mapper):
             by_key_id[key_id] = detail
             key_name_to_id[key_name] = key_id
             columns[key_name] = cls._format_parameter_description(detail)
+
+        if expected_key_ids:
+            missing_key_ids = sorted(set(expected_key_ids) - set(by_key_id.keys()))
+            if missing_key_ids:
+                missing = ", ".join(str(key_id) for key_id in missing_key_ids)
+                raise ValueError(f"input key metadata missing keyIds: {missing}")
         return columns
 
     @classmethod

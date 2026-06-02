@@ -286,6 +286,38 @@ process:
 
     @patch(
         "data_juicer.ops.mapper.ad_ai_data_center."
+        "derived_input_parameter_context_mapper.HttpClient"
+    )
+    def test_rejects_response_missing_requested_key_id(self, mock_client_cls):
+        fake_client = FakeHttpClient(success_envelope({
+            "inputParameterDetails": [
+                {
+                    "keyId": 8,
+                    "keyNameEn": "unknown_id",
+                    "keyNameCn": "未知ID",
+                }
+            ]
+        }))
+        mock_client_cls.return_value = fake_client
+        op = DerivedInputParameterContextMapper(
+            input_key_ids=[8, 12],
+            ctx=self._ctx(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "missing keyIds: 12"):
+            op.process_single({RECORD_KEY_FIELD: "record-1"})
+
+    def test_build_parameter_columns_rejects_non_object_items(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "inputParameterDetails item must be an object",
+        ):
+            DerivedInputParameterContextMapper._build_parameter_columns([
+                "not-object",
+            ])
+
+    @patch(
+        "data_juicer.ops.mapper.ad_ai_data_center."
         "derived_input_parameter_context_mapper.logger"
     )
     def test_build_parameter_columns_keeps_first_duplicate_key_id(self, mock_logger):
