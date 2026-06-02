@@ -439,16 +439,18 @@ process:
 
         self.assertEqual(result["query_metric_data_outputs"], [
             {
-                "metric_code": "cost_ratio",
-                "metric_name": "消耗环比",
-                "params": {
-                    "unknown_id": {
-                        "name": "未知ID",
-                        "type": "AMBIGUOUS",
-                    },
-                    "startDate": {
-                        "name": "开始时间",
-                        "type": "CONCRETE",
+                "meta": {
+                    "metric_code": "cost_ratio",
+                    "metric_name": "消耗环比",
+                    "params": {
+                        "unknown_id": {
+                            "name": "未知ID",
+                            "type": "AMBIGUOUS",
+                        },
+                        "startDate": {
+                            "name": "开始时间",
+                            "type": "CONCRETE",
+                        },
                     },
                 },
                 "metric_list": [
@@ -463,12 +465,14 @@ process:
                 ],
             },
             {
-                "metric_code": "customer_info",
-                "metric_name": "客户信息",
-                "params": {
-                    "adv_id": {
-                        "name": "广告主ID",
-                        "type": "CONCRETE",
+                "meta": {
+                    "metric_code": "customer_info",
+                    "metric_name": "客户信息",
+                    "params": {
+                        "adv_id": {
+                            "name": "广告主ID",
+                            "type": "CONCRETE",
+                        },
                     },
                 },
                 "metric_list": [

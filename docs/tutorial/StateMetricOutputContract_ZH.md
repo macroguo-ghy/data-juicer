@@ -9,12 +9,14 @@
 ```json
 [
   {
-    "metric_code": "EcpCost",
-    "metric_name": "计划消耗环比",
-    "params": {
-      "unknown_id": {
-        "name": "未知ID",
-        "type": "AMBIGUOUS"
+    "meta": {
+      "metric_code": "EcpCost",
+      "metric_name": "计划消耗环比",
+      "params": {
+        "unknown_id": {
+          "name": "未知ID",
+          "type": "AMBIGUOUS"
+        }
       }
     },
     "metric_list": [
@@ -78,12 +80,14 @@ tool 和 metric 统一输出为派生指标结果，不在结果里保留 `opera
 
 ```json
 {
-  "metric_code": "customer_info_acquisition",
-  "metric_name": "客户信息获取工具",
-  "params": {
-    "adv_id": {
-      "name": "广告主ID",
-      "type": "CONCRETE"
+  "meta": {
+    "metric_code": "customer_info_acquisition",
+    "metric_name": "客户信息获取工具",
+    "params": {
+      "adv_id": {
+        "name": "广告主ID",
+        "type": "CONCRETE"
+      }
     }
   },
   "metric_list": [
@@ -104,12 +108,20 @@ tool 和 metric 统一输出为派生指标结果，不在结果里保留 `opera
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
+| `meta` | object | 当前 operator 的展示元信息和入参定义摘要。 |
+| `metric_list` | array | 当前 operator 的一次或多次计算结果。metric 和 tool 都使用这个字段。 |
+
+### 4.2 `meta`
+
+`meta` 和实际计算数据拆开，便于 LLM Prompt 或前端先读取指标说明，再遍历结果列表。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
 | `metric_code` | string | 展示和排查使用的英文标识。metric 可取 `operatorNameEn`，tool 可取 `toolName`。 |
 | `metric_name` | string | 展示名称。metric 可取 `operatorNameCn`，tool 可取 `toolNameCn`。 |
 | `params` | object | 当前 operator 的入参定义摘要。key 是参数英文名。 |
-| `metric_list` | array | 当前 operator 的一次或多次计算结果。metric 和 tool 都使用这个字段。 |
 
-### 4.2 `params`
+### 4.3 `meta.params`
 
 `params` 描述参数定义，不放运行时取值。
 
@@ -141,7 +153,7 @@ tool 和 metric 统一输出为派生指标结果，不在结果里保留 `opera
 {}
 ```
 
-### 4.3 `metric_list[]`
+### 4.4 `metric_list[]`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -402,12 +414,14 @@ parameter_mapping:
 ```json
 [
   {
-    "metric_code": "EcpCost",
-    "metric_name": "计划消耗环比",
-    "params": {
-      "unknown_id": {
-        "name": "未知ID",
-        "type": "AMBIGUOUS"
+    "meta": {
+      "metric_code": "EcpCost",
+      "metric_name": "计划消耗环比",
+      "params": {
+        "unknown_id": {
+          "name": "未知ID",
+          "type": "AMBIGUOUS"
+        }
       }
     },
     "metric_list": [
@@ -435,7 +449,7 @@ parameter_mapping:
 
 前端可以按两级结构展示：
 
-1. 第一层：按最外层数组展示 operator 卡片或表格分组，标题使用 `metric_name`，副标题可显示 `metric_code`。
+1. 第一层：按最外层数组展示 operator 卡片或表格分组，标题使用 `meta.metric_name`，副标题可显示 `meta.metric_code`。
 2. 第二层：每个 operator 下展示 `metric_list`，每行展示 `input`、`output`、`error`。
 
 如果 `error` 非空：
