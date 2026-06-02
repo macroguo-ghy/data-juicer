@@ -439,22 +439,16 @@ process:
 
         self.assertEqual(result["query_metric_data_outputs"], [
             {
-                "meta": {
-                    "operator_id": 226,
-                    "operator_type": "metric",
-                    "metric_code": "cost_ratio",
-                    "metric_name": "消耗环比",
-                    "params": {
-                        "unknown_id": {
-                            "type": "AMBIGUOUS",
-                            "name": "未知ID",
-                            "multiValue": False,
-                        },
-                        "startDate": {
-                            "type": "CONCRETE",
-                            "name": "开始时间",
-                            "multiValue": False,
-                        },
+                "metric_code": "cost_ratio",
+                "metric_name": "消耗环比",
+                "params": {
+                    "unknown_id": {
+                        "name": "未知ID",
+                        "type": "AMBIGUOUS",
+                    },
+                    "startDate": {
+                        "name": "开始时间",
+                        "type": "CONCRETE",
                     },
                 },
                 "metric_list": [
@@ -469,17 +463,12 @@ process:
                 ],
             },
             {
-                "meta": {
-                    "operator_id": 227,
-                    "operator_type": "tool",
-                    "metric_code": "customer_info",
-                    "metric_name": "客户信息",
-                    "params": {
-                        "adv_id": {
-                            "type": "CONCRETE",
-                            "name": "广告主ID",
-                            "multiValue": False,
-                        },
+                "metric_code": "customer_info",
+                "metric_name": "客户信息",
+                "params": {
+                    "adv_id": {
+                        "name": "广告主ID",
+                        "type": "CONCRETE",
                     },
                 },
                 "metric_list": [
