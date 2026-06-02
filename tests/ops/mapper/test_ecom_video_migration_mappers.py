@@ -843,7 +843,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                             "DownloadFileMapper",
                             "BytesExactDedupMapper",
                             "RayFieldDedupPipeline",
-                            "GeneralFieldFilter",
+                            "StatelessFieldFilter",
                         ],
                     )
                     self.assertEqual(ops[0].filter_condition, "item_duration <= 60")

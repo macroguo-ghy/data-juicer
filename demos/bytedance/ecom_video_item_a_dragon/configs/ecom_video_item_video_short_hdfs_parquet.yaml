@@ -131,7 +131,7 @@ process:
       dedup_set_num: 64
       actor_get_timeout: 600
       actor_get_retry_times: 2
-  - general_field_filter:
+  - stateless_field_filter:
       batch_size: 50
       num_proc: 512
       num_cpus: 1

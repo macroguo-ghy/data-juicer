@@ -40,6 +40,7 @@ __all__ = [
     "SpecifiedFieldFilter",
     "SpecifiedFieldNonEmptyFilter",
     "SpecifiedNumericFieldFilter",
+    "StatelessFieldFilter",
     "StopWordsFilter",
     "SuffixFilter",
     "TextActionFilter",
@@ -68,6 +69,7 @@ __all__ = [
 NON_STATS_FILTERS = [
     "suffix_filter",
     "specified_field_non_empty_filter",
+    "stateless_field_filter",
     "video_tagging_from_frames_filter",
 ]
 

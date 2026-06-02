@@ -302,6 +302,98 @@ class RayDatasetImportTest(unittest.TestCase):
 
         self.assertEqual(events, ["map_batches"])
 
+    def test_process_stateless_non_stats_filter_skips_stats_phase(self):
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+        from data_juicer.utils.constant import Fields
+
+        events = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.rows = [
+                    {"id": "keep", "valid_video_count": 1},
+                    {"id": "drop", "valid_video_count": 0},
+                ]
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "valid_video_count"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+            def filter(self, filter_func, **kwargs):
+                events.append(("filter", getattr(filter_func, "__name__", repr(filter_func))))
+                self.rows = [row for row in self.rows if filter_func(row)]
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "valid_video_count"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process(
+            StatelessFieldFilter(
+                filter_condition="valid_video_count > 0",
+                auto_op_parallelism=False,
+            )
+        )
+
+        self.assertEqual(events, [("filter", "process_single")])
+        self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "valid_video_count": 1}])
+        self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
+    def test_process_batched_non_stats_filter_uses_single_filter_batch(self):
+        import pyarrow as pa
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.specified_field_non_empty_filter import SpecifiedFieldNonEmptyFilter
+        from data_juicer.utils.constant import Fields
+
+        events = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.rows = [
+                    {"id": "drop", "ocr_result": []},
+                    {"id": "keep", "ocr_result": ["ocr-json"]},
+                ]
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "ocr_result"]))
+
+            def map_batches(self, batch_func, *args, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_size")))
+                output = batch_func(pa.Table.from_pylist(self.rows))
+                self.rows = output.to_pylist()
+                return self
+
+            def filter(self, *args, **kwargs):
+                events.append(("filter", None))
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "ocr_result"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        ray_dataset.process(
+            SpecifiedFieldNonEmptyFilter(
+                field_key="ocr_result",
+                batch_size=2,
+                auto_op_parallelism=False,
+            )
+        )
+
+        self.assertEqual(events, [("map_batches", 2)])
+        self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "ocr_result": ["ocr-json"]}])
+        self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
     def test_process_does_not_call_base_lifecycle_hooks_for_plain_operator(self):
         from data_juicer.core.data.ray_dataset import RayDataset
         from data_juicer.ops import Mapper
