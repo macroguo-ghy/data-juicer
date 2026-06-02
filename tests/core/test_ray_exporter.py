@@ -18,6 +18,7 @@ from data_juicer.core.ray_exporter import (
     EXPORT_WRITE_STATS_NAMESPACE,
     RayExporter,
     RayHdfsFanoutDatasink,
+    summarize_filesystem_path,
 )
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.mm_utils import load_images_byte
@@ -72,6 +73,21 @@ class TestRayExporterCheckpoint(unittest.TestCase):
 
 
 class TestRayExporterHDFS(unittest.TestCase):
+    def test_summarize_filesystem_path_counts_parquet_rows_from_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            table_a = pa.table({"text": ["a", "b"]})
+            table_b = pa.table({"text": ["c"]})
+            pq.write_table(table_a, os.path.join(tmp_dir, "part-a.parquet"))
+            pq.write_table(table_b, os.path.join(tmp_dir, "part-b.parquet"))
+            with open(os.path.join(tmp_dir, "_SUCCESS"), "w", encoding="utf-8") as file:
+                file.write("")
+
+            summary = summarize_filesystem_path(LocalFileSystem(), tmp_dir)
+
+            self.assertEqual(summary["output_files"], 3)
+            self.assertGreater(summary["output_bytes"], 0)
+            self.assertEqual(summary["output_rows"], 3)
+
     def test_hdfs_export_resolves_filesystem_path_and_defaults_to_error_if_exists(self):
         class FakeDataset:
             def __init__(self):

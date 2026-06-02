@@ -10,6 +10,7 @@ from data_juicer.core.task_notification import (
     RuntimeStatsCollector,
     TaskNotificationManager,
     TaskProgressSnapshot,
+    _format_export_targets_text,
     parse_notification_interval_seconds,
 )
 
@@ -129,6 +130,21 @@ class TaskNotificationTest(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "notification_hooks.*interval"):
                     parse_notification_interval_seconds(value)
+
+    def test_format_export_targets_text_keeps_path_separated_from_size(self):
+        text = _format_export_targets_text(
+            [
+                {
+                    "path": "hdfs://cluster/output_long",
+                    "rows": 10,
+                    "output_files": 2,
+                    "output_bytes": 64,
+                }
+            ]
+        )
+
+        self.assertEqual(text, "1. 行数：10；文件数：2；大小：64 B；路径：hdfs://cluster/output_long")
+        self.assertNotIn("64 Bhdfs://cluster/output_long", text.replace("\n", ""))
 
     @patch("data_juicer.core.task_notification.HttpClient", FakeHttpClient)
     def test_adc_lark_message_sends_template_card_to_user(self):
@@ -339,10 +355,15 @@ class TaskNotificationTest(unittest.TestCase):
             self.assertEqual(len(snapshot["export_targets"]), 2)
             self.assertEqual(snapshot["custom_stats"], {"dedup.duplicate_rows": 4, "other": 9})
             variables = FakeHttpClient.requests[0]["json_body"]["templateVariable"]
-            self.assertIn("1. 行数：3；文件数：1；大小：64 B", variables["export_targets_text"])
-            self.assertIn("hdfs://cluster/output_short", variables["export_targets_text"])
-            self.assertIn("2. 行数：1；文件数：1；大小：64 B", variables["exportTargetsText"])
-            self.assertIn("hdfs://cluster/output_long", variables["exportTargetsText"])
+            self.assertIn(
+                "1. 行数：3；文件数：1；大小：64 B；路径：hdfs://cluster/output_short",
+                variables["export_targets_text"],
+            )
+            self.assertIn(
+                "2. 行数：1；文件数：1；大小：64 B；路径：hdfs://cluster/output_long",
+                variables["exportTargetsText"],
+            )
+            self.assertNotIn("64 Bhdfs://cluster/output_short", variables["export_targets_text"])
 
     def test_manager_snapshot_uses_live_export_summary_provider(self):
         cfg = SimpleNamespace(

@@ -660,14 +660,13 @@ def _format_export_targets_text(targets: list[dict[str, Any]] | None) -> str:
         files = _format_optional_value(target.get("output_files"))
         bytes_text = _format_bytes(target.get("output_bytes"))
         path = _format_optional_value(_first_present(target, "path", "original_uri", "uri"))
-        lines.append(f"{index}. 行数：{rows}；文件数：{files}；大小：{bytes_text}")
-        lines.append(path)
+        lines.append(f"{index}. 行数：{rows}；文件数：{files}；大小：{bytes_text}；路径：{path}")
     return "\n".join(lines)
 
 
 def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
-        if key in mapping:
+        if key in mapping and mapping.get(key) is not None:
             return mapping.get(key)
     return None
 

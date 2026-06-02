@@ -59,22 +59,41 @@ def _json_default(value):
 
 def summarize_filesystem_path(filesystem, path: str) -> dict[str, int]:
     from pyarrow.fs import FileSelector, FileType
+    import pyarrow.parquet as pq
+
+    def parquet_rows(file_path: str) -> int | None:
+        if not str(file_path).lower().endswith(".parquet"):
+            return None
+        try:
+            return int(pq.read_metadata(file_path, filesystem=filesystem).num_rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect parquet row metadata for {}: {}", file_path, exc)
+            return None
+
+    def with_parquet_rows(summary: dict[str, int], file_paths: list[str]) -> dict[str, int]:
+        row_counts = [rows for file_path in file_paths if (rows := parquet_rows(file_path)) is not None]
+        if row_counts:
+            summary["output_rows"] = sum(row_counts)
+        return summary
 
     info = filesystem.get_file_info(path)
     if info.type is FileType.NotFound:
         return {"output_files": 0, "output_bytes": 0}
     if info.type is FileType.File:
-        return {"output_files": 1, "output_bytes": int(info.size or 0)}
+        return with_parquet_rows({"output_files": 1, "output_bytes": int(info.size or 0)}, [info.path])
     if info.type is not FileType.Directory:
         return {"output_files": 0, "output_bytes": 0}
 
     selector = FileSelector(path, recursive=True)
     file_infos = filesystem.get_file_info(selector)
     files = [file_info for file_info in file_infos if file_info.type is FileType.File]
-    return {
-        "output_files": len(files),
-        "output_bytes": sum(int(file_info.size or 0) for file_info in files),
-    }
+    return with_parquet_rows(
+        {
+            "output_files": len(files),
+            "output_bytes": sum(int(file_info.size or 0) for file_info in files),
+        },
+        [file_info.path for file_info in files],
+    )
 
 
 try:
