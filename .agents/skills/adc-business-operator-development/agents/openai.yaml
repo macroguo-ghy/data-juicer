@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADC Business Operator Development"
+  short_description: "Build and review ADC business mapper operators"
+  default_prompt: "Use $adc-business-operator-development to create, modify, review, or test an ADC business operator in Data-Juicer."
