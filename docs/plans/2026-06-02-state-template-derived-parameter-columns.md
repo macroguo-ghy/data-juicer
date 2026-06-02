@@ -17,9 +17,9 @@
 The new mapper enriches the current sample with prompt context columns selected by input parameter `keyId`:
 
 ```python
-sample["unknown_id"] = "未知ID：可能表示广告、广告主或素材 ID，需要结合上游数据判断。示例：1837647382987362。支持多值。"
-sample["startDate"] = "开始日期：查询开始日期。示例：2026-05-01。"
-sample["endDate"] = "结束日期：查询结束日期。示例：2026-05-14。"
+sample["unknown_id"] = "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID，需要结合上游数据判断。示例：1837647382987362。支持多值。"
+sample["startDate"] = "请填写具体内容。填写说明：开始日期：查询开始日期。示例：2026-05-01。"
+sample["endDate"] = "请填写具体内容。填写说明：结束日期：查询结束日期。示例：2026-05-14。"
 ```
 
 These fields are not metric results, not state template fields, and not derived-field calculation outputs. They are prompt context fields that explain the input parameters required by selected derived fields.
@@ -160,7 +160,7 @@ sample[column_name] = column_value
 Recommended format:
 
 ```text
-{keyNameCn}：{description}。示例：{demoValue}。支持多值。
+请填写具体内容。填写说明：{keyNameCn}：{description}。示例：{demoValue}。支持多值。
 ```
 
 Formatting rules:
@@ -340,7 +340,7 @@ def test_fetches_selected_input_key_metadata(self, mock_client_cls):
 
     self.assertEqual(
         result["unknown_id"],
-        "未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
+        "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
     )
 ```
 
@@ -432,7 +432,7 @@ def test_formats_parameter_description_with_optional_parts(self):
                 "multiValue": True,
             }
         ),
-        "未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
+        "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
     )
 
 

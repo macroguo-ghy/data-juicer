@@ -190,8 +190,8 @@ class DerivedInputParameterContextMapper(Mapper):
             parts.append("支持多值。")
 
         if not parts:
-            return label
-        return f"{label}：{''.join(parts)}"
+            return f"请填写具体内容。填写说明：{label}"
+        return f"请填写具体内容。填写说明：{label}：{''.join(parts)}"
 
     @staticmethod
     def _clean_optional_text(value: Any) -> str:
