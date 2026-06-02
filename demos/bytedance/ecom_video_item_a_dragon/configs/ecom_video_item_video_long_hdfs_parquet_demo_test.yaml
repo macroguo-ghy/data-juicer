@@ -1,5 +1,5 @@
-# 电商视频-视频
-project_name: "ecom-video-item-video-ray"
+# 电商视频-视频-长视频 demo
+project_name: "ecom-video-item-video-long-ray-demo"
 executor_type: "ray"
 ray_address: "auto"
 min_common_dep_num_to_combine: 0
@@ -16,6 +16,11 @@ dataset:
       skip_zero_row_group_files: true
 
 process:
+  - general_field_filter:
+      batch_size: 200
+      num_proc: 8
+      num_cpus: 1
+      filter_condition: "item_duration > 60"
   - json_object_mapper:
       batch_size: 200
       num_proc: 8
@@ -40,65 +45,11 @@ process:
         videos: {value: [], type: "list<binary>"}
         md5: {value: null, type: "string"}
         valid_video_count: {value: 0, type: "int64"}
-  - video_url_rpc_mapper:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      condition: "item_duration <= 60"
-      vid_key: "vid"
-      output_key: "urls"
-      quality_preference: "720p"
-      max_vids_per_request: 20
-      qps: 50000
-      ak: "${VIDEOARCH_AK}"
-      sk: "${VIDEOARCH_SK}"
-      psm: "toutiao.videoarch.smart_player"
-      cluster: "aweme"
-  - download_file_mapper:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      download_field: "urls"
-      save_field: "videos"
-      timeout: 2
-      retry_times: 3
-      max_concurrent: 1
-      filter_non_url: true
-      resume_download: true
-  - bytes_exact_dedup_mapper:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      condition: "item_duration <= 60"
-      url_key: "urls"
-      bytes_key: "videos"
-      md5_key: "md5"
-      valid_count_key: "valid_video_count"
-  - ray_field_dedup_pipeline:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      condition: "item_duration <= 60 and valid_video_count > 0"
-      field_key: "md5"
-      id_key: "id"
-      dedup_set_num: 16
-      actor_get_timeout: 600
-      actor_get_retry_times: 2
-  - general_field_filter:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      filter_condition: "item_duration > 60 or (item_duration <= 60 and valid_video_count > 0)"
-  - python_lambda_mapper:
-      batch_size: 50
-      num_proc: 8
-      num_cpus: 1
-      lambda_str: "lambda d: (d.update({'video_duration_group': 'short' if (d.get('item_duration') is not None and d.get('item_duration') <= 60) else 'long'}) or d)"
 
 export:
   target: "hdfs"
   type: "parquet"
-  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/_add_vid_video_partitioned"
+  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/test/hdfs/ccu/video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=long"
   mode: "overwrite"
   filesystem: "pyarrow"
   schema:
@@ -114,8 +65,5 @@ export:
       - {name: "images", type: "string"}
       - {name: "has_audio_in_video", type: "bool"}
       - {name: "type", type: "string"}
-      - {name: "video_duration_group", type: "string"}
   extra_args:
     concurrency: 1
-    partition_cols:
-      - "video_duration_group"
