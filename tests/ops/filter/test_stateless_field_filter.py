@@ -1,5 +1,7 @@
 import unittest
 
+import pyarrow as pa
+
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter
 from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
@@ -22,6 +24,22 @@ class StatelessFieldFilterTest(DataJuicerTestCaseBase):
         op = StatelessFieldFilter(filter_condition="")
 
         self.assertTrue(op.process_single({"id": "keep"}))
+
+    def test_arrow_null_scalar_condition_is_false_without_skip_op_error(self):
+        op = StatelessFieldFilter(filter_condition="valid_video_count > 0")
+
+        self.assertFalse(
+            op.process_single({
+                "id": "drop",
+                "valid_video_count": pa.scalar(None, type=pa.int64()),
+            })
+        )
+        self.assertTrue(
+            op.process_single({
+                "id": "keep",
+                "valid_video_count": pa.scalar(1, type=pa.int64()),
+            })
+        )
 
     def test_ignores_prior_general_field_filter_stats_key(self):
         dataset = Dataset.from_list(

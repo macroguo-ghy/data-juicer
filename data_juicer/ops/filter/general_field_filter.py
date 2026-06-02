@@ -79,6 +79,12 @@ class ExpressionTransformer(ast.NodeVisitor):
     def __init__(self, sample: Dict):
         self.sample = sample
 
+    @staticmethod
+    def _normalize_value(value: Any) -> Any:
+        if hasattr(value, "as_py"):
+            return value.as_py()
+        return value
+
     def visit_BoolOp(self, node: ast.BoolOp) -> bool:
         values = (self.visit(child) for child in node.values)
         if isinstance(node.op, ast.And):
@@ -88,8 +94,8 @@ class ExpressionTransformer(ast.NodeVisitor):
         raise ValueError(f"Unsupported logical operator: {type(node.op).__name__}")
 
     def visit_Compare(self, node: ast.Compare) -> bool:
-        left = self.visit(node.left)
-        comparators = [self.visit(c) for c in node.comparators]
+        left = self._normalize_value(self.visit(node.left))
+        comparators = [self._normalize_value(self.visit(c)) for c in node.comparators]
         ops = node.ops
 
         result = True
@@ -101,7 +107,7 @@ class ExpressionTransformer(ast.NodeVisitor):
             if not self._apply_op(op, left, right):
                 result = False
                 break
-            left = right
+            left = self._normalize_value(right)
         return result
 
     def _apply_op(self, op: ast.AST, left: Any, right: Any) -> bool:

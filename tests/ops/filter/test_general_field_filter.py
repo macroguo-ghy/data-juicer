@@ -1,5 +1,7 @@
 import unittest
 
+import pyarrow as pa
+
 from data_juicer.core.data import NestedDataset as Dataset
 from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter, compile_filter_condition
 from data_juicer.utils.constant import Fields
@@ -127,6 +129,20 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
     def test_compiled_condition_treats_empty_as_match_all_and_missing_field_as_false(self):
         self.assertTrue(compile_filter_condition("").matches({"text": "sample"}))
         self.assertFalse(compile_filter_condition("num <= 5").matches({"text": "sample"}))
+
+    def test_compiled_condition_treats_arrow_null_scalar_as_missing_value(self):
+        condition = compile_filter_condition("valid_video_count > 0")
+
+        self.assertFalse(
+            condition.matches({
+                "valid_video_count": pa.scalar(None, type=pa.int64()),
+            })
+        )
+        self.assertTrue(
+            condition.matches({
+                "valid_video_count": pa.scalar(1, type=pa.int64()),
+            })
+        )
 
 
 if __name__ == '__main__':
