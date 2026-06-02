@@ -445,45 +445,32 @@ class EcomVideoItemConfigTest(unittest.TestCase):
         self.assertEqual(ops[8].ocr_result_key, "ocr_result")
         self.assertEqual(ops[9].field_key, "ocr_result")
 
-    def test_ecom_video_item_video_hdfs_parquet_config_loads(self):
+    def test_ecom_video_item_video_hdfs_parquet_configs_load(self):
         _patch_yaml_loader_tags()
-        path = os.path.join(
+        config_dir = os.path.join(
             os.getcwd(),
             "demos",
             "bytedance",
             "ecom_video_item_a_dragon",
             "configs",
-            "ecom_video_item_video_hdfs_parquet.yaml",
         )
 
-        with open(path, encoding="utf-8") as f:
-            yaml_text = f.read()
-        self.assertEqual(yaml_text.splitlines()[0].strip(), "# 电商视频-视频")
+        for config_name, expected_suffix in [
+            ("ecom_video_item_video_short_hdfs_parquet.yaml", "video_duration_group=short"),
+            ("ecom_video_item_video_long_hdfs_parquet.yaml", "video_duration_group=long"),
+        ]:
+            with self.subTest(config_name=config_name):
+                path = os.path.join(config_dir, config_name)
+                with open(path, encoding="utf-8") as f:
+                    yaml_text = f.read()
+                self.assertTrue(yaml_text.splitlines()[0].strip().startswith("# 电商视频-视频"))
 
-        cfg = init_configs(args=["--config", path, "--ray_address", "local"], load_configs_only=True)
-        source_root = (
-            "hdfs://haruna/default/default/ad_base/addrd_core/hive/ad_addrd_stats.db/"
-            "ecom_video_item_sample_stats_daily_v2"
-        )
-        output_path = (
-            "hdfs://haruna/ad_base/addrd_core/addrd_stats/lance/ai_data_forge.catalog/ccu/"
-            "ecom_video_item_sample_stats_daily_v2"
-        )
+                cfg = init_configs(args=["--config", path, "--ray_address", "local"], load_configs_only=True)
 
-        self.assertEqual(cfg.executor_type, "ray")
-        self.assertEqual(cfg.process, [])
-        self.assertIn("TODO: add item_id_video_id_mapper", yaml_text)
-        self.assertIn("TODO: add guldan_video_frames_mapper", yaml_text)
-        self.assertIn("TODO: add a Ray branch/union pipeline", yaml_text)
-        self.assertEqual([config["source"] for config in cfg.dataset["configs"]], ["hdfs"])
-        self.assertEqual(
-            [config["path"] for config in cfg.dataset["configs"]],
-            [
-                f"{source_root}/date=20260425",
-            ],
-        )
-        self.assertEqual(cfg.export_path, output_path)
-        self.assertEqual(cfg.export_type, "parquet")
+                self.assertEqual(cfg.executor_type, "ray")
+                self.assertEqual([config["source"] for config in cfg.dataset["configs"]], ["hdfs"])
+                self.assertTrue(cfg.export_path.endswith(expected_suffix))
+                self.assertEqual(cfg.export_type, "parquet")
 
 
 class EcomPlayletConfigTest(unittest.TestCase):

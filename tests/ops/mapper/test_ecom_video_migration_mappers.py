@@ -781,9 +781,10 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
         self.assertIn("video_url_rpc_missing_result", columns)
         self.assertNotIn("videos", columns)
 
-    def test_ecom_video_hdfs_parquet_configs_use_targets_and_new_ops(self):
+    def test_ecom_video_hdfs_parquet_configs_are_split_by_duration(self):
         expected_tuning = {
-            "ecom_video_item_video_hdfs_parquet.yaml": {
+            "ecom_video_item_video_short_hdfs_parquet.yaml": {
+                "duration": "short",
                 "override_num_blocks": 2048,
                 "read_concurrency": 512,
                 "read_num_cpus": 0.5,
@@ -795,8 +796,23 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 "export_concurrency": 128,
                 "min_rows_per_file": 25,
                 "max_rows_per_file": 50,
+                "output_suffix": "video_duration_group=short",
+                "notify": True,
             },
-            "ecom_video_item_video_hdfs_parquet_demo_test.yaml": {
+            "ecom_video_item_video_long_hdfs_parquet.yaml": {
+                "duration": "long",
+                "override_num_blocks": 2048,
+                "read_concurrency": 512,
+                "read_num_cpus": 0.5,
+                "num_proc": 1024,
+                "export_concurrency": 128,
+                "min_rows_per_file": 5000,
+                "max_rows_per_file": 10000,
+                "output_suffix": "video_duration_group=long",
+                "notify": True,
+            },
+            "ecom_video_item_video_short_hdfs_parquet_demo_test.yaml": {
+                "duration": "short",
                 "override_num_blocks": 32,
                 "num_proc": 8,
                 "dedup_set_num": 16,
@@ -804,6 +820,16 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 "actor_get_retry_times": 2,
                 "max_vids_per_request": 20,
                 "export_concurrency": 1,
+                "output_suffix": "video_duration_group=short",
+                "notify": False,
+            },
+            "ecom_video_item_video_long_hdfs_parquet_demo_test.yaml": {
+                "duration": "long",
+                "override_num_blocks": 32,
+                "num_proc": 8,
+                "export_concurrency": 1,
+                "output_suffix": "video_duration_group=long",
+                "notify": False,
             },
         }
         for config_name, tuning in expected_tuning.items():
@@ -832,60 +858,66 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     self.assertNotIn("concurrency", dataset_config)
                     self.assertNotIn("num_cpus", dataset_config)
                     self.assertNotIn("ray_remote_args", dataset_config)
-                self.assertEqual(
-                    op_classes,
-                    [
-                        "JsonObjectMapper",
-                        "FieldAssignMapper",
-                        "VideoUrlRpcMapper",
-                        "DownloadFileMapper",
-                        "BytesExactDedupMapper",
-                        "RayFieldDedupPipeline",
-                        "GeneralFieldFilter",
-                        "PythonLambdaMapper",
-                    ],
-                )
-                self.assertEqual(op_classes.count("DownloadFileMapper"), 1)
-                self.assertEqual(op_classes.count("BytesExactDedupMapper"), 1)
+                if tuning["duration"] == "short":
+                    self.assertEqual(
+                        op_classes,
+                        [
+                            "GeneralFieldFilter",
+                            "JsonObjectMapper",
+                            "FieldAssignMapper",
+                            "VideoUrlRpcMapper",
+                            "DownloadFileMapper",
+                            "BytesExactDedupMapper",
+                            "RayFieldDedupPipeline",
+                            "GeneralFieldFilter",
+                        ],
+                    )
+                    self.assertEqual(ops[0].filter_condition, "item_duration <= 60")
+                    self.assertEqual(ops[1].batch_size, 200)
+                    self.assertEqual(ops[1].num_proc, tuning["num_proc"])
+                    self.assertEqual(ops[2].batch_size, 200)
+                    self.assertEqual(ops[2].num_proc, tuning["num_proc"])
+                    for op in ops[3:]:
+                        self.assertEqual(op.batch_size, 50)
+                        self.assertEqual(op.num_proc, tuning["num_proc"])
+                        self.assertEqual(op.num_cpus, 1)
+                    self.assertEqual(ops[3].vid_key, "vid")
+                    self.assertEqual(ops[3].quality_preference, "720p")
+                    self.assertEqual(ops[3].max_vids_per_request, tuning["max_vids_per_request"])
+                    self.assertEqual(ops[3].qps, 50000)
+                    self.assertTrue(ops[4].resume_download)
+                    self.assertEqual(ops[4].download_field, "urls")
+                    self.assertEqual(ops[4].save_field, "videos")
+                    self.assertEqual(ops[4].max_concurrent, 1)
+                    self.assertEqual(ops[5].bytes_key, "videos")
+                    self.assertEqual(ops[6].condition, "valid_video_count > 0")
+                    self.assertEqual(ops[6].field_key, "md5")
+                    self.assertEqual(ops[6].id_key, "id")
+                    self.assertEqual(ops[6].backend._dedup_set_num_config, tuning["dedup_set_num"])
+                    self.assertEqual(ops[6].backend.actor_get_timeout, tuning["actor_get_timeout"])
+                    self.assertEqual(ops[6].backend.actor_get_retry_times, tuning["actor_get_retry_times"])
+                    self.assertEqual(ops[7].filter_condition, "valid_video_count > 0")
+                else:
+                    self.assertEqual(
+                        op_classes,
+                        [
+                            "GeneralFieldFilter",
+                            "JsonObjectMapper",
+                            "FieldAssignMapper",
+                        ],
+                    )
+                    self.assertEqual(ops[0].filter_condition, "item_duration > 60")
+                    self.assertEqual(ops[1].batch_size, 200)
+                    self.assertEqual(ops[1].num_proc, tuning["num_proc"])
+                    self.assertEqual(ops[2].batch_size, 200)
+                    self.assertEqual(ops[2].num_proc, tuning["num_proc"])
+                    self.assertNotIn("VideoUrlRpcMapper", op_classes)
+                    self.assertNotIn("DownloadFileMapper", op_classes)
+                    self.assertNotIn("BytesExactDedupMapper", op_classes)
+                    self.assertNotIn("RayFieldDedupPipeline", op_classes)
                 self.assertNotIn("FieldDropMapper", op_classes)
-                self.assertEqual(ops[0].batch_size, 200)
-                self.assertEqual(ops[0].num_proc, tuning["num_proc"])
-                self.assertEqual(ops[1].batch_size, 200)
-                self.assertEqual(ops[1].num_proc, tuning["num_proc"])
-                for op in ops[2:]:
-                    self.assertEqual(op.batch_size, 50)
-                    self.assertEqual(op.num_proc, tuning["num_proc"])
-                    self.assertEqual(op.num_cpus, 1)
-                self.assertEqual(ops[2].condition, "item_duration <= 60")
-                self.assertEqual(ops[2].vid_key, "vid")
-                self.assertEqual(ops[2].quality_preference, "720p")
-                self.assertEqual(ops[2].max_vids_per_request, tuning["max_vids_per_request"])
-                self.assertEqual(ops[2].qps, 50000)
-                self.assertTrue(ops[3].resume_download)
-                self.assertEqual(ops[3].download_field, "urls")
-                self.assertEqual(ops[3].save_field, "videos")
-                self.assertEqual(ops[3].max_concurrent, 1)
-                self.assertEqual(ops[4].bytes_key, "videos")
-                self.assertEqual(ops[5].condition, "item_duration <= 60 and valid_video_count > 0")
-                self.assertEqual(ops[5].field_key, "md5")
-                self.assertEqual(ops[5].id_key, "id")
-                self.assertEqual(ops[5].backend._dedup_set_num_config, tuning["dedup_set_num"])
-                self.assertEqual(ops[5].backend.actor_get_timeout, tuning["actor_get_timeout"])
-                self.assertEqual(ops[5].backend.actor_get_retry_times, tuning["actor_get_retry_times"])
-                self.assertEqual(
-                    ops[6].filter_condition,
-                    "item_duration > 60 or (item_duration <= 60 and valid_video_count > 0)",
-                )
-                self.assertEqual(
-                    ops[7].process_single({"item_duration": 10})["video_duration_group"],
-                    "short",
-                )
-                self.assertEqual(
-                    ops[7].process_single({"item_duration": 90})["video_duration_group"],
-                    "long",
-                )
                 notification_hooks = cfg.notification_hooks
-                if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
+                if tuning["notify"]:
                     self.assertEqual(len(notification_hooks), 1)
                     hook = notification_hooks[0]
                     self.assertEqual(hook.type, "adc_lark_message")
@@ -894,22 +926,26 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     self.assertEqual(hook.ctx.userAccount, "guohongyu.7")
                     self.assertEqual(hook.ctx.apiBase, "https://ai-data-center.bytedance.net/api")
                     self.assertEqual(hook.template_id, "AAqtelosmXDl1")
-                    self.assertEqual(
-                        [stat.key for stat in hook.custom_stats],
-                        [
-                            "dedup.eligible_rows",
-                            "dedup.unique_rows",
-                            "dedup.duplicate_rows",
-                            "rpc.video_url_rpc_mapper.total_count",
-                            "rpc.video_url_rpc_mapper.success_count",
-                            "rpc.video_url_rpc_mapper.failed_count",
-                            "rpc.video_url_rpc_mapper.failure_rate",
-                            "download.download_file_mapper.total_count",
-                            "download.download_file_mapper.success_count",
-                            "download.download_file_mapper.failed_count",
-                            "download.download_file_mapper.failure_rate",
-                        ],
-                    )
+                    custom_stats = [stat.key for stat in hook.custom_stats]
+                    if tuning["duration"] == "short":
+                        self.assertEqual(
+                            custom_stats,
+                            [
+                                "dedup.eligible_rows",
+                                "dedup.unique_rows",
+                                "dedup.duplicate_rows",
+                                "rpc.video_url_rpc_mapper.total_count",
+                                "rpc.video_url_rpc_mapper.success_count",
+                                "rpc.video_url_rpc_mapper.failed_count",
+                                "rpc.video_url_rpc_mapper.failure_rate",
+                                "download.download_file_mapper.total_count",
+                                "download.download_file_mapper.success_count",
+                                "download.download_file_mapper.failed_count",
+                                "download.download_file_mapper.failure_rate",
+                            ],
+                        )
+                    else:
+                        self.assertEqual(custom_stats, [])
                 else:
                     self.assertEqual(notification_hooks, [])
                 export_cfg = cfg.export if isinstance(cfg.export, dict) else vars(cfg.export)
@@ -917,10 +953,11 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                 self.assertEqual(export_cfg["target"], "hdfs")
                 self.assertEqual(export_cfg["type"], "parquet")
                 self.assertEqual(export_cfg["mode"], "overwrite")
+                self.assertTrue(export_cfg["path"].endswith(tuning["output_suffix"]))
                 export_extra_args = export_cfg["extra_args"]
                 if not isinstance(export_extra_args, dict):
                     export_extra_args = vars(export_extra_args)
-                if config_name == "ecom_video_item_video_hdfs_parquet.yaml":
+                if "min_rows_per_file" in tuning:
                     self.assertEqual(export_extra_args["concurrency"], tuning["export_concurrency"])
                     self.assertEqual(export_extra_args["min_rows_per_file"], tuning["min_rows_per_file"])
                     self.assertEqual(export_extra_args["max_rows_per_file"], tuning["max_rows_per_file"])
@@ -928,7 +965,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     self.assertEqual(export_extra_args["concurrency"], 1)
                     self.assertNotIn("min_rows_per_file", export_extra_args)
                     self.assertNotIn("max_rows_per_file", export_extra_args)
-                self.assertEqual(export_extra_args["partition_cols"], ["video_duration_group"])
+                self.assertNotIn("partition_cols", export_extra_args)
                 schema = export_cfg["schema"]
                 schema_fields = schema["fields"] if isinstance(schema, dict) else schema.fields
                 schema_columns = [
@@ -936,7 +973,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     for field in schema_fields
                 ]
                 self.assertIn("videos", schema_columns)
-                self.assertIn("video_duration_group", schema_columns)
+                self.assertNotIn("video_duration_group", schema_columns)
                 self.assertNotIn("duplicate_id_list", schema_columns)
 
 

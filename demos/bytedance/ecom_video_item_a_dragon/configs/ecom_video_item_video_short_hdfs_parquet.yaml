@@ -1,5 +1,5 @@
-# 电商视频-视频
-project_name: "ecom-video-item-video-ray"
+# 电商视频-视频-短视频
+project_name: "ecom-video-item-video-short-ray"
 executor_type: "ray"
 ray_address: "auto"
 min_common_dep_num_to_combine: 0
@@ -16,10 +16,8 @@ notification_hooks:
       apiBase: "https://ai-data-center.bytedance.net/api"
     template_id: "AAqtelosmXDl1"
     custom_fields:
-      biz: "ecom_video_item_video"
-      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned"
-      short_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=short"
-      long_output_path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=long"
+      biz: "ecom_video_item_video_short"
+      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=short"
     custom_stats:
       - key: "dedup.eligible_rows"
         label: "短视频去重候选行数"
@@ -62,6 +60,11 @@ dataset:
       skip_zero_row_group_files: true
 
 process:
+  - general_field_filter:
+      batch_size: 200
+      num_proc: 1024
+      num_cpus: 1
+      filter_condition: "item_duration <= 60"
   - json_object_mapper:
       batch_size: 200
       num_proc: 1024
@@ -90,7 +93,6 @@ process:
       batch_size: 50
       num_proc: 1024
       num_cpus: 1
-      condition: "item_duration <= 60"
       vid_key: "vid"
       output_key: "urls"
       quality_preference: "720p"
@@ -115,7 +117,6 @@ process:
       batch_size: 50
       num_proc: 1024
       num_cpus: 1
-      condition: "item_duration <= 60"
       url_key: "urls"
       bytes_key: "videos"
       md5_key: "md5"
@@ -124,7 +125,7 @@ process:
       batch_size: 50
       num_proc: 1024
       num_cpus: 1
-      condition: "item_duration <= 60 and valid_video_count > 0"
+      condition: "valid_video_count > 0"
       field_key: "md5"
       id_key: "id"
       dedup_set_num: 64
@@ -134,17 +135,12 @@ process:
       batch_size: 50
       num_proc: 1024
       num_cpus: 1
-      filter_condition: "item_duration > 60 or (item_duration <= 60 and valid_video_count > 0)"
-  - python_lambda_mapper:
-      batch_size: 50
-      num_proc: 1024
-      num_cpus: 1
-      lambda_str: "lambda d: (d.update({'video_duration_group': 'short' if (d.get('item_duration') is not None and d.get('item_duration') <= 60) else 'long'}) or d)"
+      filter_condition: "valid_video_count > 0"
 
 export:
   target: "hdfs"
   type: "parquet"
-  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned"
+  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=short"
   mode: "overwrite"
   filesystem: "pyarrow"
   schema:
@@ -160,10 +156,7 @@ export:
       - {name: "images", type: "string"}
       - {name: "has_audio_in_video", type: "bool"}
       - {name: "type", type: "string"}
-      - {name: "video_duration_group", type: "string"}
   extra_args:
     concurrency: 128
     min_rows_per_file: 25
     max_rows_per_file: 50
-    partition_cols:
-      - "video_duration_group"
