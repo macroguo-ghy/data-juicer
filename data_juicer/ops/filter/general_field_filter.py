@@ -49,6 +49,20 @@ def compile_filter_condition(filter_condition: str = ""):
     return CompiledFilterCondition(filter_condition)
 
 
+def _normalize_filter_value(value: Any) -> Any:
+    if hasattr(value, "as_py"):
+        return value.as_py()
+    return value
+
+
+def _compare_filter_values(left: Any, right: Any, compare_func) -> bool:
+    left = _normalize_filter_value(left)
+    right = _normalize_filter_value(right)
+    if left is None or right is None:
+        return False
+    return compare_func(left, right)
+
+
 class CompiledFilterCondition:
     def __init__(self, filter_condition: str = ""):
         self.filter_condition = (filter_condition or "").strip()
@@ -68,12 +82,24 @@ class CompiledFilterCondition:
 
 class ExpressionTransformer(ast.NodeVisitor):
     _COMPARE_OPERATORS = {
-        ast.Gt: lambda left_operand, right_operand: left_operand > right_operand,
-        ast.Lt: lambda left_operand, right_operand: left_operand < right_operand,
-        ast.Eq: lambda left_operand, right_operand: left_operand == right_operand,
-        ast.NotEq: lambda left_operand, right_operand: left_operand != right_operand,
-        ast.GtE: lambda left_operand, right_operand: left_operand >= right_operand,
-        ast.LtE: lambda left_operand, right_operand: left_operand <= right_operand,
+        ast.Gt: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left > right
+        ),
+        ast.Lt: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left < right
+        ),
+        ast.Eq: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left == right
+        ),
+        ast.NotEq: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left != right
+        ),
+        ast.GtE: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left >= right
+        ),
+        ast.LtE: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left <= right
+        ),
     }
 
     def __init__(self, sample: Dict):
@@ -81,9 +107,7 @@ class ExpressionTransformer(ast.NodeVisitor):
 
     @staticmethod
     def _normalize_value(value: Any) -> Any:
-        if hasattr(value, "as_py"):
-            return value.as_py()
-        return value
+        return _normalize_filter_value(value)
 
     def visit_BoolOp(self, node: ast.BoolOp) -> bool:
         values = (self.visit(child) for child in node.values)

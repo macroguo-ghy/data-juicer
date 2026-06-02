@@ -155,6 +155,12 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
         self.assertFalse(transformer._apply_op(ast.Gt(), None, 0))
         self.assertFalse(transformer._apply_op(ast.Gt(), 1, None))
 
+    def test_compare_operator_table_treats_none_operands_as_false(self):
+        compare = ExpressionTransformer._COMPARE_OPERATORS[ast.Gt]
+
+        self.assertFalse(compare(None, 0))
+        self.assertFalse(compare(1, None))
+
 
 if __name__ == '__main__':
     unittest.main()
