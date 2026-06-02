@@ -309,7 +309,7 @@ class StateMetricCalculatorMapper(Mapper):
             )
         except Exception as exc:
             return {
-                "meta": meta,
+                **meta,
                 "metric_list": [{
                     "input": self._raw_metric_list_input(sample, operator_config, detail),
                     "output": self._stringify_metric_output(None),
@@ -333,7 +333,7 @@ class StateMetricCalculatorMapper(Mapper):
                 })
 
         return {
-            "meta": meta,
+            **meta,
             "metric_list": metric_list,
         }
 
@@ -906,7 +906,7 @@ class StateMetricCalculatorMapper(Mapper):
         return parameters
 
     @staticmethod
-    def _build_metric_list_params(detail: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    def _build_metric_list_params(detail: dict[str, Any] | None) -> dict[str, dict[str, str]]:
         if not isinstance(detail, dict):
             return {}
         parameter_details = detail.get("inputParameterDetails")
@@ -917,9 +917,8 @@ class StateMetricCalculatorMapper(Mapper):
             if not isinstance(parameter, dict) or not parameter.get("keyNameEn"):
                 continue
             params[str(parameter["keyNameEn"])] = {
-                "type": str(parameter.get("keyType") or ""),
                 "name": str(parameter.get("keyNameCn") or ""),
-                "multiValue": bool(parameter.get("multiValue")),
+                "type": str(parameter.get("keyType") or ""),
             }
         return params
 
@@ -967,8 +966,6 @@ class StateMetricCalculatorMapper(Mapper):
             metric_code = cls._result_key(detail, operator_id)
             metric_name = detail.get("operatorNameCn") if isinstance(detail, dict) else ""
         return {
-            "operator_id": operator_id,
-            "operator_type": operator_type,
             "metric_code": metric_code,
             "metric_name": str(metric_name or ""),
             "params": cls._build_metric_list_params(detail),

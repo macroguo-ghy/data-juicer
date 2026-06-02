@@ -9,17 +9,12 @@
 ```json
 [
   {
-    "meta": {
-      "operator_id": 47,
-      "operator_type": "metric",
-      "metric_code": "EcpCost",
-      "metric_name": "计划消耗环比",
-      "params": {
-        "unknown_id": {
-          "type": "AMBIGUOUS",
-          "name": "未知ID",
-          "multiValue": true
-        }
+    "metric_code": "EcpCost",
+    "metric_name": "计划消耗环比",
+    "params": {
+      "unknown_id": {
+        "name": "未知ID",
+        "type": "AMBIGUOUS"
       }
     },
     "metric_list": [
@@ -79,20 +74,16 @@ tool 的结果也放入 `metric_list`，不再单独输出 `tool_list`。
 - tool 也有入参、输出和错误，和 metric 的展示结构一致。
 - 字段名统一后，下游不需要为 metric/tool 写两套列表逻辑。
 
-tool 只通过 `meta.operator_type` 区分：
+tool 和 metric 统一输出为派生指标结果，不在结果里保留 `operator_type`：
 
 ```json
 {
-  "meta": {
-    "operator_id": 301,
-    "operator_type": "tool",
-    "metric_code": "customer_info_acquisition",
-    "metric_name": "客户信息获取工具",
-    "params": {
-      "adv_id": {
-        "type": "CONCRETE",
-        "name": "广告主ID"
-      }
+  "metric_code": "customer_info_acquisition",
+  "metric_name": "客户信息获取工具",
+  "params": {
+    "adv_id": {
+      "name": "广告主ID",
+      "type": "CONCRETE"
     }
   },
   "metric_list": [
@@ -113,34 +104,24 @@ tool 只通过 `meta.operator_type` 区分：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `meta` | object | 当前 operator 的元信息。 |
-| `metric_list` | array | 当前 operator 的一次或多次计算结果。metric 和 tool 都使用这个字段。 |
-
-### 4.2 `meta`
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `operator_id` | number | 后端元数据 operator ID。 |
-| `operator_type` | string | `metric` 或 `tool`。 |
 | `metric_code` | string | 展示和排查使用的英文标识。metric 可取 `operatorNameEn`，tool 可取 `toolName`。 |
 | `metric_name` | string | 展示名称。metric 可取 `operatorNameCn`，tool 可取 `toolNameCn`。 |
 | `params` | object | 当前 operator 的入参定义摘要。key 是参数英文名。 |
+| `metric_list` | array | 当前 operator 的一次或多次计算结果。metric 和 tool 都使用这个字段。 |
 
-### 4.3 `meta.params`
+### 4.2 `params`
 
 `params` 描述参数定义，不放运行时取值。
 
 ```json
 {
   "unknown_id": {
-    "type": "AMBIGUOUS",
     "name": "未知ID",
-    "multiValue": true
+    "type": "AMBIGUOUS"
   },
   "startDate": {
-    "type": "CONCRETE",
     "name": "开始时间",
-    "multiValue": false
+    "type": "CONCRETE"
   }
 }
 ```
@@ -149,17 +130,18 @@ tool 只通过 `meta.operator_type` 区分：
 
 | 输出字段 | 元数据来源 |
 | --- | --- |
-| `type` | `inputParameterDetails[].keyType`，例如 `CONCRETE`、`AMBIGUOUS`。 |
 | `name` | `inputParameterDetails[].keyNameCn`。 |
-| `multiValue` | `inputParameterDetails[].multiValue`，缺省时按 `false` 处理。 |
+| `type` | `inputParameterDetails[].keyType`，例如 `CONCRETE`、`AMBIGUOUS`。 |
 
-`meta.params` 只从 `inputParameterDetails` 构造。如果后端没有提供 `inputParameterDetails`，`params` 输出为空对象：
+`operator_id`、`operator_type`、`multiValue` 属于运行和配置字段，不输出给 LLM Prompt。`multiValue` 只参与运行时多值展开。
+
+`params` 只从 `inputParameterDetails` 构造。如果后端没有提供 `inputParameterDetails`，`params` 输出为空对象：
 
 ```json
 {}
 ```
 
-### 4.4 `metric_list[]`
+### 4.3 `metric_list[]`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -420,17 +402,12 @@ parameter_mapping:
 ```json
 [
   {
-    "meta": {
-      "operator_id": 47,
-      "operator_type": "metric",
-      "metric_code": "EcpCost",
-      "metric_name": "计划消耗环比",
-      "params": {
-        "unknown_id": {
-          "type": "AMBIGUOUS",
-          "name": "未知ID",
-          "multiValue": true
-        }
+    "metric_code": "EcpCost",
+    "metric_name": "计划消耗环比",
+    "params": {
+      "unknown_id": {
+        "name": "未知ID",
+        "type": "AMBIGUOUS"
       }
     },
     "metric_list": [
@@ -458,7 +435,7 @@ parameter_mapping:
 
 前端可以按两级结构展示：
 
-1. 第一层：按最外层数组展示 operator 卡片或表格分组，标题使用 `meta.metric_name`，副标题可显示 `meta.metric_code` 和 `meta.operator_type`。
+1. 第一层：按最外层数组展示 operator 卡片或表格分组，标题使用 `metric_name`，副标题可显示 `metric_code`。
 2. 第二层：每个 operator 下展示 `metric_list`，每行展示 `input`、`output`、`error`。
 
 如果 `error` 非空：
