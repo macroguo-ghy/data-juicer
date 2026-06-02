@@ -67,3 +67,4 @@ export:
       - {name: "type", type: "string"}
   extra_args:
     concurrency: 1
+    avoid_write_fusion: true

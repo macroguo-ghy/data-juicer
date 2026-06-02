@@ -274,6 +274,49 @@ class TestRayExporterHDFS(unittest.TestCase):
         self.assertEqual(dataset.received_kwargs["concurrency"], 8)
         self.assertNotIn("max_rows_per_file", dataset.received_kwargs["arrow_parquet_args"])
 
+    def test_write_others_can_add_write_fusion_barrier_remote_args(self):
+        class FakeDataset:
+            def __init__(self):
+                self.received_kwargs = None
+
+            def write_parquet(
+                self,
+                path,
+                *,
+                concurrency=None,
+                partition_cols=None,
+                ray_remote_args=None,
+                **arrow_parquet_args,
+            ):
+                self.received_kwargs = {
+                    "path": path,
+                    "concurrency": concurrency,
+                    "partition_cols": partition_cols,
+                    "ray_remote_args": ray_remote_args,
+                    "arrow_parquet_args": arrow_parquet_args,
+                }
+
+        dataset = FakeDataset()
+        RayExporter.write_others(
+            dataset,
+            "/path/output_dir",
+            export_format="parquet",
+            export_extra_args={
+                "concurrency": 64,
+                "partition_cols": ["video_duration_group"],
+                "ray_remote_args": {"num_cpus": 2},
+                "avoid_write_fusion": True,
+            },
+        )
+
+        self.assertEqual(dataset.received_kwargs["concurrency"], 64)
+        self.assertEqual(dataset.received_kwargs["partition_cols"], ["video_duration_group"])
+        self.assertEqual(
+            dataset.received_kwargs["ray_remote_args"],
+            {"num_cpus": 2, "scheduling_strategy": "DEFAULT"},
+        )
+        self.assertNotIn("avoid_write_fusion", dataset.received_kwargs["arrow_parquet_args"])
+
     def test_hdfs_export_rejects_unknown_mode(self):
         with self.assertRaisesRegex(ValueError, "export.mode"):
             RayExporter(

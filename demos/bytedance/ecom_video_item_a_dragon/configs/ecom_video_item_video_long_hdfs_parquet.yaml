@@ -83,5 +83,6 @@ export:
       - {name: "type", type: "string"}
   extra_args:
     concurrency: 64
+    avoid_write_fusion: true
     min_rows_per_file: 5000
     max_rows_per_file: 10000

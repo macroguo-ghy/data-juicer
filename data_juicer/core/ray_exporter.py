@@ -17,6 +17,8 @@ from data_juicer.utils.ray_task_kv_store import incr_task_kv, snapshot_task_kv
 from data_juicer.utils.webdataset_utils import reconstruct_custom_webdataset_format
 
 EXPORT_WRITE_STATS_NAMESPACE = "export_write_stats"
+AVOID_WRITE_FUSION_ARG = "avoid_write_fusion"
+WRITE_FUSION_BARRIER_REMOTE_ARGS = {"scheduling_strategy": "DEFAULT"}
 
 
 def _dataset_columns_no_fetch(dataset):
@@ -56,6 +58,28 @@ def _json_default(value):
     if callable(isoformat):
         return isoformat()
     return str(value)
+
+
+def _copy_mapping(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        return dict(value)
+    except TypeError:
+        if hasattr(value, "__dict__"):
+            return dict(vars(value))
+        raise
+
+
+def _apply_write_fusion_barrier(export_extra_args):
+    if not export_extra_args.pop(AVOID_WRITE_FUSION_ARG, False):
+        return
+    ray_remote_args = _copy_mapping(export_extra_args.get("ray_remote_args"))
+    for key, value in WRITE_FUSION_BARRIER_REMOTE_ARGS.items():
+        ray_remote_args.setdefault(key, value)
+    export_extra_args["ray_remote_args"] = ray_remote_args
 
 
 def summarize_filesystem_path(filesystem, path: str) -> dict[str, int]:
@@ -954,7 +978,8 @@ class RayExporter:
         :param kwargs: extra arguments.
         :return:
         """
-        export_extra_args = kwargs.get("export_extra_args", {})
+        export_extra_args = dict(kwargs.get("export_extra_args", {}))
+        _apply_write_fusion_barrier(export_extra_args)
         if export_extra_args.pop("_use_arrow_jsonl_datasink", False):
             return RayExporter.write_jsonl_datasink(dataset, export_path, export_extra_args)
         filtered_kwargs = filter_arguments(dataset.write_json, export_extra_args)
@@ -965,6 +990,8 @@ class RayExporter:
 
     @staticmethod
     def write_jsonl_datasink(dataset, export_path, export_extra_args):
+        export_extra_args = dict(export_extra_args or {})
+        _apply_write_fusion_barrier(export_extra_args)
         ray_remote_args = export_extra_args.pop("ray_remote_args", None)
         concurrency = export_extra_args.pop("concurrency", None)
         open_stream_args = export_extra_args.pop("arrow_open_stream_args", None)
@@ -1008,7 +1035,8 @@ class RayExporter:
         from data_juicer.utils.webdataset_utils import _custom_default_encoder
 
         # check if we need to reconstruct the customized WebDataset format
-        export_extra_args = kwargs.get("export_extra_args", {})
+        export_extra_args = dict(kwargs.get("export_extra_args", {}))
+        _apply_write_fusion_barrier(export_extra_args)
         field_mapping = export_extra_args.get("field_mapping", {})
         if len(field_mapping) > 0:
             reconstruct_func = partial(reconstruct_custom_webdataset_format, field_mapping=field_mapping)
@@ -1033,6 +1061,7 @@ class RayExporter:
         export_format = kwargs.get("export_format", "parquet")
         write_method = getattr(dataset, f"write_{export_format}")
         export_extra_args = dict(kwargs.get("export_extra_args", {}))
+        _apply_write_fusion_barrier(export_extra_args)
         if (
             "max_rows_per_file" in export_extra_args
             and "max_rows_per_file" not in inspect.signature(write_method).parameters

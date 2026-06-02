@@ -976,6 +976,7 @@ class EcomVideoConfigLoadTest(unittest.TestCase):
                     self.assertEqual(export_extra_args["concurrency"], 1)
                     self.assertNotIn("min_rows_per_file", export_extra_args)
                     self.assertNotIn("max_rows_per_file", export_extra_args)
+                self.assertTrue(export_extra_args["avoid_write_fusion"])
                 self.assertNotIn("partition_cols", export_extra_args)
                 schema = export_cfg["schema"]
                 schema_fields = schema["fields"] if isinstance(schema, dict) else schema.fields
