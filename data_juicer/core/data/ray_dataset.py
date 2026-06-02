@@ -320,6 +320,15 @@ def make_named_mapper_batch_fn(op_name, process_func):
     return mapper_batch_fn
 
 
+def _ray_remote_resource_kwargs(op):
+    kwargs = {}
+    if op.num_cpus is not None:
+        kwargs["num_cpus"] = op.num_cpus
+    if op.num_gpus is not None:
+        kwargs["num_gpus"] = op.num_gpus
+    return kwargs
+
+
 class RayDataset(DJDataset):
     def __init__(
         self,
@@ -667,8 +676,7 @@ class RayDataset(DJDataset):
                         if direct_non_stats_filter:
                             filter_kwargs = {
                                 "compute": get_compute_strategy(filter_func, concurrency=op.num_proc),
-                                "num_cpus": op.num_cpus,
-                                "num_gpus": op.num_gpus,
+                                **_ray_remote_resource_kwargs(op),
                             }
                         self.data = self.data.map_batches(
                             filter_func,
@@ -683,8 +691,7 @@ class RayDataset(DJDataset):
                         if direct_non_stats_filter:
                             filter_kwargs = {
                                 "compute": get_compute_strategy(op.process, concurrency=op.num_proc),
-                                "num_cpus": op.num_cpus,
-                                "num_gpus": op.num_gpus,
+                                **_ray_remote_resource_kwargs(op),
                             }
                         self.data = self.data.filter(
                             op.process,

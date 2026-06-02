@@ -378,6 +378,51 @@ class RayDatasetImportTest(unittest.TestCase):
         self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "valid_video_count": 1}])
         self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
 
+    def test_process_stateless_non_stats_filter_omits_unset_ray_resources(self):
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "valid_video_count"]))
+
+            def filter(self, filter_func, **kwargs):
+                events.append(kwargs)
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "valid_video_count"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch("data_juicer.core.data.ray_dataset.get_compute_strategy", return_value="direct-filter-compute"):
+            ray_dataset.process(
+                StatelessFieldFilter(
+                    filter_condition="valid_video_count > 0",
+                    num_proc=8,
+                    num_cpus=1,
+                    num_gpus=None,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(
+            events,
+            [
+                {
+                    "compute": "direct-filter-compute",
+                    "num_cpus": 1,
+                    "runtime_env": None,
+                }
+            ],
+        )
+
     def test_process_stateless_non_stats_filter_handles_nullable_arrow_rows(self):
         import pyarrow as pa
         import ray
@@ -433,6 +478,8 @@ class RayDatasetImportTest(unittest.TestCase):
                 ray_dataset.process(
                     StatelessFieldFilter(
                         filter_condition="valid_video_count > 0",
+                        num_cpus=1,
+                        num_gpus=None,
                         auto_op_parallelism=False,
                     )
                 )
@@ -531,6 +578,46 @@ class RayDatasetImportTest(unittest.TestCase):
 
         self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "ocr_result": ["ocr-json"]}])
         self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
+    def test_process_batched_non_stats_filter_omits_unset_ray_resources(self):
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.specified_field_non_empty_filter import SpecifiedFieldNonEmptyFilter
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "ocr_result"]))
+
+            def map_batches(self, batch_func, *args, **kwargs):
+                events.append(kwargs)
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "ocr_result"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch("data_juicer.core.data.ray_dataset.get_compute_strategy", return_value="direct-batch-filter-compute"):
+            ray_dataset.process(
+                SpecifiedFieldNonEmptyFilter(
+                    field_key="ocr_result",
+                    batch_size=2,
+                    num_proc=4,
+                    num_cpus=1,
+                    num_gpus=None,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(len(events), 1)
+        self.assertNotIn("num_gpus", events[0])
+        self.assertEqual(events[0]["num_cpus"], 1)
+        self.assertEqual(events[0]["compute"], "direct-batch-filter-compute")
 
     def test_process_does_not_call_base_lifecycle_hooks_for_plain_operator(self):
         from data_juicer.core.data.ray_dataset import RayDataset
