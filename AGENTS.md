@@ -12,6 +12,7 @@
 ## Task Routing
 
 - For testing policy, focused commands, fallback runners, and coverage expectations, read [AgentTesting.md](docs/AgentTesting.md).
+- For non-trivial development work, behavior changes, review loops, subagent delegation boundaries, and final handoff gates, read [AgentDevelopmentWorkflow.md](docs/AgentDevelopmentWorkflow.md) and prefer the repo-local `data-juicer-development-workflow` skill under `.agents/skills/data-juicer-development-workflow/`.
 - For local Ray E2E, Mac HDFS E2E, online Ray submission/debugging, and HDFS read-only inspection, read [AgentRunbooks.md](docs/AgentRunbooks.md).
 - For third-party SDK, Ray/byted-ray, PyArrow, PyIceberg, Magnus, Lance, datasink, and runtime-env boundary failures, read [AgentSdkBoundary.md](docs/AgentSdkBoundary.md).
 - For online Ray E2E jobs launched through `ad.ai.data_forge`, prefer the repo-local `online-ray-e2e` skill under `.agents/skills/online-ray-e2e/`.

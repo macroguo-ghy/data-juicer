@@ -66,8 +66,11 @@ class ItemIdImageUrlMapper(Mapper):
         state["_rpc_clients"] = None
         return state
 
-    def run(self, dataset, *, exporter=None, tracer=None):
+    def prepare_backend_for_ray_tasks(self):
         self._rpc_qps_limiter.setup_ray_actor()
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        self.prepare_backend_for_ray_tasks()
         return super().run(dataset, exporter=exporter, tracer=tracer)
 
     def process_single(self, sample):

@@ -578,8 +578,10 @@ class RayExporter:
         # In Ray Data checkpoint mode, avoid columns(fetch_if_missing=True) because
         # it can execute a Limit[1] action before the sink write.
         checkpoint_enabled = _is_ray_data_checkpoint_enabled()
-        if checkpoint_enabled:
-            cols = columns if columns is not None else _dataset_columns_no_fetch(dataset)
+        if columns is not None:
+            cols = columns
+        elif checkpoint_enabled:
+            cols = _dataset_columns_no_fetch(dataset)
         else:
             cols = dataset.columns()
         if cols is None:
@@ -615,6 +617,11 @@ class RayExporter:
 
         if len(removed_fields):
             dataset = dataset.drop_columns(removed_fields)
+        if columns is not None:
+            export_columns = [column for column in columns if column not in removed_fields]
+            select_columns = getattr(dataset, "select_columns", None)
+            if export_columns and callable(select_columns):
+                dataset = select_columns(export_columns)
 
         export_method = RayExporter._router()[self.export_format]
         export_kwargs = {

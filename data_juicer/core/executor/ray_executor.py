@@ -108,6 +108,64 @@ class TempDirManager:
             shutil.rmtree(self.tmp_dir)
 
 
+class RayDataContextConfigManager:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.context_cfg = getattr(cfg, "ray_data_context", None)
+        if isinstance(self.context_cfg, dict):
+            self.target_max_block_size = self.context_cfg.get("target_max_block_size")
+        else:
+            self.target_max_block_size = getattr(self.context_cfg, "target_max_block_size", None)
+        self.enabled = self.target_max_block_size is not None
+        self.context = None
+        self.original_values = {}
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+
+        try:
+            target_max_block_size = int(self.target_max_block_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "`ray_data_context.target_max_block_size` must be a positive integer when set."
+            ) from exc
+        if target_max_block_size <= 0:
+            raise ValueError("`ray_data_context.target_max_block_size` must be a positive integer when set.")
+
+        data_context_cls = ray.data.DataContext
+        self.context = data_context_cls.get_current()
+        self.original_values = {
+            "target_max_block_size": getattr(self.context, "target_max_block_size", _MISSING_CONTEXT_VALUE),
+        }
+
+        self.context.target_max_block_size = target_max_block_size
+        if hasattr(data_context_cls, "_set_current"):
+            data_context_cls._set_current(self.context)
+
+        logger.info(
+            "Configured Ray Data context: " f"target_max_block_size={self.context.target_max_block_size}"
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.enabled or self.context is None:
+            return None
+
+        for key, value in self.original_values.items():
+            if value is _MISSING_CONTEXT_VALUE:
+                try:
+                    delattr(self.context, key)
+                except AttributeError:
+                    pass
+            else:
+                setattr(self.context, key, value)
+        data_context_cls = ray.data.DataContext
+        if hasattr(data_context_cls, "_set_current"):
+            data_context_cls._set_current(self.context)
+        return None
+
+
 class RayDataCheckpointManager:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -258,7 +316,9 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
         notification_manager.start()
         export_summary = None
         job_start_time = time.time()
+        ray_data_context_config = RayDataContextConfigManager(self.cfg)
         try:
+            ray_data_context_config.__enter__()
             checkpoint_cfg = getattr(self.cfg, "ray_data_checkpoint", None)
             ray_data_checkpoint_enabled = bool(getattr(checkpoint_cfg, "enabled", False))
             if ray_data_checkpoint_enabled:
@@ -401,6 +461,8 @@ class RayExecutor(ExecutorBase, DAGExecutionMixin, EventLoggingMixin):
             except Exception as notify_exc:  # noqa: BLE001
                 logger.warning("Failed to send failure task notification: {}", notify_exc)
             raise
+        finally:
+            ray_data_context_config.__exit__(None, None, None)
 
         notification_manager.finish(success=True, export_summary=export_summary, error=None)
         if not skip_return:

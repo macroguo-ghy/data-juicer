@@ -5,6 +5,7 @@ import codecs
 import hmac
 import hashlib
 import os
+import random
 import time
 from collections import Counter
 from pathlib import Path
@@ -26,6 +27,20 @@ DEFAULT_EULER_CALLER = "ad.ai.data_forge_merlin"
 DEFAULT_MAX_VIDS_PER_REQUEST = 20
 MAX_VIDS_PER_REQUEST = 60
 ALLOWED_URL_TYPES = {6, 7, 8, 9, 10, 11}
+EMPTY_RESULT_RPC_DEBUG_SAMPLE_RATE = 0.001
+DEBUG_PAYLOAD_MAX_DEPTH = 6
+DEBUG_PAYLOAD_MAX_ITEMS = 80
+DEBUG_PAYLOAD_MAX_STRING_LENGTH = 4096
+SENSITIVE_DEBUG_FIELD_NAMES = {
+    "ak",
+    "authorization",
+    "cookie",
+    "identityinfo",
+    "secret",
+    "signature",
+    "sk",
+    "token",
+}
 
 
 @OPERATORS.register_module(OP_NAME)
@@ -105,8 +120,11 @@ class VideoUrlRpcMapper(Mapper):
         state["_api_thrift"] = None
         return state
 
-    def run(self, dataset, *, exporter=None, tracer=None):
+    def prepare_backend_for_ray_tasks(self):
         self._rpc_qps_limiter.setup_ray_actor()
+
+    def run(self, dataset, *, exporter=None, tracer=None):
+        self.prepare_backend_for_ray_tasks()
         return super().run(dataset, exporter=exporter, tracer=tracer)
 
     def process_single(self, sample):
@@ -213,6 +231,8 @@ class VideoUrlRpcMapper(Mapper):
                     continue
                 url = getattr(video_info, "MainUrl", None)
                 urls_by_vid[vid] = [url] if url else []
+            empty_vids = [vid for vid in vids if not urls_by_vid.get(vid)]
+            self._maybe_log_empty_result_rpc_payload(req, resp, empty_vids)
         except Exception:
             emit_rpc_qps(op_name=self._name, target=self._target(), method=self.method, status="error")
             raise
@@ -380,6 +400,21 @@ class VideoUrlRpcMapper(Mapper):
         )
         self._rpc_error_log_count += 1
 
+    def _maybe_log_empty_result_rpc_payload(self, req, resp, empty_vids: list[str]) -> None:
+        if not empty_vids or random.random() >= EMPTY_RESULT_RPC_DEBUG_SAMPLE_RATE:
+            return
+        logger.warning(
+            "VideoUrlRpcMapper empty-result RPC sampled: pid={}, empty_vids={}, psm={}, cluster={}, method={}, "
+            "request={}, response={}",
+            os.getpid(),
+            empty_vids,
+            self.psm,
+            self.cluster,
+            self.method,
+            self._safe_debug_payload(req),
+            self._safe_debug_payload(resp),
+        )
+
     @staticmethod
     def _format_error_for_log(err: BaseException | None) -> str:
         if err is None:
@@ -388,6 +423,86 @@ class VideoUrlRpcMapper(Mapper):
         if not message:
             return err.__class__.__name__
         return f"{err.__class__.__name__}: {message}"
+
+    @classmethod
+    def _safe_debug_payload(cls, value: Any, field_name: str | None = None, depth: int = 0):
+        if cls._is_sensitive_debug_field(field_name):
+            return "<redacted>"
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return cls._truncate_debug_string(value)
+        if isinstance(value, bytes):
+            return f"<bytes len={len(value)}>"
+        if depth >= DEBUG_PAYLOAD_MAX_DEPTH:
+            return cls._truncate_debug_string(repr(value))
+        if isinstance(value, dict):
+            return cls._safe_debug_mapping(value, depth)
+        if isinstance(value, (list, tuple, set)):
+            return [
+                cls._safe_debug_payload(item, depth=depth + 1)
+                for item in list(value)[:DEBUG_PAYLOAD_MAX_ITEMS]
+            ]
+
+        fields = cls._debug_payload_fields(value)
+        if fields:
+            return cls._safe_debug_mapping(fields, depth)
+        return cls._truncate_debug_string(repr(value))
+
+    @classmethod
+    def _safe_debug_mapping(cls, mapping: dict, depth: int):
+        items = list(mapping.items())
+        payload = {
+            str(key): cls._safe_debug_payload(value, field_name=str(key), depth=depth + 1)
+            for key, value in items[:DEBUG_PAYLOAD_MAX_ITEMS]
+        }
+        if len(items) > DEBUG_PAYLOAD_MAX_ITEMS:
+            payload["..."] = f"truncated {len(items) - DEBUG_PAYLOAD_MAX_ITEMS} fields"
+        return payload
+
+    @staticmethod
+    def _debug_payload_fields(value: Any) -> dict[str, Any]:
+        fields = {}
+        thrift_spec = getattr(value, "thrift_spec", None)
+        if isinstance(thrift_spec, dict):
+            for spec in thrift_spec.values():
+                if spec is None or len(spec) < 2:
+                    continue
+                name = spec[1]
+                if isinstance(name, str) and hasattr(value, name):
+                    fields[name] = getattr(value, name)
+
+        try:
+            attrs = vars(value)
+        except TypeError:
+            attrs = {}
+        for key, attr_value in attrs.items():
+            if not key.startswith("_") and not callable(attr_value):
+                fields.setdefault(key, attr_value)
+        return fields
+
+    @staticmethod
+    def _is_sensitive_debug_field(field_name: str | None) -> bool:
+        if not field_name:
+            return False
+        lowered = field_name.lower()
+        sensitive_markers = (
+            "authorization",
+            "cookie",
+            "identityinfo",
+            "secret",
+            "signature",
+            "token",
+        )
+        return lowered in SENSITIVE_DEBUG_FIELD_NAMES or any(
+            marker in lowered for marker in sensitive_markers
+        )
+
+    @staticmethod
+    def _truncate_debug_string(value: str) -> str:
+        if len(value) <= DEBUG_PAYLOAD_MAX_STRING_LENGTH:
+            return value
+        return value[:DEBUG_PAYLOAD_MAX_STRING_LENGTH] + "...<truncated>"
 
     @staticmethod
     def _dict_to_rows(samples: dict[str, list[Any]]) -> list[dict[str, Any]]:

@@ -52,6 +52,8 @@ _RAY_PARQUET_READ_KWARGS = {
     "override_num_blocks",
 }
 
+_RAY_READ_RESOURCE_KWARGS = ("num_cpus", "num_gpus", "memory")
+
 _RAY_JSON_READ_KWARGS = {
     "parallelism",
     "ray_remote_args",
@@ -122,6 +124,26 @@ def _validate_hdfs_paths_share_filesystem(paths: list[str]) -> None:
 def _validate_positive_int(value: int) -> None:
     if isinstance(value, bool) or value <= 0:
         raise ValueError("Expected a positive integer")
+
+
+def _with_ray_loader_limit_validation(base_rules: dict) -> dict:
+    rules = {
+        "required_fields": list(base_rules.get("required_fields", [])),
+        "optional_fields": list(base_rules.get("optional_fields", [])),
+        "field_types": dict(base_rules.get("field_types", {})),
+        "custom_validators": dict(base_rules.get("custom_validators", {})),
+    }
+    for field in ["limit", "materialize_after_limit"]:
+        if field not in rules["optional_fields"]:
+            rules["optional_fields"].append(field)
+    rules["field_types"].update(
+        {
+            "limit": int,
+            "materialize_after_limit": bool,
+        }
+    )
+    rules["custom_validators"]["limit"] = _validate_positive_int
+    return rules
 
 
 def _validate_on_bad_files(value: str) -> None:
@@ -271,6 +293,8 @@ def _build_parquet_read_plan_from_filesystem(
     *,
     filter_for_ray_sampling_only: bool = False,
     skip_bad_files: bool = False,
+    limit: int | None = None,
+    allow_empty: bool = True,
 ) -> _ParquetReadPlan:
     try:
         import pyarrow.parquet as pq
@@ -278,7 +302,9 @@ def _build_parquet_read_plan_from_filesystem(
         parquet_paths = _parquet_files_from_filesystem(filesystem, path)
         if parquet_paths is None:
             return _ParquetReadPlan(paths=path)
-        if filter_for_ray_sampling_only and not skip_bad_files:
+        if parquet_paths == [] and not allow_empty:
+            return _ParquetReadPlan(paths=path)
+        if limit is None and filter_for_ray_sampling_only and not skip_bad_files:
             return _filter_ray_sampled_zero_row_group_files(filesystem, path, parquet_paths)
 
         readable_paths = []
@@ -313,6 +339,8 @@ def _build_parquet_read_plan_from_filesystem(
                 record_skipped_file(parquet_path, "0 row groups")
                 continue
             readable_paths.append(parquet_path)
+            if limit is not None and row_count >= limit:
+                break
 
         if skipped_empty_file_count:
             if skip_bad_files:
@@ -337,6 +365,8 @@ def _build_parquet_read_plan_from_filesystem(
                 row_count=row_count,
                 skipped_empty_file_count=skipped_empty_file_count,
             )
+        if limit is not None:
+            return _ParquetReadPlan(paths=readable_paths, schema=schema, row_count=row_count)
         return _ParquetReadPlan(paths=path, schema=schema, row_count=row_count)
     except Exception as exc:
         if skip_bad_files:
@@ -353,6 +383,44 @@ def _limit_parquet_row_count(row_count: int | None, limit: int | None) -> int | 
     if row_count is None or limit is None:
         return row_count
     return min(row_count, limit)
+
+
+def _apply_ray_loader_limit(dataset, limit: int | None, materialize_after_limit: bool, cfg: Namespace):
+    if limit is None:
+        return dataset
+
+    dataset = dataset.limit(limit)
+    if not materialize_after_limit:
+        return dataset
+
+    if bool(getattr(cfg, "ray_dry_run_plan", False)):
+        logger.info(
+            "Skipping `materialize_after_limit` because `ray_dry_run_plan` is enabled."
+        )
+        return dataset
+
+    logger.info("Materializing Ray Dataset after loader limit={}.", limit)
+    return dataset.materialize()
+
+
+def _apply_ray_dataset_loader_limit(
+    ray_dataset,
+    limit: int | None,
+    materialize_after_limit: bool,
+    cfg: Namespace,
+):
+    if limit is None:
+        return ray_dataset
+
+    ray_dataset.data = _apply_ray_loader_limit(
+        ray_dataset.data,
+        limit,
+        materialize_after_limit,
+        cfg,
+    )
+    ray_dataset._cached_row_count = None
+    ray_dataset._row_count_getter = None
+    return ray_dataset
 
 
 @dataclass(frozen=True)
@@ -417,7 +485,24 @@ class DataLoadStrategy(ABC, ConfigValidator):
                 if key in self.ds_config
             }
         )
+        self._move_ray_read_resource_kwargs(read_kwargs)
         return read_kwargs
+
+    @staticmethod
+    def _move_ray_read_resource_kwargs(read_kwargs: Dict[str, Any]) -> None:
+        resource_kwargs = {}
+        for key in _RAY_READ_RESOURCE_KWARGS:
+            if key in read_kwargs:
+                value = read_kwargs.pop(key)
+                if value is not None:
+                    resource_kwargs[key] = value
+        if not resource_kwargs:
+            return
+
+        ray_remote_args = dict(read_kwargs.get("ray_remote_args") or {})
+        for key, value in resource_kwargs.items():
+            ray_remote_args.setdefault(key, value)
+        read_kwargs["ray_remote_args"] = ray_remote_args
 
     def get_ray_json_read_kwargs(self, load_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         read_kwargs = {
@@ -1189,6 +1274,7 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
             "limit": int,
             "skip_zero_row_group_files": bool,
             "on_bad_files": str,
+            "materialize_after_limit": bool,
         },
         "custom_validators": {
             "path": _validate_hdfs_path_config,
@@ -1262,8 +1348,12 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                     **read_kwargs,
                 )
                 limit = self.ds_config.get("limit")
-                if limit is not None:
-                    dataset = dataset.limit(limit)
+                dataset = _apply_ray_loader_limit(
+                    dataset,
+                    limit,
+                    self.ds_config.get("materialize_after_limit", False),
+                    self.cfg,
+                )
                 return RayDataset(
                     dataset,
                     dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
@@ -1272,17 +1362,33 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
 
             read_kwargs = self.get_ray_parquet_read_kwargs(kwargs)
             skip_zero_row_group_files = self.ds_config.get("skip_zero_row_group_files", True)
+            limit = self.ds_config.get("limit")
+            read_plan_limit = limit
+            if (
+                read_kwargs.get("shuffle") not in (None, False)
+                or read_kwargs.get("partition_filter") is not None
+                or (not skip_zero_row_group_files and on_bad_files != "skip")
+            ):
+                read_plan_limit = None
             if on_bad_files == "skip":
+                read_plan_kwargs = {"skip_bad_files": True}
+                if read_plan_limit is not None:
+                    read_plan_kwargs["limit"] = read_plan_limit
+                    read_plan_kwargs["allow_empty"] = True
                 read_plan = _build_parquet_read_plan_from_filesystem(
                     filesystem,
                     fs_path,
-                    skip_bad_files=True,
+                    **read_plan_kwargs,
                 )
-            elif skip_zero_row_group_files:
+            elif skip_zero_row_group_files or read_plan_limit is not None:
+                read_plan_kwargs = {"filter_for_ray_sampling_only": skip_zero_row_group_files}
+                if read_plan_limit is not None:
+                    read_plan_kwargs["limit"] = read_plan_limit
+                    read_plan_kwargs["allow_empty"] = False
                 read_plan = _build_parquet_read_plan_from_filesystem(
                     filesystem,
                     fs_path,
-                    filter_for_ray_sampling_only=True,
+                    **read_plan_kwargs,
                 )
             else:
                 read_plan = _ParquetReadPlan(paths=fs_path)
@@ -1298,9 +1404,13 @@ class RayHDFSDataLoadStrategy(RayDataLoadStrategy):
                 dataset = ray.data.from_arrow(empty_table, **from_arrow_kwargs)
             else:
                 dataset = ray.data.read_parquet(read_plan.paths, filesystem=filesystem, **read_kwargs)
-            limit = self.ds_config.get("limit")
             if limit is not None:
-                dataset = dataset.limit(limit)
+                dataset = _apply_ray_loader_limit(
+                    dataset,
+                    limit,
+                    self.ds_config.get("materialize_after_limit", False),
+                    self.cfg,
+                )
             return RayDataset(
                 dataset,
                 dataset_path=hdfs_uri[0] if isinstance(hdfs_uri, list) else hdfs_uri,
@@ -1339,6 +1449,7 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
         "limit",
         "skip_zero_row_group_files",
         "on_bad_files",
+        "materialize_after_limit",
         "load_kwargs",
     }
 
@@ -1404,7 +1515,16 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
                 hdfs_config[field] = self.ds_config[field]
         return RayHDFSDataLoadStrategy(hdfs_config, self.cfg).load_data(**kwargs)
 
-    def _load_client_result_records(self) -> list[dict]:
+    def _get_client_result_max_rows(self) -> int:
+        max_result_rows = self.ds_config.get("max_result_rows", 10000)
+        limit = self.ds_config.get("limit")
+        if limit is None:
+            return max_result_rows
+        return min(max_result_rows, limit)
+
+    def _load_client_result_records(self, max_result_rows: int | None = None) -> list[dict]:
+        if max_result_rows is None:
+            max_result_rows = self.ds_config.get("max_result_rows", 10000)
         return run_tqs_query_to_records(
             query=self._get_query(),
             tqs_app_id=self.ds_config["tqs_app_id"],
@@ -1413,7 +1533,7 @@ class TQSQueryLoadMixin(StagedLocalLoadMixin):
             tqs_cluster=self.ds_config.get("tqs_cluster", "cn"),
             tqs_enable_domain=self.ds_config.get("tqs_enable_domain"),
             tqs_timeout=self.ds_config.get("tqs_timeout", 120),
-            max_result_rows=self.ds_config.get("max_result_rows", 10000),
+            max_result_rows=max_result_rows,
         )
 
 
@@ -1449,7 +1569,7 @@ class DefaultTQSDataLoadStrategy(TQSQueryLoadMixin, DefaultStagedRemoteLoadStrat
 
 @DataLoadStrategyRegistry.register("ray", "remote", "tqs")
 class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
-    CONFIG_VALIDATION_RULES = DefaultTQSDataLoadStrategy.CONFIG_VALIDATION_RULES
+    CONFIG_VALIDATION_RULES = _with_ray_loader_limit_validation(DefaultTQSDataLoadStrategy.CONFIG_VALIDATION_RULES)
 
     def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
         return RayDataCheckpointSupport(
@@ -1466,12 +1586,27 @@ class RayTQSDataLoadStrategy(TQSQueryLoadMixin, RayStagedRemoteLoadStrategy):
 
             from data_juicer.core.data.ray_dataset import RayDataset
 
-            return RayDataset(ray.data.from_items(self._load_client_result_records()), cfg=self.cfg)
+            dataset = ray.data.from_items(
+                self._load_client_result_records(max_result_rows=self._get_client_result_max_rows())
+            )
+            dataset = _apply_ray_loader_limit(
+                dataset,
+                self.ds_config.get("limit"),
+                self.ds_config.get("materialize_after_limit", False),
+                self.cfg,
+            )
+            return RayDataset(dataset, cfg=self.cfg)
         if read_mode == self.MATERIALIZED_REMOTE_READ_MODE:
             return self._load_remote_materialized_hdfs_output(self._get_output_uri(), **kwargs)
         kwargs = self.get_load_kwargs(**kwargs)
         staged_path = self._materialize_query_output()
-        return self._load_staged_local_dataset(staged_path, **kwargs)
+        dataset = self._load_staged_local_dataset(staged_path, **kwargs)
+        return _apply_ray_dataset_loader_limit(
+            dataset,
+            self.ds_config.get("limit"),
+            self.ds_config.get("materialize_after_limit", False),
+            self.cfg,
+        )
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "hive")
@@ -1537,9 +1672,12 @@ class RayHiveDataLoadStrategy(RayDataLoadStrategy):
             "override_num_blocks": int,
             "ray_remote_args": dict,
             "arrow_parquet_args": dict,
+            "limit": int,
+            "materialize_after_limit": bool,
         },
         "custom_validators": {
             "columns": _validate_hive_columns_config,
+            "limit": _validate_positive_int,
             **{
                 field: _reject_hive_legacy_field(field)
                 for field in [
@@ -1605,6 +1743,12 @@ class RayHiveDataLoadStrategy(RayDataLoadStrategy):
             read_kwargs["catalog"] = catalog
 
         dataset = read_hive_table(table_name=self.ds_config["table_name"], **read_kwargs)
+        dataset = _apply_ray_loader_limit(
+            dataset,
+            self.ds_config.get("limit"),
+            self.ds_config.get("materialize_after_limit", False),
+            self.cfg,
+        )
         return RayDataset(dataset, cfg=self.cfg)
 
 
@@ -1714,6 +1858,8 @@ class DefaultLarkDataLoadStrategy(LarkDataLoadMixin, DefaultStagedRemoteLoadStra
 
 @DataLoadStrategyRegistry.register("ray", "remote", "lark")
 class RayLarkDataLoadStrategy(LarkDataLoadMixin, StagedLocalLoadMixin, RayDataLoadStrategy):
+    CONFIG_VALIDATION_RULES = _with_ray_loader_limit_validation(LarkDataLoadMixin.CONFIG_VALIDATION_RULES)
+
     def load_data(self, **kwargs):
         kwargs = self.get_load_kwargs(**kwargs)
         staged_path = self._export_lark_csv()
@@ -1725,7 +1871,14 @@ class RayLarkDataLoadStrategy(LarkDataLoadMixin, StagedLocalLoadMixin, RayDataLo
         import ray
         from data_juicer.core.data.ray_dataset import RayDataset
 
-        return RayDataset(ray.data.from_arrow(local_dataset.data.table), dataset_path=staged_path, cfg=self.cfg)
+        dataset = ray.data.from_arrow(local_dataset.data.table)
+        dataset = _apply_ray_loader_limit(
+            dataset,
+            self.ds_config.get("limit"),
+            self.ds_config.get("materialize_after_limit", False),
+            self.cfg,
+        )
+        return RayDataset(dataset, dataset_path=staged_path, cfg=self.cfg)
 
 
 @DataLoadStrategyRegistry.register("default", "remote", "magnus")
@@ -1751,7 +1904,17 @@ class DefaultMagnusDataLoadStrategy(DefaultDataLoadStrategy):
 
 @DataLoadStrategyRegistry.register("ray", "remote", "magnus")
 class RayMagnusDataLoadStrategy(RayDataLoadStrategy):
-    CONFIG_VALIDATION_RULES = DefaultMagnusDataLoadStrategy.CONFIG_VALIDATION_RULES
+    CONFIG_VALIDATION_RULES = _with_ray_loader_limit_validation(
+        {
+            "required_fields": ["table_name"],
+            "field_types": {
+                "table_name": str,
+                "filter": str,
+                "magnus_conf": dict,
+            },
+            "custom_validators": {},
+        }
+    )
 
     def get_ray_data_checkpoint_support(self) -> RayDataCheckpointSupport:
         return RayDataCheckpointSupport(
@@ -1767,5 +1930,11 @@ class RayMagnusDataLoadStrategy(RayDataLoadStrategy):
             self.ds_config["table_name"],
             filter=self.ds_config.get("filter"),
             magnus_conf=self.ds_config.get("magnus_conf", {}),
+        )
+        dataset = _apply_ray_loader_limit(
+            dataset,
+            self.ds_config.get("limit"),
+            self.ds_config.get("materialize_after_limit", False),
+            self.cfg,
         )
         return RayDataset(dataset, cfg=self.cfg)

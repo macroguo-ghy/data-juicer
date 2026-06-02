@@ -398,6 +398,15 @@ class AwemePackUrlMapperTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "qps"):
             AwemePackUrlMapper(qps=0, auto_op_parallelism=False, num_proc=1)
 
+    def test_ray_backend_hook_sets_up_shared_qps_limiter(self):
+        op = AwemePackUrlMapper(qps=100, auto_op_parallelism=False, num_proc=1)
+        setup_calls = []
+        op._rpc_qps_limiter = types.SimpleNamespace(setup_ray_actor=lambda: setup_calls.append("setup"))
+
+        op.prepare_backend_for_ray_tasks()
+
+        self.assertEqual(setup_calls, ["setup"])
+
     def test_empty_uris_do_not_create_rpc_and_batch_processing_adds_urls(self):
         op = AwemePackUrlMapper(auto_op_parallelism=False, num_proc=1)
 

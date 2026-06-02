@@ -228,6 +228,7 @@ dataset:
       filesystem: pyarrow
       columns: ["text", "label"]
       limit: 1000
+      materialize_after_limit: false
       on_bad_files: error
       skip_zero_row_group_files: true
       override_num_blocks: 128
@@ -256,7 +257,8 @@ dataset:
 | `format` | 否 | `parquet` | 支持 `parquet`、`json`、`jsonl` 以及 `.parquet`、`.json`、`.jsonl` 等扩展名写法。读取目录时不会按目录名自动识别格式，省略时仍按 `parquet` 处理。 |
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
-| `limit` | 否 | 无 | Ray HDFS 直读后立即应用 `Dataset.limit(limit)`，用于限制进入后续 process/export 的行数。 |
+| `limit` | 否 | 无 | 限制进入后续 process/export 的行数。Parquet 会先基于文件级 metadata 裁剪到足够覆盖 `limit` 的最短文件列表，再应用 `Dataset.limit(limit)` 精确截断最后一个文件；如果配置了 `shuffle` 或 `partition_filter`，为保持随机化/分区过滤语义，不做预裁剪。JSON/JSONL 无可靠行数 metadata，仅在直读后应用 `Dataset.limit(limit)`。 |
+| `materialize_after_limit` | 否 | `false` | 仅在配置了 `limit` 时生效。开启后会在 `Dataset.limit(limit)` 后立即执行 `materialize()`，把 loader 输出固定为已裁剪后的 Ray Dataset，适合 debug/smoke 或需要释放上游 lineage 的场景。默认关闭以保留 lazy pipeline；`ray_dry_run_plan: true` 时会跳过该物化。 |
 | `on_bad_files` | 否 | `error` | 坏文件处理策略。`error` 保持 fail-fast。Parquet 下，`skip` 会在 Data-Juicer 调用 Ray reader 前预检并跳过 zero-byte、`0 row groups`、metadata 读取失败的文件。JSON/JSONL 下，`skip` 会在 worker 读取时跳过空文件、非法 JSON 文件，以及读到中途才发现非法内容的整文件；该模式是文件级跳过，不做单行容错。如果所有文件都被跳过，则返回空 Ray Dataset。 |
 | `skip_zero_row_group_files` | 否 | `true` | 仅对 Parquet 生效。是否在调用 Ray Parquet reader 前预检 Ray 采样候选文件，并跳过会导致 `row_group_ids=[0]` 采样失败的 `0 row groups` 文件。默认开启；如需完全跳过该预检，可显式设为 `false`。 |
 | `load_kwargs` | 否 | `{}` | 读取参数。 |
@@ -301,10 +303,12 @@ dataset:
 | `tqs_cluster` | 否 | `cn` | client_result 模式 TQS cluster。 |
 | `tqs_enable_domain` | 否 | 无 | client_result 模式 domain 开关。 |
 | `tqs_timeout` | 否 | `120` | client_result 模式超时秒数。 |
+| `limit` | 否 | 无 | Ray 模式支持。限制 loader 输出给下游的数据行数；`client_result` 会同时把 TQS 拉取行数收窄为 `min(max_result_rows, limit)`。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。在应用 `limit` 后立即 `materialize()`，用于释放上游已读数据引用；`ray_dry_run_plan: true` 时会跳过真实 materialize。 |
 
 默认 executor 支持 `materialized` 和 `client_result`；`materialized_remote` 只支持 `executor_type: ray`。Ray 的 `client_result` 会用 `ray.data.from_items` 构造 Ray Dataset；`materialized` 会先落地再走 staged loader；`materialized_remote` 不调用本地 staging/copy，TQS 输出按 Parquet 物化到 HDFS 后由 Ray HDFS loader 读取。
 
-`materialized_remote` 会把以下 HDFS 读取参数转发给 Ray HDFS loader：`filesystem`、`webhdfs`、`columns`、`concurrency`、`override_num_blocks`、`ray_remote_args`、`limit`、`skip_zero_row_group_files`、`on_bad_files`、`load_kwargs`。如需重跑或恢复，请直接把已物化路径配置为 `source: hdfs` / `path: hdfs://...`；`ray_data_checkpoint.enabled: true` 不支持 `source: tqs`。
+`materialized_remote` 会把以下 HDFS 读取参数转发给 Ray HDFS loader：`filesystem`、`webhdfs`、`columns`、`concurrency`、`override_num_blocks`、`ray_remote_args`、`limit`、`materialize_after_limit`、`skip_zero_row_group_files`、`on_bad_files`、`load_kwargs`。如需重跑或恢复，请直接把已物化路径配置为 `source: hdfs` / `path: hdfs://...`；`ray_data_checkpoint.enabled: true` 不支持 `source: tqs`。
 
 ## Hive Loader
 
@@ -339,6 +343,8 @@ dataset:
 | `ray_remote_args` | 否 | 无 | Ray remote 参数。 |
 | `arrow_parquet_args` | 否 | `{}` | 透传给底层 Arrow/Parquet reader 的参数。 |
 | `load_kwargs` | 否 | `{}` | 先合入 read kwargs，再被显式字段覆盖。 |
+| `limit` | 否 | 无 | 读取后对 Ray Dataset 应用 `limit(n)`；不透传给 `read_hive_table`。 |
+| `materialize_after_limit` | 否 | `false` | 应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 明确不再支持的旧字段：`sql`、`table`、`output_uri`、`tqs_output_uri`、`read_mode`、`max_result_rows`、`tqs_app_id`、`tqs_app_key`、`user_name`、`tqs_cluster`、`tqs_enable_domain`、`tqs_timeout`、`catalog`、`cast_columns`。
 
@@ -389,6 +395,8 @@ dataset:
 | `file_extension` | 否 | `csv` | 当前只支持 `csv`。 |
 | `document_type` | 否 | `sheet` | 当前只支持 `sheet`。 |
 | `wait_export_time_seconds` | 否 | `60` | 等待 Drive 导出任务完成的最长秒数。 |
+| `limit` | 否 | 无 | Ray 模式支持。Lark 仍会先导出/读取到本地暂存 CSV，再对构造出的 Ray Dataset 应用 `limit(n)`。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 读取行为：
 
@@ -423,6 +431,8 @@ dataset:
 | `table_name` | 是 | 无 | Magnus 表名。 |
 | `filter` | 否 | 无 | 下推过滤条件。 |
 | `magnus_conf` | 否 | `{}` | 传给 Magnus/PyIceberg 的配置。 |
+| `limit` | 否 | 无 | Ray 模式支持。读取为 Ray Dataset 后应用 `limit(n)`；不会作为 Magnus/PyIceberg SDK 原生参数下传。 |
+| `materialize_after_limit` | 否 | `false` | Ray 模式支持。应用 `limit` 后立即 `materialize()`；`ray_dry_run_plan: true` 时跳过。 |
 
 默认模式会读成 pandas 再转 HuggingFace Dataset；Ray 模式会读成 Ray Dataset。
 
@@ -447,7 +457,7 @@ dataset:
 ```yaml
 export_path: ./outputs/result.jsonl
 export_type: jsonl
-export_shard_size: 0
+export_shard_size: 0  # 废弃且禁用；保留 0 作为兼容占位
 export_in_parallel: false
 export_extra_args: {}
 export_aws_credentials: null
@@ -480,7 +490,7 @@ export:
 | `max_rows` | 无 | `null` | 控制传给导出 sink 的行数，必须是正整数。 |
 | `max_rows_mode` | 无 | `limit` | `limit`：默认实现，导出行数不超过 `max_rows`，Ray 模式会在写入前应用 `Dataset.limit(max_rows)` 并尽量保留 lazy limit 下推能力。`quota_reservation`：Ray-only，按 pyarrow batch 整批放行直到至少达到 `max_rows`，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 `max_rows`。 |
 | `max_rows_quota_batch_size` | 无 | 算子默认 batch size | 仅 `max_rows_mode: quota_reservation` 生效。batch 越大，actor 调用越少，但超出 `max_rows` 的行数可能越多。 |
-| `shard_size` | `export_shard_size` | `0` | 废弃字段。旧式本地文件导出仍可识别；新配置不要继续使用。Ray HDFS 分布式导出不支持该字段，需要控制文件大小或行数时使用目标 sink 的 `extra_args`。 |
+| `shard_size` | `export_shard_size` | `0` | 废弃且禁用字段。`export.shard_size` / `export.export_shard_size` 会被配置层拒绝；顶层 `export_shard_size` 只允许保留默认 `0` 作为兼容占位。需要控制文件数或行数时使用目标 sink 的 `extra_args`，例如 `min_rows_per_file` / `num_rows_per_file`。 |
 | `extra_args` | `export_extra_args` | `{}` | 传给底层导出函数的额外参数。 |
 | `aws_credentials` | `export_aws_credentials` | `{}` | S3 导出凭证。 |
 

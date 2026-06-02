@@ -309,22 +309,40 @@ class DownloadFileMapperTest(DataJuicerTestCaseBase):
             "data_juicer.ops.mapper.io.download_file_mapper.emit_download_bytes"
         ) as emit_bytes, patch(
             "data_juicer.ops.mapper.io.download_file_mapper.emit_download_latency_ms"
-        ) as emit_latency:
+        ) as emit_latency, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.record_runtime_operation_counts"
+        ) as record_counts:
             results = op.download_files_async(
                 ["http://example.com/ok.png", "http://example.com/failed.png"],
                 [True, True],
             )
+            save_field_contents, reconstructed_path, failed_count, failed_summary = op.download_nested_urls(
+                [["http://example.com/ok.png"], ["http://example.com/failed.png"]],
+                save_field_contents=[[None], [None]],
+            )
 
         self.assertEqual([result[2] for result in results], ["success", "failed"])
-        self.assertEqual([call.kwargs["status"] for call in emit_qps.call_args_list], ["success", "failed"])
+        self.assertEqual([call.kwargs["status"] for call in emit_qps.call_args_list], ["success", "failed"] * 2)
         self.assertTrue(all(call.kwargs["op_name"] == "download_file_mapper" for call in emit_qps.call_args_list))
         self.assertTrue(all(call.kwargs["scheme"] == "http" for call in emit_qps.call_args_list))
         self.assertTrue(all(call.kwargs["save_mode"] == "memory" for call in emit_qps.call_args_list))
-        self.assertEqual(emit_bytes.call_count, 1)
-        self.assertEqual(emit_bytes.call_args.kwargs["byte_count"], len(b"image-bytes"))
-        self.assertEqual(emit_latency.call_count, 2)
+        self.assertEqual(emit_bytes.call_count, 2)
+        self.assertTrue(all(call.kwargs["byte_count"] == len(b"image-bytes") for call in emit_bytes.call_args_list))
+        self.assertEqual(emit_latency.call_count, 4)
         for call in emit_qps.call_args_list + emit_bytes.call_args_list + emit_latency.call_args_list:
             self.assertNotIn("url", call.kwargs)
+
+        self.assertEqual(failed_count, 1)
+        self.assertIsNone(reconstructed_path)
+        self.assertEqual(len(save_field_contents), 2)
+        self.assertTrue(failed_summary)
+        record_counts.assert_called_once_with(
+            "download",
+            op_name="download_file_mapper",
+            total=2,
+            success=1,
+            failed=1,
+        )
 
     def test_failed_download_logs_are_aggregated_per_worker(self):
         async def failing_download(*args, **kwargs):
