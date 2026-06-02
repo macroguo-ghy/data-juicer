@@ -86,7 +86,7 @@ class DerivedInputParameterContextMapperTest(unittest.TestCase):
 
     def test_declares_operator_metadata(self):
         self.assertEqual(OP_NAME, "derived_input_parameter_context_mapper")
-        self.assertEqual(OP_DISPLAY_NAME, "派生字段入参上下文")
+        self.assertEqual(OP_DISPLAY_NAME, "生成派生字段入参元信息")
         self.assertEqual(CONFIG_PAGE_KEY, "derived_input_parameter_context_builder")
         self.assertEqual(NEED_CTX, True)
         self.assertEqual(
