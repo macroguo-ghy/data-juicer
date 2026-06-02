@@ -108,7 +108,9 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
             field_key="comment_id",
             batch_size=17,
             auto_op_parallelism=False,
-            num_proc=1,
+            num_proc=7,
+            num_cpus=0.5,
+            runtime_env={"env_vars": {"DJ_TEST": "1"}},
         )
         backend = _PreparedLocalBackend()
         op.backend = backend
@@ -118,6 +120,11 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         self.assertTrue(backend.prepared)
         self.assertEqual(dataset.kwargs["batch_format"], "pyarrow")
         self.assertEqual(dataset.kwargs["batch_size"], 17)
+        self.assertIsNotNone(dataset.kwargs["compute"])
+        self.assertEqual(getattr(dataset.kwargs["compute"], "size", None), 7)
+        self.assertEqual(dataset.kwargs["num_cpus"], 0.5)
+        self.assertIsNone(dataset.kwargs["num_gpus"])
+        self.assertEqual(dataset.kwargs["runtime_env"], {"env_vars": {"DJ_TEST": "1"}})
 
     def test_run_supports_nested_dataset_with_local_seen_set(self):
         op = RayFieldDedupPipeline(
