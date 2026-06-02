@@ -156,10 +156,41 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
         self.assertFalse(transformer._apply_op(ast.Gt(), 1, None))
 
     def test_compare_operator_table_treats_none_operands_as_false(self):
-        compare = ExpressionTransformer._COMPARE_OPERATORS[ast.Gt]
+        operators = [
+            ast.Gt,
+            ast.Lt,
+            ast.Eq,
+            ast.NotEq,
+            ast.GtE,
+            ast.LtE,
+        ]
+        null_operands = [
+            (None, 0),
+            (1, None),
+            (pa.scalar(None, type=pa.int64()), 0),
+            (1, pa.scalar(None, type=pa.int64())),
+        ]
 
-        self.assertFalse(compare(None, 0))
-        self.assertFalse(compare(1, None))
+        for op_type in operators:
+            compare = ExpressionTransformer._COMPARE_OPERATORS[op_type]
+            for left, right in null_operands:
+                with self.subTest(op_type=op_type.__name__, left=left, right=right):
+                    self.assertFalse(compare(left, right))
+
+    def test_compare_operator_table_handles_non_null_arrow_scalars(self):
+        cases = [
+            (ast.Gt, pa.scalar(2, type=pa.int64()), pa.scalar(1, type=pa.int64()), True),
+            (ast.Lt, pa.scalar(1, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.Eq, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.NotEq, pa.scalar(2, type=pa.int64()), pa.scalar(1, type=pa.int64()), True),
+            (ast.GtE, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.LtE, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+        ]
+
+        for op_type, left, right, expected in cases:
+            compare = ExpressionTransformer._COMPARE_OPERATORS[op_type]
+            with self.subTest(op_type=op_type.__name__):
+                self.assertEqual(compare(left, right), expected)
 
 
 if __name__ == '__main__':

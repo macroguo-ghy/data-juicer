@@ -371,6 +371,22 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             rows.extend(pq.read_table(path).to_pylist())
         return sorted(rows, key=lambda row: row["id"])
 
+    def test_filter_table_for_target_treats_nullable_arrow_count_as_nonmatch(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[self._target("/unused", export_type="parquet", condition="valid_video_count > 0")],
+            columns=["id", "valid_video_count"],
+        )
+        table = pa.table(
+            {
+                "id": pa.array(["null", "zero", "keep"], type=pa.string()),
+                "valid_video_count": pa.array([None, 0, 1], type=pa.int64()),
+            }
+        )
+
+        output = datasink._filter_table_for_target(table, datasink.targets[0])
+
+        self.assertEqual(output.to_pylist(), [{"id": "keep", "valid_video_count": 1}])
+
     def test_fanout_parquet_writes_matching_rows_to_each_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_a = os.path.join(tmp_dir, "a")

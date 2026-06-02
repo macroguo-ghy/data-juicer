@@ -1,6 +1,9 @@
 import os
 import importlib.util
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
@@ -374,6 +377,75 @@ class RayDatasetImportTest(unittest.TestCase):
         )
         self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "valid_video_count": 1}])
         self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
+    def test_process_stateless_non_stats_filter_handles_nullable_arrow_rows(self):
+        import pyarrow as pa
+        import ray
+
+        with tempfile.TemporaryDirectory() as av_stub_dir:
+            Path(av_stub_dir, "av.py").write_text(
+                "class _Logging:\n"
+                "    PANIC = 0\n"
+                "    def set_level(self, *args, **kwargs):\n"
+                "        pass\n"
+                "logging = _Logging()\n"
+                "class _Container:\n"
+                "    class InputContainer:\n"
+                "        pass\n"
+                "container = _Container()\n",
+                encoding="utf-8",
+            )
+            pythonpath_parts = [av_stub_dir, os.getcwd()]
+            if os.environ.get("PYTHONPATH"):
+                pythonpath_parts.append(os.environ["PYTHONPATH"])
+            pythonpath = os.pathsep.join(pythonpath_parts)
+            sys.path.insert(0, av_stub_dir)
+
+            from data_juicer.core.data.ray_dataset import RayDataset
+            from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+            from data_juicer.utils.constant import Fields
+
+            started_ray = False
+            if not ray.is_initialized():
+                ray.init(
+                    num_cpus=2,
+                    include_dashboard=False,
+                    ignore_reinit_error=True,
+                    runtime_env={"env_vars": {"PYTHONPATH": pythonpath}},
+                )
+                started_ray = True
+            try:
+                table = pa.table(
+                    {
+                        "id": pa.array(["null", "drop", "keep"], type=pa.string()),
+                        "valid_video_count": pa.array([None, 0, 1], type=pa.int64()),
+                    }
+                )
+                ray_dataset = RayDataset.__new__(RayDataset)
+                ray_dataset.cfg = SimpleNamespace(
+                    dataset={"configs": [{"columns": ["id", "valid_video_count"]}]}
+                )
+                ray_dataset.data = ray.data.from_arrow(table)
+                ray_dataset._auto_proc = False
+                ray_dataset._cached_row_count = None
+                ray_dataset._row_count_getter = None
+
+                ray_dataset.process(
+                    StatelessFieldFilter(
+                        filter_condition="valid_video_count > 0",
+                        auto_op_parallelism=False,
+                    )
+                )
+
+                rows = ray_dataset.data.take_all()
+
+                self.assertEqual(rows, [{"id": "keep", "valid_video_count": 1}])
+                self.assertNotIn(Fields.stats, rows[0])
+            finally:
+                if started_ray:
+                    ray.shutdown()
+                if av_stub_dir in sys.path:
+                    sys.path.remove(av_stub_dir)
 
     def test_process_batched_non_stats_filter_uses_single_filter_batch(self):
         import pyarrow as pa

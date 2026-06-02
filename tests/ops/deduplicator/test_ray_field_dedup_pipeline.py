@@ -183,10 +183,10 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         op.backend = backend
         table = pa.table(
             {
-                "id": pa.array(["a", "b", "long", "invalid", "c"], type=pa.string()),
-                "md5": pa.array(["same", "same", "same", "same", "other"], type=pa.string()),
-                "item_duration": pa.array([10, 10, 90, 10, 10], type=pa.int64()),
-                "valid_video_count": pa.array([1, 1, 1, 0, 1], type=pa.int64()),
+                "id": pa.array(["a", "b", "long", "invalid", "null_count", "c"], type=pa.string()),
+                "md5": pa.array(["same", "same", "same", "same", "same", "other"], type=pa.string()),
+                "item_duration": pa.array([10, 10, 90, 10, 10, 10], type=pa.int64()),
+                "valid_video_count": pa.array([1, 1, 1, 0, None, 1], type=pa.int64()),
             }
         )
 
@@ -195,7 +195,7 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         ) as emit_mock:
             output = op.process_batched(table)
 
-        self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "c"])
+        self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "null_count", "c"])
         self.assertEqual(len(backend.calls), 1)
         self.assertEqual(backend.calls[0][1], ["a", "b", "c"])
         self.assertEqual(

@@ -256,6 +256,19 @@ class BytesExactDedupMapperTest(unittest.TestCase):
 
         self.assertEqual(output, row)
 
+    def test_condition_with_null_valid_count_leaves_row_unchanged(self):
+        row = {"valid_video_count": None, "urls": ["u1"], "videos": [b"a"], "md5": "old"}
+
+        output = BytesExactDedupMapper(
+            condition="valid_video_count > 0",
+            url_key="urls",
+            bytes_key="videos",
+            md5_key="md5",
+            valid_count_key="valid_video_count",
+        ).process_single(dict(row))
+
+        self.assertEqual(output, row)
+
     def test_arrow_batch_keeps_binary_list_schema(self):
         table = pa.Table.from_pylist(
             [{"item_duration": 1, "urls": ["u"], "videos": [b"a"], "md5": None, "valid_video_count": 0}],
