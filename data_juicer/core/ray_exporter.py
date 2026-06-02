@@ -280,6 +280,8 @@ class _FanoutRollingParquetWriter:
 class RayHdfsFanoutDatasink(Datasink):
     """A Ray datasink that writes one input dataset to multiple file sinks."""
 
+    _DEFAULT_COMPACT_MIN_ROWS_PER_WRITE = 1024
+
     def __init__(self, *, targets, columns=None):
         self.targets = []
         self.columns = columns
@@ -302,10 +304,15 @@ class RayHdfsFanoutDatasink(Datasink):
                     "created_dir": False,
                 }
             )
+        self._min_rows_per_write = self._resolve_min_rows_per_write()
 
     @property
     def supports_distributed_writes(self) -> bool:
         return True
+
+    @property
+    def min_rows_per_write(self) -> int | None:
+        return self._min_rows_per_write
 
     def get_name(self) -> str:
         return "FileFanout"
@@ -479,11 +486,24 @@ class RayHdfsFanoutDatasink(Datasink):
     def _stats_key(self, *parts) -> str:
         return ".".join(["fanout", self.write_uuid, *(str(part) for part in parts)])
 
-    @staticmethod
-    def _parse_compact_config(extra_args, export_type, target_index: int) -> dict:
+    def _resolve_min_rows_per_write(self) -> int | None:
+        min_rows_values = [
+            target["compact"]["min_rows_per_write"] for target in self.targets if self._compact_enabled(target)
+        ]
+        if not min_rows_values:
+            return None
+        if len(set(min_rows_values)) != 1:
+            raise ValueError(
+                "`export.targets[].extra_args.compact.min_rows_per_write` must be the same "
+                "for all compact fan-out targets because Ray uses one bundle threshold per datasink."
+            )
+        return min_rows_values[0]
+
+    @classmethod
+    def _parse_compact_config(cls, extra_args, export_type, target_index: int) -> dict:
         compact = extra_args.pop("compact", None)
         if compact is None:
-            return {"enabled": False, "target_bytes_per_file": None}
+            return {"enabled": False, "target_bytes_per_file": None, "min_rows_per_write": None}
         if not isinstance(compact, dict):
             raise ValueError(
                 "`export.targets[].extra_args.compact` must be a mapping "
@@ -512,7 +532,23 @@ class RayHdfsFanoutDatasink(Datasink):
                 "`export.targets[].extra_args.compact.target_bytes_per_file` must be a positive integer "
                 f"for fan-out target index {target_index}."
             )
-        return {"enabled": enabled, "target_bytes_per_file": target_bytes}
+
+        default_min_rows = cls._DEFAULT_COMPACT_MIN_ROWS_PER_WRITE if enabled else None
+        min_rows_per_write = compact.get("min_rows_per_write", default_min_rows)
+        if min_rows_per_write is not None and (
+            isinstance(min_rows_per_write, bool)
+            or not isinstance(min_rows_per_write, int)
+            or min_rows_per_write <= 0
+        ):
+            raise ValueError(
+                "`export.targets[].extra_args.compact.min_rows_per_write` must be a positive integer "
+                f"for fan-out target index {target_index}."
+            )
+        return {
+            "enabled": enabled,
+            "target_bytes_per_file": target_bytes,
+            "min_rows_per_write": min_rows_per_write,
+        }
 
     @staticmethod
     def _compact_enabled(target) -> bool:
