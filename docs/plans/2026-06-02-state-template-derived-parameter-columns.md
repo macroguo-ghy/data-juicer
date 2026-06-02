@@ -56,7 +56,7 @@ Create ADC business mapper:
 
 ```python
 OP_NAME = "derived_input_parameter_context_mapper"
-OP_DISPLAY_NAME = "派生字段入参上下文"
+OP_DISPLAY_NAME = "生成派生字段入参元信息"
 CONFIG_PAGE_KEY = "derived_input_parameter_context_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
@@ -271,7 +271,7 @@ Create mapper with constants:
 
 ```python
 OP_NAME = "derived_input_parameter_context_mapper"
-OP_DISPLAY_NAME = "派生字段入参上下文"
+OP_DISPLAY_NAME = "生成派生字段入参元信息"
 CONFIG_PAGE_KEY = "derived_input_parameter_context_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"

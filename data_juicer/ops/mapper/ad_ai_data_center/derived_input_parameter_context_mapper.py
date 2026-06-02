@@ -17,7 +17,7 @@ from data_juicer.utils.operator_execution_callback_utils import (
 )
 
 OP_NAME = "derived_input_parameter_context_mapper"
-OP_DISPLAY_NAME = "派生字段入参上下文"
+OP_DISPLAY_NAME = "生成派生字段入参元信息"
 CONFIG_PAGE_KEY = "derived_input_parameter_context_builder"
 NEED_CTX = True
 OPERATOR_TAG = "business_operator"
