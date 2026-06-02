@@ -1,9 +1,14 @@
+import ast
 import unittest
 
 import pyarrow as pa
 
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter, compile_filter_condition
+from data_juicer.ops.filter.general_field_filter import (
+    ExpressionTransformer,
+    GeneralFieldFilter,
+    compile_filter_condition,
+)
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
@@ -143,6 +148,12 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
                 "valid_video_count": pa.scalar(1, type=pa.int64()),
             })
         )
+
+    def test_compare_operator_treats_none_operands_as_false(self):
+        transformer = ExpressionTransformer({})
+
+        self.assertFalse(transformer._apply_op(ast.Gt(), None, 0))
+        self.assertFalse(transformer._apply_op(ast.Gt(), 1, None))
 
 
 if __name__ == '__main__':

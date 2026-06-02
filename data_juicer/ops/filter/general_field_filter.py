@@ -111,6 +111,10 @@ class ExpressionTransformer(ast.NodeVisitor):
         return result
 
     def _apply_op(self, op: ast.AST, left: Any, right: Any) -> bool:
+        left = self._normalize_value(left)
+        right = self._normalize_value(right)
+        if left is None or right is None:
+            return False
         op_type = type(op)
         if op_type in self._COMPARE_OPERATORS:
             return self._COMPARE_OPERATORS[op_type](left, right)
