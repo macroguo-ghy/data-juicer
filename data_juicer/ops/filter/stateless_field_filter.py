@@ -26,4 +26,9 @@ class StatelessFieldFilter(Filter):
         return sample
 
     def process_single(self, sample: Dict) -> bool:
-        return self.condition.matches(sample)
+        try:
+            return self.condition.matches(sample)
+        except Exception:
+            if self.skip_op_error:
+                return False
+            raise

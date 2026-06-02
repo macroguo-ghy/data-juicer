@@ -303,11 +303,14 @@ class RayDatasetImportTest(unittest.TestCase):
         self.assertEqual(events, ["map_batches"])
 
     def test_process_stateless_non_stats_filter_skips_stats_phase(self):
+        from unittest.mock import patch
+
         from data_juicer.core.data.ray_dataset import RayDataset
         from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
         from data_juicer.utils.constant import Fields
 
         events = []
+        compute_calls = []
 
         class FakeRayData:
             def __init__(self):
@@ -324,9 +327,13 @@ class RayDatasetImportTest(unittest.TestCase):
                 return self
 
             def filter(self, filter_func, **kwargs):
-                events.append(("filter", getattr(filter_func, "__name__", repr(filter_func))))
+                events.append(("filter", getattr(filter_func, "__name__", repr(filter_func)), kwargs))
                 self.rows = [row for row in self.rows if filter_func(row)]
                 return self
+
+        def fake_get_compute_strategy(fn, concurrency):
+            compute_calls.append((getattr(fn, "__name__", repr(fn)), concurrency))
+            return "direct-filter-compute"
 
         ray_dataset = RayDataset.__new__(RayDataset)
         ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "valid_video_count"]}]})
@@ -335,25 +342,49 @@ class RayDatasetImportTest(unittest.TestCase):
         ray_dataset._cached_row_count = None
         ray_dataset._row_count_getter = None
 
-        ray_dataset.process(
-            StatelessFieldFilter(
-                filter_condition="valid_video_count > 0",
-                auto_op_parallelism=False,
+        with patch(
+            "data_juicer.core.data.ray_dataset.get_compute_strategy",
+            side_effect=fake_get_compute_strategy,
+        ):
+            ray_dataset.process(
+                StatelessFieldFilter(
+                    filter_condition="valid_video_count > 0",
+                    num_proc=8,
+                    num_cpus=0.25,
+                    num_gpus=0.5,
+                    auto_op_parallelism=False,
+                )
             )
-        )
 
-        self.assertEqual(events, [("filter", "process_single")])
+        self.assertEqual(compute_calls, [("process_single", 8)])
+        self.assertEqual(
+            events,
+            [
+                (
+                    "filter",
+                    "process_single",
+                    {
+                        "compute": "direct-filter-compute",
+                        "num_cpus": 0.25,
+                        "num_gpus": 0.5,
+                        "runtime_env": None,
+                    },
+                )
+            ],
+        )
         self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "valid_video_count": 1}])
         self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
 
     def test_process_batched_non_stats_filter_uses_single_filter_batch(self):
         import pyarrow as pa
+        from unittest.mock import patch
 
         from data_juicer.core.data.ray_dataset import RayDataset
         from data_juicer.ops.filter.specified_field_non_empty_filter import SpecifiedFieldNonEmptyFilter
         from data_juicer.utils.constant import Fields
 
         events = []
+        compute_calls = []
 
         class FakeRayData:
             def __init__(self):
@@ -366,7 +397,7 @@ class RayDatasetImportTest(unittest.TestCase):
                 return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "ocr_result"]))
 
             def map_batches(self, batch_func, *args, **kwargs):
-                events.append(("map_batches", kwargs.get("batch_size")))
+                events.append(("map_batches", kwargs))
                 output = batch_func(pa.Table.from_pylist(self.rows))
                 self.rows = output.to_pylist()
                 return self
@@ -375,6 +406,10 @@ class RayDatasetImportTest(unittest.TestCase):
                 events.append(("filter", None))
                 return self
 
+        def fake_get_compute_strategy(fn, concurrency):
+            compute_calls.append((callable(fn), concurrency))
+            return "direct-batch-filter-compute"
+
         ray_dataset = RayDataset.__new__(RayDataset)
         ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "ocr_result"]}]})
         ray_dataset.data = FakeRayData()
@@ -382,15 +417,46 @@ class RayDatasetImportTest(unittest.TestCase):
         ray_dataset._cached_row_count = None
         ray_dataset._row_count_getter = None
 
-        ray_dataset.process(
-            SpecifiedFieldNonEmptyFilter(
-                field_key="ocr_result",
-                batch_size=2,
-                auto_op_parallelism=False,
+        with patch(
+            "data_juicer.core.data.ray_dataset.get_compute_strategy",
+            side_effect=fake_get_compute_strategy,
+        ):
+            ray_dataset.process(
+                SpecifiedFieldNonEmptyFilter(
+                    field_key="ocr_result",
+                    batch_size=2,
+                    num_proc=4,
+                    num_cpus=0.25,
+                    num_gpus=0.5,
+                    auto_op_parallelism=False,
+                )
             )
+
+        self.assertEqual(compute_calls, [(True, 4)])
+        self.assertEqual(len(events), 1)
+        event_name, event_kwargs = events[0]
+        self.assertEqual(event_name, "map_batches")
+        self.assertEqual(
+            {
+                "batch_format": event_kwargs["batch_format"],
+                "zero_copy_batch": event_kwargs["zero_copy_batch"],
+                "batch_size": event_kwargs["batch_size"],
+                "compute": event_kwargs["compute"],
+                "num_cpus": event_kwargs["num_cpus"],
+                "num_gpus": event_kwargs["num_gpus"],
+                "runtime_env": event_kwargs["runtime_env"],
+            },
+            {
+                "batch_format": "pyarrow",
+                "zero_copy_batch": True,
+                "batch_size": 2,
+                "compute": "direct-batch-filter-compute",
+                "num_cpus": 0.25,
+                "num_gpus": 0.5,
+                "runtime_env": None,
+            },
         )
 
-        self.assertEqual(events, [("map_batches", 2)])
         self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "ocr_result": ["ocr-json"]}])
         self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
 

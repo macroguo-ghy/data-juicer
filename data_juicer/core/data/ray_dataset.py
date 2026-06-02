@@ -660,18 +660,36 @@ class RayDataset(DJDataset):
                     if op.is_batched_op():
                         # Stats filters have computed stats above. Direct non-stats filters
                         # return their keep mask here without a prior compute_stats stage.
-                        # cpu and parallelism are not set here
+                        # Keep stats-filter post-processing cheap; apply resources only when
+                        # this is the direct filter execution stage.
+                        filter_func = partial(filter_batch, filter_func=op.process)
+                        filter_kwargs = {}
+                        if direct_non_stats_filter:
+                            filter_kwargs = {
+                                "compute": get_compute_strategy(filter_func, concurrency=op.num_proc),
+                                "num_cpus": op.num_cpus,
+                                "num_gpus": op.num_gpus,
+                            }
                         self.data = self.data.map_batches(
-                            partial(filter_batch, filter_func=op.process),
+                            filter_func,
                             batch_format="pyarrow",
                             zero_copy_batch=True,
                             batch_size=batch_size if direct_non_stats_filter else DEFAULT_BATCH_SIZE,
                             runtime_env=op.runtime_env,
+                            **filter_kwargs,
                         )
                     else:
+                        filter_kwargs = {}
+                        if direct_non_stats_filter:
+                            filter_kwargs = {
+                                "compute": get_compute_strategy(op.process, concurrency=op.num_proc),
+                                "num_cpus": op.num_cpus,
+                                "num_gpus": op.num_gpus,
+                            }
                         self.data = self.data.filter(
                             op.process,
                             runtime_env=op.runtime_env,
+                            **filter_kwargs,
                         )
                 finally:
                     # Restore original process method

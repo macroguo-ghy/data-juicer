@@ -47,6 +47,19 @@ class StatelessFieldFilterTest(DataJuicerTestCaseBase):
 
         self.assertFalse(op.process_single(sample))
 
+    def test_skip_op_error_drops_condition_errors(self):
+        sample = {"id": "bad", "valid_video_count": "1"}
+
+        with self.assertRaises(TypeError):
+            StatelessFieldFilter(filter_condition="valid_video_count > 0").process(sample)
+
+        op = StatelessFieldFilter(
+            filter_condition="valid_video_count > 0",
+            skip_op_error=True,
+        )
+
+        self.assertFalse(op.process(sample))
+
 
 if __name__ == "__main__":
     unittest.main()
