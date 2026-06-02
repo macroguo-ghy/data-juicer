@@ -205,7 +205,7 @@ process:
         }])
         self.assertEqual(
             result["unknown_id"],
-            "未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
+            "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
         )
         self.assertEqual(result["text"], "row")
         self.mock_callback.report_record_success.assert_called_once_with(
@@ -251,7 +251,7 @@ process:
 
         mock_client_cls.assert_called_once()
         self.assertEqual(len(fake_client.requests), 1)
-        self.assertEqual(result[0]["unknown_id"], "未知ID：可能表示广告、广告主或素材 ID。")
+        self.assertEqual(result[0]["unknown_id"], "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。")
         self.assertEqual(result[1]["unknown_id"], result[0]["unknown_id"])
 
     def test_formats_parameter_description_with_optional_parts(self):
@@ -264,7 +264,7 @@ process:
                 "demoValue": "1837647382987362",
                 "multiValue": True,
             }),
-            "未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
+            "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
         )
 
     def test_build_parameter_columns_rejects_duplicate_key_name_en(self):
@@ -336,7 +336,7 @@ process:
             },
         ])
 
-        self.assertEqual(columns, {"unknown_id": "未知ID：描述A。"})
+        self.assertEqual(columns, {"unknown_id": "请填写具体内容。填写说明：未知ID：描述A。"})
         mock_logger.warning.assert_called_once()
 
     @patch(
@@ -431,7 +431,7 @@ process:
 
         result = op.process_single({"text": "row"})
 
-        self.assertEqual(result["unknown_id"], "未知ID：可能表示广告、广告主或素材 ID。")
+        self.assertEqual(result["unknown_id"], "请填写具体内容。填写说明：未知ID：可能表示广告、广告主或素材 ID。")
         self.mock_callback.report_record_success.assert_not_called()
         self.assertEqual(mock_logger.warning.call_count, 1)
         message, exc = mock_logger.warning.call_args.args
