@@ -1,12 +1,12 @@
-# State Template Selected Parameter Columns Implementation Plan
+# Derived Input Parameter Context Mapper Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Extend `state_template_mapper` so it can optionally add selected derived-field input parameter description columns into each sample for downstream LLM prompts.
+**Goal:** Add `derived_input_parameter_context_mapper`, an ADC business mapper that writes selected derived-field input parameter descriptions into each sample for downstream LLM prompts.
 
-**Architecture:** Keep the existing state template generation path unchanged: `/openapi/state-meta/generate-json` still produces the `state_template` string and remains cached per mapper instance. Add an optional second metadata fetch controlled by selected input parameter key IDs; when configured, the mapper calls `/openapi/state-meta/input-keys/batch-get`, formats each returned `inputParameterDetails` item into prompt-ready text, and writes those texts directly into `sample` using `keyNameEn` as the column name.
+**Architecture:** Keep `state_template_mapper` focused on state template generation only. Introduce a separate mapper that calls `POST /openapi/state-meta/input-keys/batch-get`, formats returned `inputParameterDetails` records into prompt-ready strings, caches the formatted columns per mapper instance, and writes them into the sample using `keyNameEn` as the output column name.
 
-**Critical Assumptions & Early Checks:** Backend will add `POST /openapi/state-meta/input-keys/batch-get` and return `inputParameterDetails` with at least `keyId`, `keyNameEn`, `keyNameCn`, `keyType`, `description`, `demoValue`, `multiValue`, `dataType`, and `defaultOrPlaceholderValue`. Confirm the request and response envelope before implementation. Existing `state_template_mapper` behavior must remain unchanged when `emit_derived_parameter_columns` is false or omitted.
+**Critical Assumptions & Early Checks:** Backend will add `POST /openapi/state-meta/input-keys/batch-get` and return `inputParameterDetails` with at least `keyId`, `keyNameEn`, `keyNameCn`, `keyType`, `description`, `demoValue`, `multiValue`, `dataType`, and `defaultOrPlaceholderValue`. Confirm the request and response envelope before implementation. Existing `state_template_mapper` behavior must remain unchanged.
 
 **Tech Stack:** Python 3, Data-Juicer `Mapper`, ADC `HttpClient`, ADC OpenAPI, unittest, Ray/HF Dataset mapper behavior.
 
@@ -14,13 +14,7 @@
 
 ## Requirement Summary
 
-The State template node currently writes one field:
-
-```python
-sample[output_field] = state_template
-```
-
-The new optional capability writes additional top-level sample fields selected by input parameter `keyId`:
+The new mapper enriches the current sample with prompt context columns selected by input parameter `keyId`:
 
 ```python
 sample["unknown_id"] = "未知ID：可能表示广告、广告主或素材 ID，需要结合上游数据判断。示例：1837647382987362。支持多值。"
@@ -28,11 +22,9 @@ sample["startDate"] = "开始日期：查询开始日期。示例：2026-05-01�
 sample["endDate"] = "结束日期：查询结束日期。示例：2026-05-14。"
 ```
 
-These fields are not metric results and are not state template fields. They are prompt context fields that explain the input parameters required by selected derived fields.
+These fields are not metric results, not state template fields, and not derived-field calculation outputs. They are prompt context fields that explain the input parameters required by selected derived fields.
 
-## Public Configuration
-
-Add constructor/YAML parameters:
+Recommended pipeline:
 
 ```yaml
 process:
@@ -42,8 +34,40 @@ process:
           - 101
           - 102
       output_field: state_template
-      emit_derived_parameter_columns: true
-      derived_parameter_key_ids:
+      ctx: ${ctx}
+
+  - derived_input_parameter_context_mapper:
+      input_key_ids:
+        - 8
+        - 12
+        - 13
+      ctx: ${ctx}
+
+  - llm_state_generator:
+      user_prompt: |
+        State 模板：{{ state_template }}
+        ID 入参说明：{{ unknown_id }}
+        开始时间说明：{{ startDate }}
+```
+
+## Operator Contract
+
+Create ADC business mapper:
+
+```python
+OP_NAME = "derived_input_parameter_context_mapper"
+OP_DISPLAY_NAME = "派生字段入参上下文"
+CONFIG_PAGE_KEY = "derived_input_parameter_context_builder"
+NEED_CTX = True
+OPERATOR_TAG = "business_operator"
+```
+
+Constructor/YAML parameters:
+
+```yaml
+process:
+  - derived_input_parameter_context_mapper:
+      input_key_ids:
         - 8
         - 12
         - 13
@@ -57,16 +81,15 @@ Parameter semantics:
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `emit_derived_parameter_columns` | `bool` | `False` | Whether to write selected input-parameter description columns into `sample`. |
-| `derived_parameter_key_ids` | `list[int]` or `None` | `None` | Input parameter key IDs selected by the user. Each key ID maps to one backend input key metadata record. |
+| `input_key_ids` | `list[int]` | required | Input parameter key IDs selected by the user. Each key ID maps to one backend input key metadata record. |
+| `ctx` | `dict` or `None` | `None` | ADC context. Required for this mapper because it must call the metadata API. |
 
 Rules:
 
-- If `emit_derived_parameter_columns=false`, ignore `derived_parameter_key_ids` and preserve old behavior.
-- If `emit_derived_parameter_columns=true`, require `derived_parameter_key_ids` to be a non-empty list of IDs.
-- `state_meta_group_items` remains dedicated to state template generation.
-- `derived_parameter_key_ids` is the only selector for generated parameter columns. Do not infer selected parameters from derived operator IDs.
+- `input_key_ids` must be a non-empty list of IDs.
 - Frontend should pass the selected input key IDs from the user's checkbox selection.
+- Do not infer selected parameters from state template IDs or derived operator IDs.
+- Do not modify `state_template_mapper` for this capability.
 
 ## Metadata API Contract
 
@@ -149,6 +172,7 @@ Formatting rules:
 - Append `demoValue` only when non-empty.
 - Append `支持多值。` only when `multiValue` is true.
 - Output must be a plain string, not JSON, because the target consumer is LLM prompt text.
+- The output string should not include `keyId`, `keyType`, `dataType`, or `defaultOrPlaceholderValue`; those are backend/UI metadata.
 
 Duplicate and collision rules:
 
@@ -159,124 +183,117 @@ Duplicate and collision rules:
 
 ## Caching
 
-Cache derived parameter columns per mapper instance, just like `_state_template_cache`.
-
-Add:
+Cache formatted parameter columns per mapper instance:
 
 ```python
-self._derived_parameter_columns_cache = None
+self._parameter_columns_cache = None
 ```
 
 Reasoning:
 
 - Metadata depends on static key ID configuration, not per-record sample values.
-- In Ray execution, each worker may fetch once, which is acceptable and consistent with the existing state template cache behavior.
-- Record-level `x-tt-logid` can still be added to the first sample that triggers the fetch, same as current `generate-json` behavior.
+- In Ray execution, each worker may fetch once, which is acceptable for mapper-local caches.
+- Record-level `x-tt-logid` can still be added to the first sample that triggers the fetch.
+
+## Record Callback
+
+This mapper is an ADC business operator and should support Record success/failure callbacks consistently with sibling mappers.
+
+Behavior:
+
+- On success, report record success with the updated sample.
+- On metadata fetch or formatting failure, report record failure and re-raise.
+- Callback failures should be logged as warnings and must not mask the main business result/failure.
+- Missing `__adc_record_key` should follow the same behavior as other ADC business mappers that require record callbacks.
 
 ## Error Handling
 
 Fail fast when:
 
-- `emit_derived_parameter_columns=true` and `derived_parameter_key_ids` is empty or invalid.
+- `input_key_ids` is empty or invalid.
+- `ctx` is missing or does not contain enough information to call the API.
 - metadata HTTP request fails.
 - backend business response has non-zero `code`.
 - response data is not a dictionary containing an `inputParameterDetails` list.
-- any selected metadata item misses `keyNameEn`.
+- any selected metadata item misses `keyId` or `keyNameEn`.
 - two different selected key IDs map to the same `keyNameEn`.
 
-Per-record callback behavior is unchanged:
-
-- If metadata fetch fails, `process_single` should report record failure and re-raise.
-- If callback fails, log warning and do not mask the main business result/failure.
-
-## Task 1: Constructor and Config Contract
+## Task 1: Operator Skeleton and Config Contract
 
 **Files:**
-- Modify: `data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py`
-- Modify: `tests/ops/mapper/test_state_template_mapper.py`
+- Create: `data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py`
+- Modify: `tests/ops/mapper/test_derived_input_parameter_context_mapper.py`
 
-**Step 1: Write failing constructor tests**
+**Step 1: Write failing constructor and config tests**
 
-Add tests:
+Create focused tests:
 
 ```python
-def test_accepts_derived_parameter_column_config(self):
-    op = StateTemplateMapper(
-        state_meta_group_items=self._state_meta_group_items(),
-        derived_parameter_key_ids=[8, 12, 13],
-        emit_derived_parameter_columns=True,
+def test_accepts_input_key_ids_config(self):
+    op = DerivedInputParameterContextMapper(
+        input_key_ids=[8, 12, 13],
         ctx=self._ctx(),
     )
-    self.assertEqual(op.derived_parameter_key_ids, [8, 12, 13])
-    self.assertEqual(op.emit_derived_parameter_columns, True)
+    self.assertEqual(op.input_key_ids, [8, 12, 13])
 
 
-def test_rejects_emit_parameter_columns_without_key_ids(self):
-    with self.assertRaisesRegex(ValueError, "derived_parameter_key_ids"):
-        StateTemplateMapper(
-            state_meta_group_items=self._state_meta_group_items(),
-            emit_derived_parameter_columns=True,
-            ctx=self._ctx(),
-        )
+def test_rejects_empty_input_key_ids(self):
+    with self.assertRaisesRegex(ValueError, "input_key_ids"):
+        DerivedInputParameterContextMapper(input_key_ids=[], ctx=self._ctx())
 ```
 
-Also update `test_config_loads_operator_name_without_ad_ai_data_center_prefix` YAML with:
+Add an operator loading test with YAML:
 
 ```yaml
-derived_parameter_key_ids:
-  - 8
-emit_derived_parameter_columns: true
+process:
+  - derived_input_parameter_context_mapper:
+      input_key_ids:
+        - 8
+      ctx:
+        apiBase: "https://ai-data-center.bytedance.net/api"
+        userAccount: "zhangsan"
+        spaceId: 1
 ```
 
-Assert loaded values.
+Assert the operator loads and preserves config.
 
 **Step 2: Run RED**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
-Expected: constructor does not accept the new arguments.
+Expected: new mapper module does not exist.
 
-**Step 3: Implement minimal constructor changes**
+**Step 3: Implement minimal skeleton**
 
-Add parameters:
+Create mapper with constants:
 
 ```python
-derived_parameter_key_ids: list[int] | None = None,
-emit_derived_parameter_columns: bool = False,
+OP_NAME = "derived_input_parameter_context_mapper"
+OP_DISPLAY_NAME = "派生字段入参上下文"
+CONFIG_PAGE_KEY = "derived_input_parameter_context_builder"
+NEED_CTX = True
+OPERATOR_TAG = "business_operator"
+INPUT_KEYS_BATCH_GET_PATH = "/openapi/state-meta/input-keys/batch-get"
 ```
 
-Validation:
+Constructor:
 
 ```python
-self.emit_derived_parameter_columns = bool(emit_derived_parameter_columns)
-if derived_parameter_key_ids is None:
-    normalized_key_ids = []
-elif isinstance(derived_parameter_key_ids, list):
-    normalized_key_ids = [int(item) for item in derived_parameter_key_ids]
-else:
-    raise ValueError("derived_parameter_key_ids must be a list")
-if self.emit_derived_parameter_columns and not normalized_key_ids:
-    raise ValueError(
-        "derived_parameter_key_ids must be provided when "
-        "emit_derived_parameter_columns is true"
-    )
-self.derived_parameter_key_ids = normalized_key_ids
-self._derived_parameter_columns_cache = None
-```
-
-Update `_operator_config()` callback payload to include:
-
-```python
-"derived_parameter_key_ids": self.derived_parameter_key_ids,
-"emit_derived_parameter_columns": self.emit_derived_parameter_columns,
+def __init__(self, input_key_ids: list[int], ctx: dict | None = None, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    if not isinstance(input_key_ids, list) or not input_key_ids:
+        raise ValueError("input_key_ids must be a non-empty list")
+    self.input_key_ids = [int(item) for item in input_key_ids]
+    self.ctx = ctx
+    self._parameter_columns_cache = None
 ```
 
 **Step 4: Run GREEN**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 Expected: tests pass.
@@ -284,102 +301,75 @@ Expected: tests pass.
 **Step 5: Commit**
 
 ```bash
-git add data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py tests/ops/mapper/test_state_template_mapper.py
-git commit -m "feat: add state template parameter column config"
+git add data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py tests/ops/mapper/test_derived_input_parameter_context_mapper.py
+git commit -m "feat: add derived input parameter context mapper"
 ```
 
 ## Task 2: Input Key Metadata Fetcher
 
 **Files:**
-- Modify: `data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py`
-- Modify: `tests/ops/mapper/test_state_template_mapper.py`
+- Modify: `data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py`
+- Modify: `tests/ops/mapper/test_derived_input_parameter_context_mapper.py`
 
-**Step 1: Write failing metadata fetch tests**
-
-Add constant:
-
-```python
-INPUT_KEYS_BATCH_GET_PATH = "/openapi/state-meta/input-keys/batch-get"
-```
+**Step 1: Write failing metadata fetch test**
 
 Add test:
 
 ```python
-@patch("data_juicer.ops.mapper.ad_ai_data_center.state_template_mapper.HttpClient")
-def test_fetches_selected_input_key_metadata_when_enabled(self, mock_client_cls):
-    template_client = FakeHttpClient(success_envelope(self._state_template()))
+@patch("data_juicer.ops.mapper.ad_ai_data_center.derived_input_parameter_context_mapper.HttpClient")
+def test_fetches_selected_input_key_metadata(self, mock_client_cls):
     metadata_client = FakeHttpClient(success_envelope({
         "inputParameterDetails": [
             {
                 "keyId": 8,
                 "keyNameEn": "unknown_id",
                 "keyNameCn": "未知ID",
-                "keyType": "AMBIGUOUS",
                 "description": "可能表示广告、广告主或素材 ID",
                 "demoValue": "1837647382987362",
                 "multiValue": True,
             }
         ]
     }))
-    mock_client_cls.side_effect = [template_client, metadata_client]
-    op = StateTemplateMapper(
-        state_meta_group_items=self._state_meta_group_items(),
-        derived_parameter_key_ids=[8],
-        emit_derived_parameter_columns=True,
+    mock_client_cls.return_value = metadata_client
+    op = DerivedInputParameterContextMapper(
+        input_key_ids=[8],
         ctx=self._ctx(),
     )
 
     result = op.process_single({RECORD_KEY_FIELD: "record-1"})
 
-    self.assertIn("state_template", result)
     self.assertEqual(
         result["unknown_id"],
         "未知ID：可能表示广告、广告主或素材 ID。示例：1837647382987362。支持多值。",
     )
 ```
 
-Also assert the second `HttpClient` endpoint is:
+Also assert:
 
-```text
-{ctx.apiBase}/openapi/state-meta/input-keys/batch-get
-```
-
-and body is:
-
-```python
-{"keyIds": [8]}
-```
+- endpoint is `{ctx.apiBase}/openapi/state-meta/input-keys/batch-get`
+- body is `{"keyIds": [8]}`
+- headers include `space-id` when `ctx.spaceId` exists
 
 **Step 2: Run RED**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 Expected: no metadata fetch; `unknown_id` missing.
 
 **Step 3: Implement metadata fetch**
 
-Add:
+Add `_get_parameter_columns`:
 
 ```python
-INPUT_KEYS_BATCH_GET_PATH = "/openapi/state-meta/input-keys/batch-get"
+def _get_parameter_columns(self, sample):
+    if self._parameter_columns_cache is None:
+        self._parameter_columns_cache = self._fetch_parameter_columns(sample)
+    return self._parameter_columns_cache
 ```
 
-Add method:
-
-```python
-def _get_derived_parameter_columns(self, ctx, sample):
-    if not self.emit_derived_parameter_columns:
-        return {}
-    if self._derived_parameter_columns_cache is None:
-        self._derived_parameter_columns_cache = (
-            self._fetch_derived_parameter_columns(ctx, sample)
-        )
-    return self._derived_parameter_columns_cache
-```
-
-Add `_fetch_derived_parameter_columns` using `HttpClient`, `_build_openapi_url`, `_build_headers`, and `add_record_log_id_header`, mirroring `_generate_state_template`.
+Add `_fetch_parameter_columns` using `HttpClient`, `_build_openapi_url`, `_build_headers`, and `add_record_log_id_header`.
 
 Response parser:
 
@@ -391,24 +381,23 @@ if not isinstance(data, dict) or not isinstance(
     raise ValueError(
         "input key metadata response data must contain inputParameterDetails list"
     )
-return self._build_derived_parameter_columns(data["inputParameterDetails"])
+return self._build_parameter_columns(data["inputParameterDetails"])
 ```
 
-**Step 4: Write sample columns in process_single**
-
-After state template generation:
+**Step 4: Write sample columns in `process_single`**
 
 ```python
-sample[self.output_field] = state_template
-sample.update(self._get_derived_parameter_columns(ctx, sample))
+def process_single(self, sample):
+    sample.update(self._get_parameter_columns(sample))
+    return sample
 ```
 
-Keep `state_template` generation first, so existing failures and output behavior remain unchanged.
+Wrap this with the same record success/failure pattern used by other ADC business mappers.
 
 **Step 5: Run GREEN**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 Expected: all tests pass.
@@ -416,24 +405,24 @@ Expected: all tests pass.
 **Step 6: Commit**
 
 ```bash
-git add data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py tests/ops/mapper/test_state_template_mapper.py
-git commit -m "feat: fetch state template input key metadata"
+git add data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py tests/ops/mapper/test_derived_input_parameter_context_mapper.py
+git commit -m "feat: fetch derived input key metadata"
 ```
 
 ## Task 3: Parameter Description Formatting and Collision Handling
 
 **Files:**
-- Modify: `data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py`
-- Modify: `tests/ops/mapper/test_state_template_mapper.py`
+- Modify: `data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py`
+- Modify: `tests/ops/mapper/test_derived_input_parameter_context_mapper.py`
 
 **Step 1: Write failing formatter tests**
 
-Add direct unit tests for static/class helpers:
+Add direct helper tests:
 
 ```python
 def test_formats_parameter_description_with_optional_parts(self):
     self.assertEqual(
-        StateTemplateMapper._format_parameter_description(
+        DerivedInputParameterContextMapper._format_parameter_description(
             {
                 "keyId": 8,
                 "keyNameEn": "unknown_id",
@@ -449,7 +438,7 @@ def test_formats_parameter_description_with_optional_parts(self):
 
 def test_rejects_different_key_ids_with_same_key_name_en(self):
     with self.assertRaisesRegex(ValueError, "duplicate keyNameEn"):
-        StateTemplateMapper._build_derived_parameter_columns([
+        DerivedInputParameterContextMapper._build_parameter_columns([
             {
                 "keyId": 8,
                 "keyNameEn": "unknown_id",
@@ -468,7 +457,7 @@ def test_rejects_different_key_ids_with_same_key_name_en(self):
 **Step 2: Run RED**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 Expected: formatter helpers missing.
@@ -479,7 +468,7 @@ Add:
 
 ```python
 @classmethod
-def _build_derived_parameter_columns(cls, details):
+def _build_parameter_columns(cls, details):
     by_key_id = {}
     key_name_to_id = {}
     columns = {}
@@ -509,96 +498,83 @@ def _build_derived_parameter_columns(cls, details):
     return columns
 ```
 
-Formatter detail:
-
-- Single detail returns a plain prompt string.
-- Missing optional fields are omitted cleanly.
-- The returned string should not include `keyId`, `keyType`, `dataType`, or `defaultOrPlaceholderValue`; those are backend/UI metadata, not prompt text.
-
 **Step 4: Run GREEN**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 **Step 5: Commit**
 
 ```bash
-git add data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py tests/ops/mapper/test_state_template_mapper.py
-git commit -m "feat: format selected state template parameter columns"
+git add data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py tests/ops/mapper/test_derived_input_parameter_context_mapper.py
+git commit -m "feat: format derived input parameter context columns"
 ```
 
-## Task 4: Cache and Backward Compatibility Tests
+## Task 4: Cache and Callback Tests
 
 **Files:**
-- Modify: `tests/ops/mapper/test_state_template_mapper.py`
+- Modify: `tests/ops/mapper/test_derived_input_parameter_context_mapper.py`
+- Modify: `data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py`
 
 **Step 1: Write cache test**
 
 Add a dataset with two rows and assert:
 
-- `generate-json` client called once.
 - `input-keys/batch-get` client called once.
 - both rows receive identical `unknown_id` value.
 
-Use `mock_client_cls.side_effect = [template_client, metadata_client]` and `auto_op_parallelism=False`.
+Use `auto_op_parallelism=False`.
 
-**Step 2: Write backward compatibility tests**
+**Step 2: Write record callback tests**
 
-Add a test where `derived_parameter_key_ids=[8]` but `emit_derived_parameter_columns=False`.
+Cover:
 
-Expected:
-
-- only `/generate-json` client is constructed.
-- no `unknown_id` column is written.
-- existing `state_template` behavior remains unchanged.
-
-Add a test where both new parameters are omitted.
-
-Expected:
-
-- old constructor/config path works unchanged.
-- no second metadata request is made.
+- Success callback receives updated sample.
+- Failure callback is sent when metadata fetch fails.
+- Callback failure is logged as warning and does not mask the business result.
+- Missing `__adc_record_key` behavior matches existing ADC business mappers.
 
 **Step 3: Run RED if behavior not already implemented**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
-Expected: cache or backward compatibility assertions fail if previous tasks missed them.
+Expected: cache or callback assertions fail if previous tasks missed them.
 
 **Step 4: Implement missing minimal code**
 
-If needed, adjust `_get_derived_parameter_columns` to return `{}` when disabled and to cache enabled results.
+If needed, add mapper-local cache and callback integration.
 
 **Step 5: Run GREEN**
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 **Step 6: Commit**
 
 ```bash
-git add tests/ops/mapper/test_state_template_mapper.py data_juicer/ops/mapper/ad_ai_data_center/state_template_mapper.py
-git commit -m "test: cover state template input key metadata cache"
+git add tests/ops/mapper/test_derived_input_parameter_context_mapper.py data_juicer/ops/mapper/ad_ai_data_center/derived_input_parameter_context_mapper.py
+git commit -m "test: cover derived input parameter context callbacks"
 ```
 
 ## Task 5: Documentation
 
 **Files:**
-- Create or update: `docs/tutorial/StateTemplateMapper_ZH.md`
+- Create or update: `docs/tutorial/DerivedInputParameterContextMapper_ZH.md`
 
 **Step 1: Add usage documentation**
 
 Document:
 
-- New parameters `emit_derived_parameter_columns` and `derived_parameter_key_ids`.
+- Operator purpose and recommended placement before LLM prompt construction.
+- Parameter `input_key_ids`.
 - Metadata API contract for `/openapi/state-meta/input-keys/batch-get`.
 - Output sample showing generated parameter description columns.
 - Error handling and caching notes.
-- Frontend behavior: users select desired input parameters, and the frontend writes selected `keyId` values into `derived_parameter_key_ids`.
+- Frontend behavior: users select desired input parameters, and the frontend writes selected `keyId` values into `input_key_ids`.
 
 **Step 2: Run markdown smoke checks**
 
@@ -611,8 +587,8 @@ Expected: no whitespace errors.
 **Step 3: Commit**
 
 ```bash
-git add docs/tutorial/StateTemplateMapper_ZH.md
-git commit -m "docs: document state template selected parameter columns"
+git add docs/tutorial/DerivedInputParameterContextMapper_ZH.md
+git commit -m "docs: document derived input parameter context mapper"
 ```
 
 ## Final Verification
@@ -620,14 +596,21 @@ git commit -m "docs: document state template selected parameter columns"
 Run focused tests:
 
 ```bash
-./.venv/bin/python -m unittest tests.ops.mapper.test_state_template_mapper
+./.venv/bin/python -m unittest tests.ops.mapper.test_derived_input_parameter_context_mapper
 ```
 
 Run adjacent ADC mapper regression:
 
 ```bash
 ./.venv/bin/python -m unittest \
+  tests.ops.mapper.test_derived_input_parameter_context_mapper \
   tests.ops.mapper.test_state_template_mapper \
   tests.ops.mapper.test_state_metric_calculator_mapper \
   tests.ops.mapper.test_llm_inference_mapper
+```
+
+Run diff check:
+
+```bash
+git diff --check
 ```
