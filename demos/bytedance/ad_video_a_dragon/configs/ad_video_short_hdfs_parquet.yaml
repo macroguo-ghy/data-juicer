@@ -54,13 +54,13 @@ dataset:
       source: hdfs
       path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_sampled"
       format: "parquet"
-      override_num_blocks: 2048
+      override_num_blocks: 1024
       concurrency: 512
       num_cpus: 0.5
       skip_zero_row_group_files: true
 
 process:
-  - general_field_filter:
+  - stateless_field_filter:
       batch_size: 200
       num_proc: 512
       num_cpus: 1
@@ -97,7 +97,7 @@ process:
       output_key: "urls"
       quality_preference: "720p"
       max_vids_per_request: 20
-      qps: 50000
+      qps: 100
       ak: "${VIDEOARCH_AK}"
       sk: "${VIDEOARCH_SK}"
       psm: "toutiao.videoarch.smart_player"
@@ -105,10 +105,10 @@ process:
   - download_file_mapper:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       download_field: "urls"
       save_field: "videos"
-      timeout: 2
+      timeout: 30
       retry_times: 3
       max_concurrent: 1
       filter_non_url: true
@@ -116,7 +116,7 @@ process:
   - bytes_exact_dedup_mapper:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       url_key: "urls"
       bytes_key: "videos"
       md5_key: "md5"
@@ -124,7 +124,7 @@ process:
   - ray_field_dedup_pipeline:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       condition: "valid_video_count > 0"
       field_key: "md5"
       id_key: "id"
@@ -134,7 +134,7 @@ process:
   - stateless_field_filter:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       filter_condition: "valid_video_count > 0"
 
 export:
@@ -158,6 +158,5 @@ export:
       - {name: "type", type: "string"}
   extra_args:
     concurrency: 64
-    avoid_write_fusion: true
-    min_rows_per_file: 25
-    max_rows_per_file: 50
+    min_rows_per_file: 1000
+    max_rows_per_file: 1500

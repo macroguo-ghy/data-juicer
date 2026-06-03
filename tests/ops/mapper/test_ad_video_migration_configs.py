@@ -19,7 +19,7 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                 "filter": "video_duration <= 60",
                 "output_suffix": "20260117_full_video_short_dedup",
                 "op_classes": [
-                    "GeneralFieldFilter",
+                    "StatelessFieldFilter",
                     "JsonObjectMapper",
                     "FieldAssignMapper",
                     "VideoUrlRpcMapper",
@@ -29,8 +29,13 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                     "StatelessFieldFilter",
                 ],
                 "has_download": True,
-                "min_rows_per_file": 25,
-                "max_rows_per_file": 50,
+                "override_num_blocks": 1024,
+                "op_num_cpus": [1, 1, 1, 1, 5, 5, 5, 5],
+                "qps": 100,
+                "download_timeout": 30,
+                "avoid_write_fusion": False,
+                "min_rows_per_file": 1000,
+                "max_rows_per_file": 1500,
             },
             "ad_video_long_hdfs_parquet.yaml": {
                 "filter": "video_duration > 60",
@@ -41,6 +46,9 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                     "FieldAssignMapper",
                 ],
                 "has_download": False,
+                "override_num_blocks": 2048,
+                "op_num_cpus": [1, 1, 1],
+                "avoid_write_fusion": True,
                 "min_rows_per_file": 5000,
                 "max_rows_per_file": 10000,
             },
@@ -61,11 +69,13 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                     "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_sampled",
                 )
                 self.assertEqual(dataset_config["format"], "parquet")
-                self.assertEqual(dataset_config["override_num_blocks"], 2048)
+                self.assertEqual(dataset_config["override_num_blocks"], tuning["override_num_blocks"])
                 self.assertEqual(dataset_config["concurrency"], 512)
                 self.assertEqual(dataset_config["num_cpus"], 0.5)
 
                 self.assertEqual([op.__class__.__name__ for op in ops], tuning["op_classes"])
+                self.assertEqual([op.num_proc for op in ops], [512] * len(ops))
+                self.assertEqual([op.num_cpus for op in ops], tuning["op_num_cpus"])
                 self.assertEqual(ops[0].filter_condition, tuning["filter"])
                 self.assertEqual(ops[1].output_key, "extra")
                 self.assertTrue(ops[1].include_all)
@@ -78,10 +88,10 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                     self.assertEqual(ops[3].output_key, "urls")
                     self.assertEqual(ops[3].quality_preference, "720p")
                     self.assertEqual(ops[3].max_vids_per_request, 20)
-                    self.assertEqual(ops[3].qps, 50000)
+                    self.assertEqual(ops[3].qps, tuning["qps"])
                     self.assertEqual(ops[4].download_field, "urls")
                     self.assertEqual(ops[4].save_field, "videos")
-                    self.assertEqual(ops[4].timeout, 2)
+                    self.assertEqual(ops[4].timeout, tuning["download_timeout"])
                     self.assertEqual(ops[4].retry_times, 3)
                     self.assertEqual(ops[4].max_concurrent, 1)
                     self.assertEqual(ops[5].bytes_key, "videos")
@@ -96,7 +106,10 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                 self.assertEqual(cfg.export["filesystem"], "pyarrow")
                 extra_args = cfg.export["extra_args"]
                 self.assertEqual(extra_args["concurrency"], 64)
-                self.assertTrue(extra_args["avoid_write_fusion"])
+                if tuning["avoid_write_fusion"]:
+                    self.assertTrue(extra_args["avoid_write_fusion"])
+                else:
+                    self.assertNotIn("avoid_write_fusion", extra_args)
                 self.assertEqual(extra_args["min_rows_per_file"], tuning["min_rows_per_file"])
                 self.assertEqual(extra_args["max_rows_per_file"], tuning["max_rows_per_file"])
                 schema_columns = [field["name"] for field in cfg.export["schema"]["fields"]]
