@@ -53,6 +53,10 @@ substitute for review. Check:
 - Config paths exercise real operator loading or executor behavior when that is
   the contract under test.
 - Ray Data/PyArrow changes preserve block-level schema stability.
+- Ray execution-path changes compare old and new data representations and
+  wrappers: Arrow batch vs row callback, `to_pydict()` conversion,
+  null/scalar values, resource args, `runtime_env`, fault-tolerance behavior,
+  and stats/meta column setup.
 - SDK-boundary changes model the real third-party response shape instead of
   mocking away the contract.
 - Metrics changes update the matching dashboard JSON when required by

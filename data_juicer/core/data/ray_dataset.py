@@ -14,7 +14,7 @@ from data_juicer.core.data import DJDataset
 from data_juicer.core.data.schema import Schema
 from data_juicer.core.tracer import should_trace_op
 from data_juicer.ops import Deduplicator, Filter, Mapper, Pipeline
-from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE, OP, TAGGING_OPS
+from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE, NON_STATS_FILTERS, OP, TAGGING_OPS
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.file_utils import is_remote_path
 from data_juicer.utils.webdataset_utils import _custom_default_decoder
@@ -320,6 +320,15 @@ def make_named_mapper_batch_fn(op_name, process_func):
     return mapper_batch_fn
 
 
+def _ray_remote_resource_kwargs(op):
+    kwargs = {}
+    if op.num_cpus is not None:
+        kwargs["num_cpus"] = op.num_cpus
+    if op.num_gpus is not None:
+        kwargs["num_gpus"] = op.num_gpus
+    return kwargs
+
+
 class RayDataset(DJDataset):
     def __init__(
         self,
@@ -596,50 +605,58 @@ class RayDataset(DJDataset):
                     if tracer and should_trace_op(tracer, op._name) and original_process:
                         op.process = original_process
             elif isinstance(op, Filter):
-                # Use cached_columns instead of self.data.columns() to avoid breaking pipeline
-                if Fields.stats not in cached_columns:
-
-                    def process_batch_arrow(table: pyarrow.Table):
-                        new_column_data = [{} for _ in range(len(table))]
-                        new_talbe = table.append_column(Fields.stats, [new_column_data])
-                        return new_talbe
-
-                    self.data = self.data.map_batches(
-                        process_batch_arrow, batch_format="pyarrow", batch_size=DEFAULT_BATCH_SIZE
-                    )
-                    cached_columns.add(Fields.stats)
-                if op.use_ray_actor():
-                    compute = get_compute_strategy(op.__class__, concurrency=op.num_proc)
-                    self.data = self.data.map_batches(
-                        op.__class__,
-                        fn_args=None,
-                        fn_kwargs=None,
-                        fn_constructor_args=op._init_args,
-                        fn_constructor_kwargs=op._init_kwargs,
-                        batch_size=batch_size,
-                        num_cpus=op.num_cpus,
-                        num_gpus=op.num_gpus,
-                        compute=compute,
-                        batch_format="pyarrow",
-                        runtime_env=op.runtime_env,
-                    )
-                else:
+                non_stats_filter = op._name in NON_STATS_FILTERS.modules
+                tagging_filter = op._name in TAGGING_OPS.modules
+                direct_non_stats_filter = non_stats_filter and not tagging_filter
+                if direct_non_stats_filter:
                     prepare_for_ray_tasks = getattr(op, "prepare_backend_for_ray_tasks", None)
                     if callable(prepare_for_ray_tasks):
                         prepare_for_ray_tasks()
-                    compute_stats_func = partial(process_mapper_batch_preserving_schema, process_func=op.compute_stats)
-                    compute = get_compute_strategy(compute_stats_func, concurrency=op.num_proc)
-                    self.data = self.data.map_batches(
-                        compute_stats_func,
-                        batch_size=batch_size,
-                        batch_format="pyarrow",
-                        num_cpus=op.num_cpus,
-                        num_gpus=op.num_gpus,
-                        compute=compute,
-                        runtime_env=op.runtime_env,
-                    )
-                if op.stats_export_path is not None:
-                    self.data.write_json(op.stats_export_path, force_ascii=False)
+                else:
+                    # Use cached_columns instead of self.data.columns() to avoid breaking pipeline
+                    if Fields.stats not in cached_columns:
+
+                        def process_batch_arrow(table: pyarrow.Table):
+                            new_column_data = [{} for _ in range(len(table))]
+                            new_talbe = table.append_column(Fields.stats, [new_column_data])
+                            return new_talbe
+
+                        self.data = self.data.map_batches(
+                            process_batch_arrow, batch_format="pyarrow", batch_size=DEFAULT_BATCH_SIZE
+                        )
+                        cached_columns.add(Fields.stats)
+                    if op.use_ray_actor():
+                        compute = get_compute_strategy(op.__class__, concurrency=op.num_proc)
+                        self.data = self.data.map_batches(
+                            op.__class__,
+                            fn_args=None,
+                            fn_kwargs=None,
+                            fn_constructor_args=op._init_args,
+                            fn_constructor_kwargs=op._init_kwargs,
+                            batch_size=batch_size,
+                            num_cpus=op.num_cpus,
+                            num_gpus=op.num_gpus,
+                            compute=compute,
+                            batch_format="pyarrow",
+                            runtime_env=op.runtime_env,
+                        )
+                    else:
+                        prepare_for_ray_tasks = getattr(op, "prepare_backend_for_ray_tasks", None)
+                        if callable(prepare_for_ray_tasks):
+                            prepare_for_ray_tasks()
+                        compute_stats_func = partial(process_mapper_batch_preserving_schema, process_func=op.compute_stats)
+                        compute = get_compute_strategy(compute_stats_func, concurrency=op.num_proc)
+                        self.data = self.data.map_batches(
+                            compute_stats_func,
+                            batch_size=batch_size,
+                            batch_format="pyarrow",
+                            num_cpus=op.num_cpus,
+                            num_gpus=op.num_gpus,
+                            compute=compute,
+                            runtime_env=op.runtime_env,
+                        )
+                    if op.stats_export_path is not None:
+                        self.data.write_json(op.stats_export_path, force_ascii=False)
                 # Wrap process method with tracer for sample-level collection
                 original_process = None
                 if tracer and should_trace_op(tracer, op._name):
@@ -650,20 +667,36 @@ class RayDataset(DJDataset):
 
                 try:
                     if op.is_batched_op():
-                        # The core computation have been done in compute_stats,
-                        # and the filter process only performs simple filtering.
-                        # cpu and parallelism are not set here
+                        # Stats filters have computed stats above. Direct non-stats filters
+                        # return their keep mask here without a prior compute_stats stage.
+                        # Keep stats-filter post-processing cheap; apply resources only when
+                        # this is the direct filter execution stage.
+                        filter_func = partial(filter_batch, filter_func=op.process)
+                        filter_kwargs = {}
+                        if direct_non_stats_filter:
+                            filter_kwargs = {
+                                "compute": get_compute_strategy(filter_func, concurrency=op.num_proc),
+                                **_ray_remote_resource_kwargs(op),
+                            }
                         self.data = self.data.map_batches(
-                            partial(filter_batch, filter_func=op.process),
+                            filter_func,
                             batch_format="pyarrow",
                             zero_copy_batch=True,
-                            batch_size=DEFAULT_BATCH_SIZE,
+                            batch_size=batch_size if direct_non_stats_filter else DEFAULT_BATCH_SIZE,
                             runtime_env=op.runtime_env,
+                            **filter_kwargs,
                         )
                     else:
+                        filter_kwargs = {}
+                        if direct_non_stats_filter:
+                            filter_kwargs = {
+                                "compute": get_compute_strategy(op.process, concurrency=op.num_proc),
+                                **_ray_remote_resource_kwargs(op),
+                            }
                         self.data = self.data.filter(
                             op.process,
                             runtime_env=op.runtime_env,
+                            **filter_kwargs,
                         )
                 finally:
                     # Restore original process method

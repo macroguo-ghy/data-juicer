@@ -3,6 +3,7 @@ import json
 from typing import Any, Union
 
 import pyarrow as pa
+from ray.data._internal.util import get_compute_strategy
 
 from data_juicer.core.data import NestedDataset
 from data_juicer.core.task_notification import RuntimeStatsCollector
@@ -91,10 +92,15 @@ class RayFieldDedupPipeline(Pipeline):
             )
 
         self.backend.prepare_for_ray_tasks()
+        compute = get_compute_strategy(self.process_batched, concurrency=self.num_proc)
         return dataset.map_batches(
             self.process_batched,
             batch_format="pyarrow",
             batch_size=self.batch_size,
+            num_cpus=self.num_cpus,
+            num_gpus=self.num_gpus,
+            compute=compute,
+            runtime_env=self.runtime_env,
         )
 
     def process_batched(self, samples):

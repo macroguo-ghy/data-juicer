@@ -18,6 +18,7 @@ from data_juicer.core.ray_exporter import (
     EXPORT_WRITE_STATS_NAMESPACE,
     RayExporter,
     RayHdfsFanoutDatasink,
+    summarize_filesystem_path,
 )
 from data_juicer.utils.constant import Fields, HashKeys
 from data_juicer.utils.mm_utils import load_images_byte
@@ -72,6 +73,21 @@ class TestRayExporterCheckpoint(unittest.TestCase):
 
 
 class TestRayExporterHDFS(unittest.TestCase):
+    def test_summarize_filesystem_path_counts_parquet_rows_from_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            table_a = pa.table({"text": ["a", "b"]})
+            table_b = pa.table({"text": ["c"]})
+            pq.write_table(table_a, os.path.join(tmp_dir, "part-a.parquet"))
+            pq.write_table(table_b, os.path.join(tmp_dir, "part-b.parquet"))
+            with open(os.path.join(tmp_dir, "_SUCCESS"), "w", encoding="utf-8") as file:
+                file.write("")
+
+            summary = summarize_filesystem_path(LocalFileSystem(), tmp_dir)
+
+            self.assertEqual(summary["output_files"], 3)
+            self.assertGreater(summary["output_bytes"], 0)
+            self.assertEqual(summary["output_rows"], 3)
+
     def test_hdfs_export_resolves_filesystem_path_and_defaults_to_error_if_exists(self):
         class FakeDataset:
             def __init__(self):
@@ -258,6 +274,49 @@ class TestRayExporterHDFS(unittest.TestCase):
         self.assertEqual(dataset.received_kwargs["concurrency"], 8)
         self.assertNotIn("max_rows_per_file", dataset.received_kwargs["arrow_parquet_args"])
 
+    def test_write_others_can_add_write_fusion_barrier_remote_args(self):
+        class FakeDataset:
+            def __init__(self):
+                self.received_kwargs = None
+
+            def write_parquet(
+                self,
+                path,
+                *,
+                concurrency=None,
+                partition_cols=None,
+                ray_remote_args=None,
+                **arrow_parquet_args,
+            ):
+                self.received_kwargs = {
+                    "path": path,
+                    "concurrency": concurrency,
+                    "partition_cols": partition_cols,
+                    "ray_remote_args": ray_remote_args,
+                    "arrow_parquet_args": arrow_parquet_args,
+                }
+
+        dataset = FakeDataset()
+        RayExporter.write_others(
+            dataset,
+            "/path/output_dir",
+            export_format="parquet",
+            export_extra_args={
+                "concurrency": 64,
+                "partition_cols": ["video_duration_group"],
+                "ray_remote_args": {"num_cpus": 2},
+                "avoid_write_fusion": True,
+            },
+        )
+
+        self.assertEqual(dataset.received_kwargs["concurrency"], 64)
+        self.assertEqual(dataset.received_kwargs["partition_cols"], ["video_duration_group"])
+        self.assertEqual(
+            dataset.received_kwargs["ray_remote_args"],
+            {"num_cpus": 2, "scheduling_strategy": "DEFAULT"},
+        )
+        self.assertNotIn("avoid_write_fusion", dataset.received_kwargs["arrow_parquet_args"])
+
     def test_hdfs_export_rejects_unknown_mode(self):
         with self.assertRaisesRegex(ValueError, "export.mode"):
             RayExporter(
@@ -298,6 +357,35 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             "condition": condition,
             "extra_args": extra_args or {},
         }
+
+    def _parquet_files(self, output_dir):
+        return sorted(
+            os.path.join(output_dir, filename)
+            for filename in os.listdir(output_dir)
+            if filename.endswith(".parquet")
+        )
+
+    def _read_parquet_rows(self, output_dir):
+        rows = []
+        for path in self._parquet_files(output_dir):
+            rows.extend(pq.read_table(path).to_pylist())
+        return sorted(rows, key=lambda row: row["id"])
+
+    def test_filter_table_for_target_treats_nullable_arrow_count_as_nonmatch(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[self._target("/unused", export_type="parquet", condition="valid_video_count > 0")],
+            columns=["id", "valid_video_count"],
+        )
+        table = pa.table(
+            {
+                "id": pa.array(["null", "zero", "keep"], type=pa.string()),
+                "valid_video_count": pa.array([None, 0, 1], type=pa.int64()),
+            }
+        )
+
+        output = datasink._filter_table_for_target(table, datasink.targets[0])
+
+        self.assertEqual(output.to_pylist(), [{"id": "keep", "valid_video_count": 1}])
 
     def test_fanout_parquet_writes_matching_rows_to_each_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -343,6 +431,325 @@ class TestRayHdfsFanoutDatasink(unittest.TestCase):
             self.assertEqual([row["id"] for row in rows_a], [1, 3])
             self.assertEqual([row["id"] for row in rows_b], [2, 3])
             self.assertNotIn(Fields.stats, rows_a[0])
+
+    def test_fanout_parquet_compact_disabled_keeps_one_file_per_matching_block(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact_disabled")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[self._target(output_dir, export_type="parquet")],
+                columns=["id"],
+            )
+            blocks = [
+                pa.table({"id": [1]}),
+                pa.table({"id": [2]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx(task_idx=3))
+
+            self.assertEqual(write_return, {0: 2})
+            self.assertEqual(len(self._parquet_files(output_dir)), 2)
+
+    def test_fanout_parquet_compact_merges_blocks_within_write_task(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "compact")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024 * 1024,
+                            }
+                        },
+                    )
+                ],
+                columns=["id", "score"],
+            )
+            blocks = [
+                pa.table({"id": [1, 2], "score": [0.9, 0.8]}),
+                pa.table({"id": [3], "score": [0.95]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx(task_idx=7))
+
+            files = self._parquet_files(output_dir)
+            self.assertEqual(write_return, {0: 3})
+            self.assertEqual(len(files), 1)
+            self.assertEqual([row["id"] for row in self._read_parquet_rows(output_dir)], [1, 2, 3])
+            self.assertIn(f"part-00-{datasink.write_uuid}-000007-000000.parquet", os.path.basename(files[0]))
+
+    def test_fanout_parquet_compact_sets_ray_write_bundle_threshold(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                self._target(
+                    "/unused",
+                    export_type="parquet",
+                    extra_args={
+                        "compact": {
+                            "enabled": True,
+                            "target_bytes_per_file": 1024 * 1024,
+                        }
+                    },
+                )
+            ],
+            columns=["id"],
+        )
+
+        self.assertEqual(datasink.min_rows_per_write, 1024)
+
+    def test_fanout_parquet_compact_min_rows_per_write_can_be_overridden(self):
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                self._target(
+                    "/unused",
+                    export_type="parquet",
+                    extra_args={
+                        "compact": {
+                            "enabled": True,
+                            "target_bytes_per_file": 1024 * 1024,
+                            "min_rows_per_write": 32,
+                        }
+                    },
+                )
+            ],
+            columns=["id"],
+        )
+
+        self.assertEqual(datasink.min_rows_per_write, 32)
+
+    def test_fanout_parquet_compact_rolls_when_target_bytes_is_small(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "small_rolls")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 300,
+                            }
+                        },
+                    )
+                ],
+                columns=["id", "payload"],
+            )
+            table = pa.table(
+                {
+                    "id": list(range(8)),
+                    "payload": [f"payload-{index}-" + ("x" * 512) for index in range(8)],
+                }
+            )
+
+            datasink.on_write_start(table.schema)
+            write_return = datasink.write([table], self._ctx())
+
+            files = self._parquet_files(output_dir)
+            self.assertEqual(write_return, {0: 8})
+            self.assertGreater(len(files), 1)
+            self.assertEqual([row["id"] for row in self._read_parquet_rows(output_dir)], list(range(8)))
+
+    def test_fanout_parquet_compact_empty_filter_creates_no_files(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "empty_filter")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        condition="score > 1",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024 * 1024,
+                            }
+                        },
+                    )
+                ],
+                columns=["id", "score"],
+            )
+            blocks = [
+                pa.table({"id": [1], "score": [0.1]}),
+                pa.table({"id": [2], "score": [0.2]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx())
+
+            self.assertEqual(write_return, {0: 0})
+            self.assertEqual(self._parquet_files(output_dir), [])
+
+    def test_fanout_parquet_compact_schema_mismatch_starts_new_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "schema_roll")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024 * 1024,
+                            }
+                        },
+                    )
+                ],
+                columns=None,
+            )
+            blocks = [
+                pa.table({"id": [1]}),
+                pa.table({"id": [2]}),
+                pa.table({"id": [3], "extra": ["x"]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx())
+
+            files = self._parquet_files(output_dir)
+            self.assertEqual(write_return, {0: 3})
+            self.assertEqual(len(files), 2)
+            self.assertEqual(pq.read_table(files[0]).schema.names, ["id"])
+            self.assertEqual(pq.read_table(files[1]).schema.names, ["id", "extra"])
+
+    def test_fanout_parquet_compact_config_fails_fast_for_invalid_values(self):
+        invalid_extra_args = [
+            {"compact": True},
+            {"compact": {"enabled": "true", "target_bytes_per_file": 1024}},
+            {"compact": {"enabled": True}},
+            {"compact": {"enabled": True, "target_bytes_per_file": 0}},
+            {"compact": {"enabled": True, "target_bytes_per_file": True}},
+            {"compact": {"enabled": True, "target_bytes_per_file": 1024, "min_rows_per_write": 0}},
+            {"compact": {"enabled": True, "target_bytes_per_file": 1024, "min_rows_per_write": True}},
+        ]
+        for extra_args in invalid_extra_args:
+            with self.subTest(extra_args=extra_args):
+                with self.assertRaisesRegex(ValueError, "compact"):
+                    RayHdfsFanoutDatasink(
+                        targets=[self._target("/unused", export_type="parquet", extra_args=extra_args)],
+                        columns=["id"],
+                    )
+
+    def test_fanout_parquet_compact_rejects_mismatched_min_rows_per_write(self):
+        with self.assertRaisesRegex(ValueError, "min_rows_per_write"):
+            RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        "/unused/a",
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024,
+                                "min_rows_per_write": 32,
+                            }
+                        },
+                    ),
+                    self._target(
+                        "/unused/b",
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024,
+                                "min_rows_per_write": 64,
+                            }
+                        },
+                    ),
+                ],
+                columns=["id"],
+            )
+
+    def test_fanout_jsonl_compact_enabled_fails_fast(self):
+        with self.assertRaisesRegex(ValueError, "compact.*parquet"):
+            RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        "/unused",
+                        export_type="jsonl",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024,
+                            }
+                        },
+                    )
+                ],
+                columns=["id"],
+            )
+
+    def test_fanout_parquet_compact_preserves_parquet_writer_args(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "writer_args")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024 * 1024,
+                            },
+                            "compression": "gzip",
+                            "row_group_size": 1,
+                        },
+                    )
+                ],
+                columns=["id", "value"],
+            )
+            blocks = [
+                pa.table({"id": [1], "value": ["a"]}),
+                pa.table({"id": [2, 3], "value": ["b", "c"]}),
+            ]
+
+            datasink.on_write_start(blocks[0].schema)
+            datasink.write(blocks, self._ctx())
+
+            files = self._parquet_files(output_dir)
+            self.assertEqual(len(files), 1)
+            parquet_file = pq.ParquetFile(files[0])
+            self.assertEqual(parquet_file.metadata.num_row_groups, 3)
+            self.assertEqual(parquet_file.metadata.row_group(0).column(0).compression, "GZIP")
+
+    def test_fanout_parquet_compact_on_write_complete_summarizes_closed_files(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = os.path.join(tmp_dir, "summary")
+            datasink = RayHdfsFanoutDatasink(
+                targets=[
+                    self._target(
+                        output_dir,
+                        export_type="parquet",
+                        extra_args={
+                            "compact": {
+                                "enabled": True,
+                                "target_bytes_per_file": 1024 * 1024,
+                            }
+                        },
+                    )
+                ],
+                columns=["id"],
+            )
+            blocks = [
+                pa.table({"id": [1]}),
+                pa.table({"id": [2]}),
+            ]
+            datasink.on_write_start(blocks[0].schema)
+            write_return = datasink.write(blocks, self._ctx())
+            write_result = type("WriteResult", (), {"write_returns": [write_return]})()
+
+            summary = datasink.on_write_complete(write_result)
+
+            self.assertEqual(summary["output_rows"], 2)
+            self.assertEqual(summary["output_files"], 1)
+            self.assertGreater(summary["output_bytes"], 0)
+            self.assertEqual(summary["targets"][0]["rows"], 2)
+            self.assertEqual(summary["targets"][0]["output_files"], 1)
 
     def test_fanout_jsonl_write_failure_is_propagated(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -806,6 +1213,45 @@ class TestRayExporterHDFSRoundTrip(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in read_jsonl_dir(output_a)], [1, 3])
         self.assertEqual([row["id"] for row in read_jsonl_dir(output_b)], [2, 3])
+
+    def test_fanout_datasink_ray_write_datasink_parquet_compact_bundles_small_blocks(self):
+        import ray
+
+        output_dir = osp.join(self.tmp_dir, "fanout_parquet_compact")
+        dataset = ray.data.from_items(
+            [
+                {"id": row_id, "score": 0.9 if row_id % 2 == 0 else 0.2, "text": f"row-{row_id}"}
+                for row_id in range(12)
+            ]
+        ).repartition(4)
+        dataset = dataset.materialize()
+        input_blocks = dataset.num_blocks()
+        datasink = RayHdfsFanoutDatasink(
+            targets=[
+                {
+                    "path": output_dir,
+                    "original_uri": output_dir,
+                    "filesystem": self.filesystem,
+                    "type": "parquet",
+                    "mode": "error_if_exists",
+                    "condition": "score >= 0.8",
+                    "extra_args": {
+                        "compact": {
+                            "enabled": True,
+                            "target_bytes_per_file": 1024 * 1024,
+                        },
+                    },
+                },
+            ],
+            columns=["id", "score", "text"],
+        )
+
+        dataset.write_datasink(datasink, concurrency=1)
+
+        files = self._data_files(output_dir, "parquet")
+        rows = self._read_rows(output_dir, "parquet")
+        self.assertLess(len(files), input_blocks)
+        self.assertEqual([row["id"] for row in rows], [0, 2, 4, 6, 8, 10])
 
     def _data_files(self, output_dir, export_type):
         suffix = ".parquet" if export_type == "parquet" else ".json"

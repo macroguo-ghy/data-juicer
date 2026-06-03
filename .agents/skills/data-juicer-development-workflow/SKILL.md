@@ -26,11 +26,15 @@ docs:
    expectations are unclear.
 2. For behavior changes, follow the TDD gate in `docs/AgentTesting.md`.
 3. Implement the smallest owning-layer change.
-4. Self-review the diff before claiming completion.
-5. For non-trivial or high-risk work, run spec review first, then code review.
-6. Fix important review findings and re-review the changed area.
-7. Verify with focused tests or the relevant Ray/SDK/E2E check.
-8. Commit and push only after verification and required review gates pass.
+4. Satisfy the changed-behavior coverage gate in `docs/AgentTesting.md`: run
+   focused coverage with `--cov=<changed-package-or-module>` and
+   `--cov-fail-under=90`, or record the exact accepted exception/blocker.
+5. Self-review the diff before claiming completion.
+6. For non-trivial or high-risk work, run spec review first, then code review.
+7. Fix important review findings and re-review the changed area.
+8. Verify with focused tests or the relevant Ray/SDK/E2E check.
+9. Commit and push only after verification, coverage, and required review gates
+   pass.
 
 ## Review Rules
 
@@ -61,6 +65,7 @@ Final responses for changed repo files must include:
 - What changed.
 - Exact tests or smoke checks run.
 - TDD RED/GREEN evidence, or the explicit exception reason.
+- Changed-behavior coverage command/result, or the explicit exception reason.
 - Review status for non-trivial work, or why review was skipped.
 - Commit and push result.
 - Remaining blockers or residual risk.

@@ -62,6 +62,18 @@ validation point: caller / project helper / SDK boundary
 
 For Ray Data and PyArrow paths, test block-level schema stability, not just Python dict or single-row behavior.
 
+When changing Ray execution shape, such as replacing a `map_batches` or
+`compute_stats` path with `Dataset.filter` or another direct row callback, test
+the value representation used by the new Ray callback. Do not only test Python
+dict rows or fake datasets.
+
+For row-wise Ray callbacks, include nullable Arrow scalar cases such as
+`pa.scalar(None, type=pa.int64())` and non-null Arrow scalar values when the
+logic compares, filters, or serializes fields. Verify that the new path
+preserves null and missing-field semantics from the old path, especially when
+the old path used `to_pydict()`, Arrow batch conversion, stats/meta columns, or
+schema normalization.
+
 Include production-shaped corner cases when an operator adds or rewrites columns:
 
 - all-null blocks

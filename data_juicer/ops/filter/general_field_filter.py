@@ -49,6 +49,20 @@ def compile_filter_condition(filter_condition: str = ""):
     return CompiledFilterCondition(filter_condition)
 
 
+def _normalize_filter_value(value: Any) -> Any:
+    if hasattr(value, "as_py"):
+        return value.as_py()
+    return value
+
+
+def _compare_filter_values(left: Any, right: Any, compare_func) -> bool:
+    left = _normalize_filter_value(left)
+    right = _normalize_filter_value(right)
+    if left is None or right is None:
+        return False
+    return compare_func(left, right)
+
+
 class CompiledFilterCondition:
     def __init__(self, filter_condition: str = ""):
         self.filter_condition = (filter_condition or "").strip()
@@ -68,16 +82,32 @@ class CompiledFilterCondition:
 
 class ExpressionTransformer(ast.NodeVisitor):
     _COMPARE_OPERATORS = {
-        ast.Gt: lambda left_operand, right_operand: left_operand > right_operand,
-        ast.Lt: lambda left_operand, right_operand: left_operand < right_operand,
-        ast.Eq: lambda left_operand, right_operand: left_operand == right_operand,
-        ast.NotEq: lambda left_operand, right_operand: left_operand != right_operand,
-        ast.GtE: lambda left_operand, right_operand: left_operand >= right_operand,
-        ast.LtE: lambda left_operand, right_operand: left_operand <= right_operand,
+        ast.Gt: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left > right
+        ),
+        ast.Lt: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left < right
+        ),
+        ast.Eq: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left == right
+        ),
+        ast.NotEq: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left != right
+        ),
+        ast.GtE: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left >= right
+        ),
+        ast.LtE: lambda left_operand, right_operand: _compare_filter_values(
+            left_operand, right_operand, lambda left, right: left <= right
+        ),
     }
 
     def __init__(self, sample: Dict):
         self.sample = sample
+
+    @staticmethod
+    def _normalize_value(value: Any) -> Any:
+        return _normalize_filter_value(value)
 
     def visit_BoolOp(self, node: ast.BoolOp) -> bool:
         values = (self.visit(child) for child in node.values)
@@ -88,8 +118,8 @@ class ExpressionTransformer(ast.NodeVisitor):
         raise ValueError(f"Unsupported logical operator: {type(node.op).__name__}")
 
     def visit_Compare(self, node: ast.Compare) -> bool:
-        left = self.visit(node.left)
-        comparators = [self.visit(c) for c in node.comparators]
+        left = self._normalize_value(self.visit(node.left))
+        comparators = [self._normalize_value(self.visit(c)) for c in node.comparators]
         ops = node.ops
 
         result = True
@@ -101,10 +131,14 @@ class ExpressionTransformer(ast.NodeVisitor):
             if not self._apply_op(op, left, right):
                 result = False
                 break
-            left = right
+            left = self._normalize_value(right)
         return result
 
     def _apply_op(self, op: ast.AST, left: Any, right: Any) -> bool:
+        left = self._normalize_value(left)
+        right = self._normalize_value(right)
+        if left is None or right is None:
+            return False
         op_type = type(op)
         if op_type in self._COMPARE_OPERATORS:
             return self._COMPARE_OPERATORS[op_type](left, right)
