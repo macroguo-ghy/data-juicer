@@ -21,7 +21,7 @@ def _register_extension_type_once(extension_type):
 
 pa.register_extension_type = _register_extension_type_once
 
-from data_juicer.core.export_manager import ExportManager, _quota_reserve_batch
+from data_juicer.core.export_manager import ExportManager, _ExportQuotaActor, _quota_reserve_batch
 from data_juicer.core.io_utils import _flatten_dotted_options
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, Fields, HashKeys
 
@@ -131,6 +131,71 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(exported_dataset.selected_range, [0, 1])
         self.assertEqual(len(exported_dataset), 2)
 
+    def test_default_local_export_records_filesystem_summary(self):
+        cfg = self._make_cfg(
+            {
+                "target": "local",
+                "path": "./outputs/result.jsonl",
+                "type": "jsonl",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+        manager.file_exporter.export = MagicMock(return_value="exported")
+        summary = {"output_files": 1}
+
+        with patch.object(manager, "_local_path_export_summary", return_value=summary) as mock_summary:
+            result = manager.export(object())
+
+        self.assertEqual(result, "exported")
+        manager.file_exporter.export.assert_called_once()
+        mock_summary.assert_called_once_with("./outputs/result.jsonl")
+        self.assertEqual(manager.last_export_summary, summary)
+
+    def test_export_routes_remote_targets_and_rejects_unknown_target(self):
+        cases = [
+            ("lark", "_export_to_lark"),
+            ("tos", "_export_to_tos"),
+            ("magnus", "_export_to_magnus"),
+        ]
+
+        for target, method_name in cases:
+            with self.subTest(target=target):
+                cfg = self._make_cfg({"target": target, "path": f"{target}://unused"})
+                manager = ExportManager(cfg, executor_type="default")
+                dataset = object()
+                with patch.object(manager, method_name, return_value=f"{target}-result") as mock_export:
+                    result = manager.export(dataset, columns=["id"])
+
+                self.assertEqual(result, f"{target}-result")
+                mock_export.assert_called_once_with(dataset, columns=["id"])
+
+        manager = ExportManager(self._make_cfg({"target": "unsupported"}), executor_type="default")
+        with self.assertRaisesRegex(NotImplementedError, "Unsupported export target"):
+            manager.export(object())
+
+    @patch("data_juicer.core.export_manager.Exporter")
+    def test_export_compute_stats_uses_stats_only_exporter(self, mock_exporter_cls):
+        cfg = self._make_cfg({"target": "local", "path": "./outputs/result.jsonl", "type": "jsonl"})
+        manager = ExportManager(cfg, executor_type="default")
+        exporter = MagicMock()
+        mock_exporter_cls.reset_mock()
+        mock_exporter_cls.return_value = exporter
+        dataset = object()
+
+        manager.export_compute_stats(dataset, "./outputs/result_stats.jsonl")
+
+        mock_exporter_cls.assert_called_once_with(
+            export_path="./outputs/result_stats.jsonl",
+            export_type=None,
+            export_shard_size=0,
+            export_in_parallel=False,
+            num_proc=1,
+            keep_stats_in_res_ds=True,
+            keep_hashes_in_res_ds=True,
+            export_stats=False,
+        )
+        exporter.export_compute_stats.assert_called_once_with(dataset, "./outputs/result_stats.jsonl")
+
     @patch("data_juicer.core.export_manager.copy_local_to_uri")
     def test_non_ray_hdfs_export_passes_webhdfs_filesystem_options(self, mock_copy_local_to_uri):
         cfg = self._make_cfg(
@@ -212,6 +277,21 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(mock_ray_exporter.call_args.args[:3], ("hdfs://cluster/path/output_jsonl_dir", "jsonl", 0))
 
     @patch("data_juicer.core.export_manager.RayExporter")
+    def test_ray_hdfs_directory_export_defaults_to_parquet(self, mock_ray_exporter):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        manager._export_to_hdfs(dataset=RayLikeDataset(["text"]), columns=None)
+
+        mock_ray_exporter.assert_called_once()
+        self.assertEqual(mock_ray_exporter.call_args.args[:3], ("hdfs://cluster/path/output_dir", "parquet", 0))
+
+    @patch("data_juicer.core.export_manager.RayExporter")
     @patch("data_juicer.core.export_manager.summarize_filesystem_path")
     def test_ray_hdfs_single_target_current_export_summary_reads_active_exporter(
         self,
@@ -253,6 +333,62 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(observed[0]["targets"][0]["output_files"], 2)
         self.assertEqual(manager.current_export_summary()["output_files"], 2)
         self.assertNotIn("partial", manager.current_export_summary())
+
+    def test_current_export_summary_handles_missing_or_failing_active_exporters(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        self.assertIsNone(manager.current_export_summary())
+
+        class FailingFanout:
+            def partial_write_summary(self):
+                raise RuntimeError("summary failed")
+
+        manager._active_fanout_datasink = FailingFanout()
+        with patch("data_juicer.core.export_manager.logger.warning") as mock_warning:
+            self.assertIsNone(manager.current_export_summary())
+        mock_warning.assert_called_once()
+
+        manager._active_fanout_datasink = None
+        manager._active_file_exporter = object()
+        self.assertIsNone(manager._active_file_export_summary())
+
+        exporter = MagicMock()
+        exporter.pyarrow_filesystem = object()
+        exporter.writer_export_path = "/path/output_dir"
+        manager._active_file_exporter = exporter
+        with (
+            patch.object(manager, "_filesystem_export_summary", side_effect=RuntimeError("metadata failed")),
+            patch("data_juicer.core.export_manager.logger.warning") as mock_warning,
+        ):
+            self.assertIsNone(manager._active_file_export_summary())
+        mock_warning.assert_called_once()
+
+    @patch("data_juicer.core.export_manager.RayExporter")
+    def test_ray_hdfs_export_stores_partial_summary_on_writer_failure(self, mock_ray_exporter):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        exporter = MagicMock()
+        exporter.export.side_effect = RuntimeError("writer failed")
+        mock_ray_exporter.return_value = exporter
+        partial_summary = {"partial": True, "output_files": 1}
+
+        with (
+            patch.object(manager, "_active_file_export_summary", return_value=partial_summary),
+            self.assertRaisesRegex(RuntimeError, "writer failed"),
+        ):
+            manager._export_to_hdfs(RayLikeDataset(["text"]))
+
+        self.assertEqual(manager.last_export_summary, partial_summary)
 
     @patch("data_juicer.core.export_manager.RayHdfsFanoutDatasink")
     @patch("data_juicer.core.export_manager.get_pyarrow_filesystem")
@@ -1033,6 +1169,22 @@ class ExportManagerTest(unittest.TestCase):
         self.assertEqual(rejected.num_rows, 0)
         self.assertEqual(rejected.schema, table.schema)
 
+    def test_quota_reserve_batch_skips_empty_tables(self):
+        table = pa.Table.from_pylist([], schema=pa.schema([("id", pa.int64())]))
+        quota_actor = MagicMock()
+
+        result = _quota_reserve_batch(table, quota_actor=quota_actor)
+
+        self.assertIs(result, table)
+        quota_actor.reserve.remote.assert_not_called()
+
+    def test_export_quota_actor_rejects_after_target_rows_are_reserved(self):
+        actor = _ExportQuotaActor(target_rows=2)
+
+        self.assertTrue(actor.reserve(1))
+        self.assertTrue(actor.reserve(1))
+        self.assertFalse(actor.reserve(1))
+
     def test_bytedance_magnus_demo_configs_write_lance(self):
         demo_root = os.path.join(os.getcwd(), "demos", "bytedance")
         if not os.path.isdir(demo_root):
@@ -1084,6 +1236,126 @@ class ExportManagerTest(unittest.TestCase):
 
         self.assertEqual(os.path.basename(stage_path), "result.parquet")
         mock_build_exporter.assert_called_once_with(os.path.join(tmp_dir, "result.parquet"))
+
+    def test_hdfs_staging_export_defaults_to_parquet_for_directory_path(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class ExporterStub:
+            def export(self, dataset):
+                return None
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir),
+            patch.object(manager, "_build_file_exporter", return_value=ExporterStub()) as mock_build_exporter,
+        ):
+            stage_path = manager._export_via_staging(object())
+
+        self.assertEqual(os.path.basename(stage_path), "dataset.parquet")
+        mock_build_exporter.assert_called_once_with(os.path.join(tmp_dir, "dataset.parquet"))
+
+    def test_ray_staging_export_uses_single_file_path_for_tos(self):
+        cfg = self._make_cfg(
+            {
+                "target": "tos",
+                "bucket_name": "bucket",
+                "object_key": "exports/result.jsonl",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset(["text"])
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir),
+            patch.object(manager, "_export_ray_single_file") as mock_single_file,
+        ):
+            stage_path = manager._export_via_staging(dataset, columns=["text"])
+
+        self.assertEqual(os.path.basename(stage_path), "result.jsonl")
+        mock_single_file.assert_called_once_with(dataset, stage_path, columns=["text"], export_type="jsonl")
+
+    def test_ray_staging_export_uses_ray_exporter_for_other_targets(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/result.csv",
+                "type": "csv",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset(["text"])
+        stage_exporter = MagicMock()
+
+        with (
+            tempfile.TemporaryDirectory() as tmp_dir,
+            patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir),
+            patch.object(manager, "_build_file_exporter", return_value=stage_exporter) as mock_build_exporter,
+        ):
+            stage_path = manager._export_via_staging(dataset, columns=["text"])
+
+        self.assertEqual(os.path.basename(stage_path), "result.csv")
+        mock_build_exporter.assert_called_once_with(stage_path)
+        stage_exporter.export.assert_called_once_with(dataset, columns=["text"])
+
+    def test_ray_single_file_export_writes_supported_formats_and_rejects_unknown_type(self):
+        cfg = self._make_cfg({"target": "tos", "bucket_name": "bucket", "object_key": "exports/result.jsonl"})
+        manager = ExportManager(cfg, executor_type="ray")
+
+        class FakeFrame:
+            def __init__(self):
+                self.calls = []
+
+            def to_csv(self, path, index=False):
+                self.calls.append(("csv", path, index))
+
+            def to_json(self, path, orient=None, lines=False, force_ascii=True):
+                self.calls.append(("json", path, orient, lines, force_ascii))
+
+            def to_parquet(self, path, index=False):
+                self.calls.append(("parquet", path, index))
+
+        class FakeDataset:
+            def __init__(self, frame):
+                self.frame = frame
+                self.select_columns = MagicMock(return_value=self)
+
+            def to_pandas(self):
+                return self.frame
+
+        cases = [
+            ("csv", ("csv", "/tmp/result.csv", False)),
+            ("json", ("json", "/tmp/result.json", "records", False, False)),
+            ("jsonl", ("json", "/tmp/result.jsonl", "records", True, False)),
+            ("parquet", ("parquet", "/tmp/result.parquet", False)),
+        ]
+
+        with patch("data_juicer.core.export_manager.ensure_parent") as mock_ensure_parent:
+            for export_type, expected_call in cases:
+                with self.subTest(export_type=export_type):
+                    frame = FakeFrame()
+                    dataset = FakeDataset(frame)
+
+                    manager._export_ray_single_file(
+                        dataset,
+                        expected_call[1],
+                        columns=["text"],
+                        export_type=export_type,
+                    )
+
+                    dataset.select_columns.assert_called_once_with(["text"])
+                    self.assertEqual(frame.calls, [expected_call])
+
+        self.assertEqual(mock_ensure_parent.call_count, len(cases))
+
+        with self.assertRaisesRegex(NotImplementedError, "single-file"):
+            manager._export_ray_single_file(FakeDataset(FakeFrame()), "/tmp/result.xml", export_type="xml")
 
     def test_staging_export_infers_type_from_tos_object_key(self):
         cfg = self._make_cfg(

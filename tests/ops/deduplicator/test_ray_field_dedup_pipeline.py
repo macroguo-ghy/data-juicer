@@ -108,7 +108,9 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
             field_key="comment_id",
             batch_size=17,
             auto_op_parallelism=False,
-            num_proc=1,
+            num_proc=7,
+            num_cpus=0.5,
+            runtime_env={"env_vars": {"DJ_TEST": "1"}},
         )
         backend = _PreparedLocalBackend()
         op.backend = backend
@@ -118,6 +120,11 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         self.assertTrue(backend.prepared)
         self.assertEqual(dataset.kwargs["batch_format"], "pyarrow")
         self.assertEqual(dataset.kwargs["batch_size"], 17)
+        self.assertIsNotNone(dataset.kwargs["compute"])
+        self.assertEqual(getattr(dataset.kwargs["compute"], "size", None), 7)
+        self.assertEqual(dataset.kwargs["num_cpus"], 0.5)
+        self.assertIsNone(dataset.kwargs["num_gpus"])
+        self.assertEqual(dataset.kwargs["runtime_env"], {"env_vars": {"DJ_TEST": "1"}})
 
     def test_run_supports_nested_dataset_with_local_seen_set(self):
         op = RayFieldDedupPipeline(
@@ -176,10 +183,10 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         op.backend = backend
         table = pa.table(
             {
-                "id": pa.array(["a", "b", "long", "invalid", "c"], type=pa.string()),
-                "md5": pa.array(["same", "same", "same", "same", "other"], type=pa.string()),
-                "item_duration": pa.array([10, 10, 90, 10, 10], type=pa.int64()),
-                "valid_video_count": pa.array([1, 1, 1, 0, 1], type=pa.int64()),
+                "id": pa.array(["a", "b", "long", "invalid", "null_count", "c"], type=pa.string()),
+                "md5": pa.array(["same", "same", "same", "same", "same", "other"], type=pa.string()),
+                "item_duration": pa.array([10, 10, 90, 10, 10, 10], type=pa.int64()),
+                "valid_video_count": pa.array([1, 1, 1, 0, None, 1], type=pa.int64()),
             }
         )
 
@@ -188,7 +195,7 @@ class RayFieldDedupPipelineTest(unittest.TestCase):
         ) as emit_mock:
             output = op.process_batched(table)
 
-        self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "c"])
+        self.assertEqual(output.column("id").to_pylist(), ["a", "long", "invalid", "null_count", "c"])
         self.assertEqual(len(backend.calls), 1)
         self.assertEqual(backend.calls[0][1], ["a", "b", "c"])
         self.assertEqual(

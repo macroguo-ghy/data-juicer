@@ -291,6 +291,103 @@ class DownloadFileMapperTest(DataJuicerTestCaseBase):
         self.assertEqual(results[0][2], "failed")
         self.assertEqual(results[0][4], None)
 
+    def test_timeout_download_is_tagged_separately(self):
+        async def timeout_download(*args, **kwargs):
+            raise TimeoutError("request timed out")
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            retry_times=1,
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=timeout_download), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_qps"
+        ) as emit_qps, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_latency_ms"
+        ) as emit_latency, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_event"
+        ) as emit_event:
+            results = op.download_files_async(["http://example.com/slow.png"], [True])
+
+        self.assertEqual(results[0][2], "timeout")
+        emit_qps.assert_called_once()
+        self.assertEqual(emit_qps.call_args.kwargs["status"], "timeout")
+        emit_latency.assert_called_once()
+        self.assertEqual(emit_latency.call_args.kwargs["status"], "timeout")
+        emit_event.assert_called_once_with(
+            op_name="download_file_mapper",
+            scheme="http",
+            save_mode="memory",
+            event="timeout",
+            reason="timeout",
+            attempt=1,
+            max_attempts=1,
+        )
+
+    def test_retry_download_emits_retry_events_with_reasons(self):
+        attempts = {"count": 0}
+
+        async def flaky_download(*args, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise TimeoutError("request timed out")
+            if attempts["count"] == 2:
+                raise RuntimeError("temporary failure")
+            return object(), b"ok"
+
+        op = DownloadFileMapper(
+            download_field="images",
+            save_field="image_bytes",
+            retry_times=3,
+        )
+
+        with patch("data_juicer.ops.mapper.io.download_file_mapper.download_file", side_effect=flaky_download), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_event"
+        ) as emit_event, patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_qps"
+        ), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_bytes"
+        ), patch(
+            "data_juicer.ops.mapper.io.download_file_mapper.emit_download_latency_ms"
+        ):
+            results = op.download_files_async(["http://example.com/a.png"], [True])
+
+        self.assertEqual(attempts["count"], 3)
+        self.assertEqual(results[0][2], "success")
+        self.assertEqual(len(emit_event.call_args_list), 3)
+        emit_event.assert_has_calls(
+            [
+                unittest.mock.call(
+                    op_name="download_file_mapper",
+                    scheme="http",
+                    save_mode="memory",
+                    event="timeout",
+                    reason="timeout",
+                    attempt=1,
+                    max_attempts=3,
+                ),
+                unittest.mock.call(
+                    op_name="download_file_mapper",
+                    scheme="http",
+                    save_mode="memory",
+                    event="retry",
+                    reason="timeout",
+                    attempt=2,
+                    max_attempts=3,
+                ),
+                unittest.mock.call(
+                    op_name="download_file_mapper",
+                    scheme="http",
+                    save_mode="memory",
+                    event="retry",
+                    reason="error",
+                    attempt=3,
+                    max_attempts=3,
+                ),
+            ]
+        )
+
     def test_download_metrics_cover_success_failure_bytes_and_latency(self):
         async def fake_download(_session, url, _save_path, **_kwargs):
             if url.endswith("failed.png"):

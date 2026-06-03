@@ -1,7 +1,14 @@
+import ast
 import unittest
 
+import pyarrow as pa
+
 from data_juicer.core.data import NestedDataset as Dataset
-from data_juicer.ops.filter.general_field_filter import GeneralFieldFilter, compile_filter_condition
+from data_juicer.ops.filter.general_field_filter import (
+    ExpressionTransformer,
+    GeneralFieldFilter,
+    compile_filter_condition,
+)
 from data_juicer.utils.constant import Fields
 from data_juicer.utils.unittest_utils import DataJuicerTestCaseBase
 
@@ -127,6 +134,63 @@ class GeneralFieldFilterTest(DataJuicerTestCaseBase):
     def test_compiled_condition_treats_empty_as_match_all_and_missing_field_as_false(self):
         self.assertTrue(compile_filter_condition("").matches({"text": "sample"}))
         self.assertFalse(compile_filter_condition("num <= 5").matches({"text": "sample"}))
+
+    def test_compiled_condition_treats_arrow_null_scalar_as_missing_value(self):
+        condition = compile_filter_condition("valid_video_count > 0")
+
+        self.assertFalse(
+            condition.matches({
+                "valid_video_count": pa.scalar(None, type=pa.int64()),
+            })
+        )
+        self.assertTrue(
+            condition.matches({
+                "valid_video_count": pa.scalar(1, type=pa.int64()),
+            })
+        )
+
+    def test_compare_operator_treats_none_operands_as_false(self):
+        transformer = ExpressionTransformer({})
+
+        self.assertFalse(transformer._apply_op(ast.Gt(), None, 0))
+        self.assertFalse(transformer._apply_op(ast.Gt(), 1, None))
+
+    def test_compare_operator_table_treats_none_operands_as_false(self):
+        operators = [
+            ast.Gt,
+            ast.Lt,
+            ast.Eq,
+            ast.NotEq,
+            ast.GtE,
+            ast.LtE,
+        ]
+        null_operands = [
+            (None, 0),
+            (1, None),
+            (pa.scalar(None, type=pa.int64()), 0),
+            (1, pa.scalar(None, type=pa.int64())),
+        ]
+
+        for op_type in operators:
+            compare = ExpressionTransformer._COMPARE_OPERATORS[op_type]
+            for left, right in null_operands:
+                with self.subTest(op_type=op_type.__name__, left=left, right=right):
+                    self.assertFalse(compare(left, right))
+
+    def test_compare_operator_table_handles_non_null_arrow_scalars(self):
+        cases = [
+            (ast.Gt, pa.scalar(2, type=pa.int64()), pa.scalar(1, type=pa.int64()), True),
+            (ast.Lt, pa.scalar(1, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.Eq, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.NotEq, pa.scalar(2, type=pa.int64()), pa.scalar(1, type=pa.int64()), True),
+            (ast.GtE, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+            (ast.LtE, pa.scalar(2, type=pa.int64()), pa.scalar(2, type=pa.int64()), True),
+        ]
+
+        for op_type, left, right, expected in cases:
+            compare = ExpressionTransformer._COMPARE_OPERATORS[op_type]
+            with self.subTest(op_type=op_type.__name__):
+                self.assertEqual(compare(left, right), expected)
 
 
 if __name__ == '__main__':

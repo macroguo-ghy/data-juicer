@@ -1,6 +1,9 @@
 import os
 import importlib.util
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from data_juicer.utils.unittest_utils import TEST_TAG, DataJuicerTestCaseBase
@@ -301,6 +304,320 @@ class RayDatasetImportTest(unittest.TestCase):
         ray_dataset.process([HookMapper(auto_op_parallelism=False)])
 
         self.assertEqual(events, ["map_batches"])
+
+    def test_process_stateless_non_stats_filter_skips_stats_phase(self):
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+        from data_juicer.utils.constant import Fields
+
+        events = []
+        compute_calls = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.rows = [
+                    {"id": "keep", "valid_video_count": 1},
+                    {"id": "drop", "valid_video_count": 0},
+                ]
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "valid_video_count"]))
+
+            def map_batches(self, *args, **kwargs):
+                events.append(("map_batches", kwargs.get("batch_format")))
+                return self
+
+            def filter(self, filter_func, **kwargs):
+                events.append(("filter", getattr(filter_func, "__name__", repr(filter_func)), kwargs))
+                self.rows = [row for row in self.rows if filter_func(row)]
+                return self
+
+        def fake_get_compute_strategy(fn, concurrency):
+            compute_calls.append((getattr(fn, "__name__", repr(fn)), concurrency))
+            return "direct-filter-compute"
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "valid_video_count"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch(
+            "data_juicer.core.data.ray_dataset.get_compute_strategy",
+            side_effect=fake_get_compute_strategy,
+        ):
+            ray_dataset.process(
+                StatelessFieldFilter(
+                    filter_condition="valid_video_count > 0",
+                    num_proc=8,
+                    num_cpus=0.25,
+                    num_gpus=0.5,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(compute_calls, [("process_single", 8)])
+        self.assertEqual(
+            events,
+            [
+                (
+                    "filter",
+                    "process_single",
+                    {
+                        "compute": "direct-filter-compute",
+                        "num_cpus": 0.25,
+                        "num_gpus": 0.5,
+                        "runtime_env": None,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "valid_video_count": 1}])
+        self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
+    def test_process_stateless_non_stats_filter_omits_unset_ray_resources(self):
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "valid_video_count"]))
+
+            def filter(self, filter_func, **kwargs):
+                events.append(kwargs)
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "valid_video_count"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch("data_juicer.core.data.ray_dataset.get_compute_strategy", return_value="direct-filter-compute"):
+            ray_dataset.process(
+                StatelessFieldFilter(
+                    filter_condition="valid_video_count > 0",
+                    num_proc=8,
+                    num_cpus=1,
+                    num_gpus=None,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(
+            events,
+            [
+                {
+                    "compute": "direct-filter-compute",
+                    "num_cpus": 1,
+                    "runtime_env": None,
+                }
+            ],
+        )
+
+    def test_process_stateless_non_stats_filter_handles_nullable_arrow_rows(self):
+        import pyarrow as pa
+        import ray
+
+        with tempfile.TemporaryDirectory() as av_stub_dir:
+            Path(av_stub_dir, "av.py").write_text(
+                "class _Logging:\n"
+                "    PANIC = 0\n"
+                "    def set_level(self, *args, **kwargs):\n"
+                "        pass\n"
+                "logging = _Logging()\n"
+                "class _Container:\n"
+                "    class InputContainer:\n"
+                "        pass\n"
+                "container = _Container()\n",
+                encoding="utf-8",
+            )
+            pythonpath_parts = [av_stub_dir, os.getcwd()]
+            if os.environ.get("PYTHONPATH"):
+                pythonpath_parts.append(os.environ["PYTHONPATH"])
+            pythonpath = os.pathsep.join(pythonpath_parts)
+            sys.path.insert(0, av_stub_dir)
+
+            from data_juicer.core.data.ray_dataset import RayDataset
+            from data_juicer.ops.filter.stateless_field_filter import StatelessFieldFilter
+            from data_juicer.utils.constant import Fields
+
+            started_ray = False
+            if not ray.is_initialized():
+                ray.init(
+                    num_cpus=2,
+                    include_dashboard=False,
+                    ignore_reinit_error=True,
+                    runtime_env={"env_vars": {"PYTHONPATH": pythonpath}},
+                )
+                started_ray = True
+            try:
+                table = pa.table(
+                    {
+                        "id": pa.array(["null", "drop", "keep"], type=pa.string()),
+                        "valid_video_count": pa.array([None, 0, 1], type=pa.int64()),
+                    }
+                )
+                ray_dataset = RayDataset.__new__(RayDataset)
+                ray_dataset.cfg = SimpleNamespace(
+                    dataset={"configs": [{"columns": ["id", "valid_video_count"]}]}
+                )
+                ray_dataset.data = ray.data.from_arrow(table)
+                ray_dataset._auto_proc = False
+                ray_dataset._cached_row_count = None
+                ray_dataset._row_count_getter = None
+
+                ray_dataset.process(
+                    StatelessFieldFilter(
+                        filter_condition="valid_video_count > 0",
+                        num_cpus=1,
+                        num_gpus=None,
+                        auto_op_parallelism=False,
+                    )
+                )
+
+                rows = ray_dataset.data.take_all()
+
+                self.assertEqual(rows, [{"id": "keep", "valid_video_count": 1}])
+                self.assertNotIn(Fields.stats, rows[0])
+            finally:
+                if started_ray:
+                    ray.shutdown()
+                if av_stub_dir in sys.path:
+                    sys.path.remove(av_stub_dir)
+
+    def test_process_batched_non_stats_filter_uses_single_filter_batch(self):
+        import pyarrow as pa
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.specified_field_non_empty_filter import SpecifiedFieldNonEmptyFilter
+        from data_juicer.utils.constant import Fields
+
+        events = []
+        compute_calls = []
+
+        class FakeRayData:
+            def __init__(self):
+                self.rows = [
+                    {"id": "drop", "ocr_result": []},
+                    {"id": "keep", "ocr_result": ["ocr-json"]},
+                ]
+
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "ocr_result"]))
+
+            def map_batches(self, batch_func, *args, **kwargs):
+                events.append(("map_batches", kwargs))
+                output = batch_func(pa.Table.from_pylist(self.rows))
+                self.rows = output.to_pylist()
+                return self
+
+            def filter(self, *args, **kwargs):
+                events.append(("filter", None))
+                return self
+
+        def fake_get_compute_strategy(fn, concurrency):
+            compute_calls.append((callable(fn), concurrency))
+            return "direct-batch-filter-compute"
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "ocr_result"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch(
+            "data_juicer.core.data.ray_dataset.get_compute_strategy",
+            side_effect=fake_get_compute_strategy,
+        ):
+            ray_dataset.process(
+                SpecifiedFieldNonEmptyFilter(
+                    field_key="ocr_result",
+                    batch_size=2,
+                    num_proc=4,
+                    num_cpus=0.25,
+                    num_gpus=0.5,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(compute_calls, [(True, 4)])
+        self.assertEqual(len(events), 1)
+        event_name, event_kwargs = events[0]
+        self.assertEqual(event_name, "map_batches")
+        self.assertEqual(
+            {
+                "batch_format": event_kwargs["batch_format"],
+                "zero_copy_batch": event_kwargs["zero_copy_batch"],
+                "batch_size": event_kwargs["batch_size"],
+                "compute": event_kwargs["compute"],
+                "num_cpus": event_kwargs["num_cpus"],
+                "num_gpus": event_kwargs["num_gpus"],
+                "runtime_env": event_kwargs["runtime_env"],
+            },
+            {
+                "batch_format": "pyarrow",
+                "zero_copy_batch": True,
+                "batch_size": 2,
+                "compute": "direct-batch-filter-compute",
+                "num_cpus": 0.25,
+                "num_gpus": 0.5,
+                "runtime_env": None,
+            },
+        )
+
+        self.assertEqual(ray_dataset.data.rows, [{"id": "keep", "ocr_result": ["ocr-json"]}])
+        self.assertNotIn(Fields.stats, ray_dataset.data.rows[0])
+
+    def test_process_batched_non_stats_filter_omits_unset_ray_resources(self):
+        from unittest.mock import patch
+
+        from data_juicer.core.data.ray_dataset import RayDataset
+        from data_juicer.ops.filter.specified_field_non_empty_filter import SpecifiedFieldNonEmptyFilter
+
+        events = []
+
+        class FakeRayData:
+            def schema(self, *args, **kwargs):
+                return SimpleNamespace(base_schema=SimpleNamespace(names=["id", "ocr_result"]))
+
+            def map_batches(self, batch_func, *args, **kwargs):
+                events.append(kwargs)
+                return self
+
+        ray_dataset = RayDataset.__new__(RayDataset)
+        ray_dataset.cfg = SimpleNamespace(dataset={"configs": [{"columns": ["id", "ocr_result"]}]})
+        ray_dataset.data = FakeRayData()
+        ray_dataset._auto_proc = False
+        ray_dataset._cached_row_count = None
+        ray_dataset._row_count_getter = None
+
+        with patch("data_juicer.core.data.ray_dataset.get_compute_strategy", return_value="direct-batch-filter-compute"):
+            ray_dataset.process(
+                SpecifiedFieldNonEmptyFilter(
+                    field_key="ocr_result",
+                    batch_size=2,
+                    num_proc=4,
+                    num_cpus=1,
+                    num_gpus=None,
+                    auto_op_parallelism=False,
+                )
+            )
+
+        self.assertEqual(len(events), 1)
+        self.assertNotIn("num_gpus", events[0])
+        self.assertEqual(events[0]["num_cpus"], 1)
+        self.assertEqual(events[0]["compute"], "direct-batch-filter-compute")
 
     def test_process_does_not_call_base_lifecycle_hooks_for_plain_operator(self):
         from data_juicer.core.data.ray_dataset import RayDataset
