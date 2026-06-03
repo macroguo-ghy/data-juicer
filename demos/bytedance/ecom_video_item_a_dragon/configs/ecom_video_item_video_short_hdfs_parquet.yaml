@@ -1,8 +1,13 @@
 # 电商视频-视频-短视频
-project_name: "ecom-video-item-video-short-ray"
+project_name: "电商视频-视频-短视频"
 executor_type: "ray"
 ray_address: "auto"
 min_common_dep_num_to_combine: 0
+
+ray_data_checkpoint:
+  enabled: true
+  dir: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/checkpoint/ccu/ecom_video_douyin_aweme/_add_vid_video_partitioned/video_duration_group=short_2"
+  delete_no_checkpoint_files: true
 
 notification_hooks:
   - type: "adc_lark_message"
@@ -54,13 +59,13 @@ dataset:
       source: hdfs
       path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ecom_raw/video_douyin_aweme/20260208_add_vid"
       format: "parquet"
-      override_num_blocks: 2048
+      override_num_blocks: 1024
       concurrency: 512
       num_cpus: 0.5
       skip_zero_row_group_files: true
 
 process:
-  - general_field_filter:
+  - stateless_field_filter:
       batch_size: 200
       num_proc: 512
       num_cpus: 1
@@ -97,7 +102,7 @@ process:
       output_key: "urls"
       quality_preference: "720p"
       max_vids_per_request: 20
-      qps: 50000
+      qps: 100
       ak: "${VIDEOARCH_AK}"
       sk: "${VIDEOARCH_SK}"
       psm: "toutiao.videoarch.smart_player"
@@ -105,10 +110,10 @@ process:
   - download_file_mapper:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       download_field: "urls"
       save_field: "videos"
-      timeout: 2
+      timeout: 30
       retry_times: 3
       max_concurrent: 1
       filter_non_url: true
@@ -116,7 +121,7 @@ process:
   - bytes_exact_dedup_mapper:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       url_key: "urls"
       bytes_key: "videos"
       md5_key: "md5"
@@ -124,7 +129,7 @@ process:
   - ray_field_dedup_pipeline:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       condition: "valid_video_count > 0"
       field_key: "md5"
       id_key: "id"
@@ -134,7 +139,7 @@ process:
   - stateless_field_filter:
       batch_size: 50
       num_proc: 512
-      num_cpus: 1
+      num_cpus: 5
       filter_condition: "valid_video_count > 0"
 
 export:
@@ -158,6 +163,5 @@ export:
       - {name: "type", type: "string"}
   extra_args:
     concurrency: 64
-    avoid_write_fusion: true
-    min_rows_per_file: 25
-    max_rows_per_file: 50
+    min_rows_per_file: 1000
+    max_rows_per_file: 1500
