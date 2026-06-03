@@ -485,7 +485,7 @@ export:
 | --- | --- | --- | --- |
 | `target` | 从 `export_path` 推断 | 自动推断 | 导出目标：`local`、`s3`、`hdfs`、`hive`、`lark`、`tos`、`magnus`。 |
 | `path` | `export_path` | 无 | 输出路径。local/s3/hdfs 使用；部分远端目标作为暂存类型推断来源。 |
-| `type` | `export_type` | 从路径后缀推断 | 输出格式。 |
+| `type` | `export_type` | 从路径后缀推断；HDFS 无后缀时为 `parquet`，其他目标无后缀时为 `jsonl` | 输出格式。 |
 | `in_parallel` | `export_in_parallel` | `false` | 默认模式单文件导出是否并行。 |
 | `max_rows` | 无 | `null` | 控制传给导出 sink 的行数，必须是正整数。 |
 | `max_rows_mode` | 无 | `limit` | `limit`：默认实现，导出行数不超过 `max_rows`，Ray 模式会在写入前应用 `Dataset.limit(max_rows)` 并尽量保留 lazy limit 下推能力。`quota_reservation`：Ray-only，按 pyarrow batch 整批放行直到至少达到 `max_rows`，随后 materialize quota 过滤后的 Ray Dataset 再交给 sink，成功写入时行数可超过 `max_rows`。 |
@@ -587,7 +587,7 @@ export:
 
 - 先导出到本地 `work_dir/.io_cache/export/...`。
 - 再通过 PyArrow filesystem 复制到 HDFS。
-- `type` 可显式设置；不设置时依次从 `path` 后缀、默认值推断。
+- `type` 可显式设置；不设置时依次从 `path` 后缀、默认值推断。HDFS 目标路径无格式后缀时默认 `parquet`。
 
 ### Ray 分布式模式
 
@@ -624,7 +624,7 @@ export:
 | 字段 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `path` | 是 | 无 | 目标 HDFS 目录，必须以 `hdfs://` 开头。Ray 分布式 HDFS export 要求目录路径，不能是 `*.parquet`、`*.json`、`*.jsonl`、`*.csv` 这类文件路径。 |
-| `type` | 否 | 从路径后缀推断，否则 `jsonl` | Ray 分布式 HDFS export 当前支持 `parquet`、`jsonl`。其他格式仍走默认 staging copy 路径；开启 `ray_data_checkpoint` 时会提前报错。 |
+| `type` | 否 | 从路径后缀推断，否则 `parquet` | Ray 分布式 HDFS export 当前支持 `parquet`、`jsonl`。其他格式仍走默认 staging copy 路径；开启 `ray_data_checkpoint` 时会提前报错。 |
 | `filesystem` | 否 | `pyarrow` | HDFS filesystem 实现。生产和线上 Ray 集群使用 `pyarrow`；`webhdfs` 仅用于本地或测试环境验证。 |
 | `webhdfs` | 否 | `{}` | 仅在 `filesystem: webhdfs` 的测试场景生效，传给 fsspec 的参数，例如 `host`、`port`、`user`。 |
 | `mode` | 否 | `error_if_exists` | 写入模式。`error_if_exists`：目标已存在时失败；`overwrite`：写入前删除已有目标；`append`：直接追加 part 文件，重试或重跑可能产生重复文件。single-target checkpoint 的可启用性不依赖具体 `mode`，但 fan-out checkpoint 只允许显式 `append`。 |

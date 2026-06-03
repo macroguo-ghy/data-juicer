@@ -608,7 +608,7 @@ class ExportManager:
         )
 
     def _hdfs_export_type(self):
-        return self.export_cfg.get("type") or self._suffix_from_path(self.path) or "jsonl"
+        return self.export_cfg.get("type") or self._suffix_from_path(self.path) or self._default_export_type()
 
     def _validate_ray_distributed_hdfs_export(self):
         if self.export_cfg.get("shard_size", 0):
@@ -823,8 +823,13 @@ class ExportManager:
             or self._suffix_from_path(filename)
             or self._suffix_from_path(self.export_cfg.get("object_key"))
             or self._suffix_from_path(self.path)
-            or "jsonl"
+            or self._default_export_type()
         )
+
+    def _default_export_type(self) -> str:
+        if self.target == "hdfs":
+            return "parquet"
+        return "jsonl"
 
     @staticmethod
     def _normalize_export_cfg(cfg) -> Dict[str, Any]:
