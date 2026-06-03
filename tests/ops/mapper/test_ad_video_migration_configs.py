@@ -17,7 +17,10 @@ class AdVideoConfigLoadTest(unittest.TestCase):
         expected = {
             "ad_video_short_hdfs_parquet.yaml": {
                 "filter": "video_duration <= 60",
-                "output_suffix": "20260117_full_video_short_dedup",
+                "output_path": (
+                    "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/"
+                    "ad_video/20260117_full_video_short_dedup"
+                ),
                 "op_classes": [
                     "StatelessFieldFilter",
                     "JsonObjectMapper",
@@ -39,7 +42,9 @@ class AdVideoConfigLoadTest(unittest.TestCase):
             },
             "ad_video_long_hdfs_parquet.yaml": {
                 "filter": "video_duration > 60",
-                "output_suffix": "20260117_video_long",
+                "output_path": (
+                    "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ad_video/20260117_video_long"
+                ),
                 "op_classes": [
                     "GeneralFieldFilter",
                     "JsonObjectMapper",
@@ -102,7 +107,11 @@ class AdVideoConfigLoadTest(unittest.TestCase):
                 self.assertEqual(cfg.export["target"], "hdfs")
                 self.assertEqual(cfg.export["type"], "parquet")
                 self.assertEqual(cfg.export["mode"], "overwrite")
-                self.assertTrue(cfg.export["path"].endswith(tuning["output_suffix"]))
+                self.assertEqual(cfg.export["path"], tuning["output_path"])
+                self.assertEqual(
+                    cfg.notification_hooks[0]["custom_fields"]["output_url"],
+                    tuning["output_path"],
+                )
                 self.assertEqual(cfg.export["filesystem"], "pyarrow")
                 extra_args = cfg.export["extra_args"]
                 self.assertEqual(extra_args["concurrency"], 64)

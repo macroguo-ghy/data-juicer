@@ -17,7 +17,7 @@ notification_hooks:
     template_id: "AAqtelosmXDl1"
     custom_fields:
       biz: "ad_video_short"
-      output_url: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_full_video_short_dedup"
+      output_url: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ad_video/20260117_full_video_short_dedup"
     custom_stats:
       - key: "dedup.eligible_rows"
         label: "广告短视频去重候选行数"
@@ -140,7 +140,7 @@ process:
 export:
   target: "hdfs"
   type: "parquet"
-  path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_full_video_short_dedup"
+  path: "hdfs://haruna/ad_base/addrd_core/addrd_stats/hdfs/ccu/ad_video/20260117_full_video_short_dedup"
   mode: "overwrite"
   filesystem: "pyarrow"
   schema:
