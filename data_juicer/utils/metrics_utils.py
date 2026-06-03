@@ -16,6 +16,7 @@ RPC_QPS_METRIC = "rpc.qps"
 DOWNLOAD_QPS_METRIC = "download.qps"
 DOWNLOAD_BYTES_METRIC = "download.bytes"
 DOWNLOAD_LATENCY_MS_METRIC = "download.latency_ms"
+DOWNLOAD_EVENT_METRIC = "download.event"
 VLM_QPS_METRIC = "vlm.qps"
 VLM_RATE_LIMIT_EVENT_METRIC = "vlm.rate_limit.event"
 VLM_RATE_LIMIT_VALUE_METRIC = "vlm.rate_limit.value"
@@ -146,6 +147,35 @@ def emit_download_latency_ms(
     )
 
 
+def emit_download_event(
+    *,
+    op_name: str,
+    scheme: str,
+    save_mode: str,
+    event: str,
+    reason: str,
+    attempt: int,
+    max_attempts: int,
+    extra_tags: dict[str, Any] | None = None,
+) -> None:
+    event = _runtime_key_part(event)
+    op_name = _runtime_key_part(op_name)
+    _emit_rate_counter(
+        DOWNLOAD_EVENT_METRIC,
+        {
+            "op_name": op_name,
+            "scheme": scheme,
+            "save_mode": save_mode,
+            "event": event,
+            "reason": reason,
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            **(extra_tags or {}),
+        },
+    )
+    _record_runtime_operation_event("download", op_name=op_name, event=event)
+
+
 def emit_vlm_rate_limit_event(
     *,
     event: str,
@@ -254,6 +284,30 @@ def record_runtime_operation_counts(
             incr_task_kv(key, delta, namespace=RUNTIME_STATS_NAMESPACE, wait=False)
         except Exception as err:  # noqa: BLE001
             _log_metrics_warning_once(f"Failed to update runtime stats counter: {err}")
+            return
+
+
+def _record_runtime_operation_event(
+    family: str,
+    *,
+    op_name: str,
+    event: str,
+    count: int | float = 1,
+) -> None:
+    family = _runtime_key_part(family)
+    op_name = _runtime_key_part(op_name)
+    event = _runtime_key_part(event)
+    deltas = {
+        f"{family}.{event}_count": count,
+        f"{family}.{op_name}.{event}_count": count,
+    }
+    for key, delta in deltas.items():
+        if not delta:
+            continue
+        try:
+            incr_task_kv(key, delta, namespace=RUNTIME_STATS_NAMESPACE, wait=False)
+        except Exception as err:  # noqa: BLE001
+            _log_metrics_warning_once(f"Failed to update runtime stats event counter: {err}")
             return
 
 

@@ -171,6 +171,49 @@ class MetricsUtilsTest(unittest.TestCase):
         self.assertEqual(calls[2][0], "store")
         self.assertEqual(calls[2][3], 34.5)
 
+    @patch("data_juicer.utils.metrics_utils.incr_task_kv")
+    def test_emit_download_event_updates_counter_and_runtime_stats(self, incr_mock):
+        calls = []
+
+        class FakeClient:
+            def __init__(self, prefix):
+                self.prefix = prefix
+
+            def emit_rate_counter(self, name, value, tags):
+                calls.append(("counter", self.prefix, name, value, tags))
+
+        fake_metrics = types.SimpleNamespace(Client=FakeClient)
+        sys.modules["bytedance"] = types.SimpleNamespace(metrics=fake_metrics)
+        metrics_utils.set_metrics_context(job_id="job-1")
+
+        metrics_utils.emit_download_event(
+            op_name="download_file_mapper",
+            scheme="http",
+            save_mode="memory",
+            event="retry",
+            reason="timeout",
+            attempt=2,
+            max_attempts=3,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][2], "download.event")
+        self.assertEqual(calls[0][3], 1)
+        self.assertEqual(calls[0][4]["op_name"], "download_file_mapper")
+        self.assertEqual(calls[0][4]["scheme"], "http")
+        self.assertEqual(calls[0][4]["save_mode"], "memory")
+        self.assertEqual(calls[0][4]["event"], "retry")
+        self.assertEqual(calls[0][4]["reason"], "timeout")
+        self.assertEqual(calls[0][4]["attempt"], "2")
+        self.assertEqual(calls[0][4]["max_attempts"], "3")
+        incr_mock.assert_has_calls(
+            [
+                call("download.retry_count", 1, namespace="runtime_stats", wait=False),
+                call("download.download_file_mapper.retry_count", 1, namespace="runtime_stats", wait=False),
+            ],
+            any_order=True,
+        )
+
     @patch("data_juicer.utils.metrics_utils._emit_rate_counter")
     @patch("data_juicer.utils.metrics_utils.incr_task_kv")
     def test_qps_metrics_update_runtime_operation_counts(self, incr_mock, _emit_mock):

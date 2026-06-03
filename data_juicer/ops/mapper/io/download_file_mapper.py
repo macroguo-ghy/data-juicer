@@ -13,6 +13,7 @@ from loguru import logger
 from data_juicer.utils.file_utils import download_file, is_remote_path
 from data_juicer.utils.metrics_utils import (
     emit_download_bytes,
+    emit_download_event,
     emit_download_latency_ms,
     emit_download_qps,
     record_runtime_operation_counts,
@@ -128,7 +129,7 @@ class DownloadFileMapper(Mapper):
 
                 async with semaphore:
                     last_error = None
-                    for _ in range(self.retry_times):
+                    for attempt in range(1, self.retry_times + 1):
                         try:
                             response, content = await download_file(
                                 session, url, save_path, return_content=True, timeout=self.timeout, **kwargs
@@ -137,10 +138,31 @@ class DownloadFileMapper(Mapper):
                             break
                         except Exception as e:
                             last_error = e
+                            reason = self._download_failure_reason(e)
+                            if reason == "timeout":
+                                self._emit_download_event(
+                                    url=url,
+                                    save_dir=save_dir,
+                                    return_content=return_content,
+                                    event="timeout",
+                                    reason=reason,
+                                    attempt=attempt,
+                                    max_attempts=self.retry_times,
+                                )
+                            if attempt < self.retry_times:
+                                self._emit_download_event(
+                                    url=url,
+                                    save_dir=save_dir,
+                                    return_content=return_content,
+                                    event="retry",
+                                    reason=reason,
+                                    attempt=attempt + 1,
+                                    max_attempts=self.retry_times,
+                                )
                     if last_error is not None:
                         raise last_error
             except Exception as e:
-                status = "failed"
+                status = self._download_failure_status(e)
                 response = str(e)
                 save_path = None
                 content = None
@@ -238,6 +260,41 @@ class DownloadFileMapper(Mapper):
             status=status,
             latency_ms=latency_ms,
             save_mode=save_mode,
+        )
+
+    def _emit_download_event(
+        self,
+        *,
+        url,
+        save_dir,
+        return_content: bool,
+        event: str,
+        reason: str,
+        attempt: int,
+        max_attempts: int,
+    ) -> None:
+        emit_download_event(
+            op_name=self._name,
+            scheme=self._download_scheme(url),
+            save_mode=self._download_save_mode(save_dir, return_content),
+            event=event,
+            reason=reason,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+
+    @classmethod
+    def _download_failure_reason(cls, exc: BaseException) -> str:
+        return "timeout" if cls._is_timeout_error(exc) else "error"
+
+    @classmethod
+    def _download_failure_status(cls, exc: BaseException) -> str:
+        return "timeout" if cls._is_timeout_error(exc) else "failed"
+
+    @staticmethod
+    def _is_timeout_error(exc: BaseException) -> bool:
+        return isinstance(exc, (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError)) or (
+            "Timeout" in exc.__class__.__name__
         )
 
     @staticmethod
