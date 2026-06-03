@@ -1128,6 +1128,7 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.rpc.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": false,
           "tags": {
@@ -1160,6 +1161,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:924",
           "format": "reqps",
           "label": null,
           "logBase": 1,
@@ -1168,6 +1170,7 @@
           "show": true
         },
         {
+          "$$hashKey": "object:925",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -1253,6 +1256,7 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": true,
           "metric": "ad.ai.data_forge.download.qps",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": false,
           "tags": {
@@ -1269,7 +1273,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "下载请求速率（status/op/scheme/save_mode）",
+      "title": "下载请求QPS（status/op/scheme/save_mode）",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1469,7 +1473,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "aggregator": "avg",
+          "aggregator": "sum",
           "alias": "bytes.$tag_op_name | $tag_scheme | $tag_save_mode",
           "currentTagKey": "",
           "currentTagValue": "",
@@ -1479,10 +1483,10 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": false,
           "metric": "ad.ai.data_forge.download.bytes",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": false,
           "tags": {
-            "job_id": "*",
             "op_name": "*",
             "save_mode": "*",
             "scheme": "*"
@@ -1494,7 +1498,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "下载字节数",
+      "title": "下载总流量",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1510,6 +1514,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:256",
           "format": "bytes",
           "label": null,
           "logBase": 1,
@@ -1518,6 +1523,119 @@
           "show": true
         },
         {
+          "$$hashKey": "object:257",
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Per-file successful download byte count. Uses content length when in-memory bytes are available, otherwise saved file size.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "hiddenSeries": false,
+      "id": 22,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "avg",
+          "alias": "bytes.$tag_op_name | $tag_scheme | $tag_save_mode",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": false,
+          "metric": "ad.ai.data_forge.download.bytes",
+          "rateDownsampleType": "before_downsample",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "op_name": "*",
+            "save_mode": "*",
+            "scheme": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载平均大小",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "$$hashKey": "object:256",
+          "format": "bytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "$$hashKey": "object:257",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -1548,7 +1666,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 59
       },
       "hiddenSeries": false,
       "id": 19,
@@ -1589,10 +1707,10 @@
           "downsampleFillPolicyDisabled": false,
           "isCounter": false,
           "metric": "ad.ai.data_forge.download.latency_ms",
+          "rateDownsampleType": "before_downsample",
           "refId": "A",
           "shouldComputeRate": false,
           "tags": {
-            "job_id": "*",
             "op_name": "*",
             "save_mode": "*",
             "scheme": "*",
@@ -1605,7 +1723,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "下载耗时 ms",
+      "title": "下载平均耗时 ms",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1621,6 +1739,7 @@
       },
       "yaxes": [
         {
+          "$$hashKey": "object:853",
           "format": "ms",
           "label": null,
           "logBase": 1,
@@ -1629,6 +1748,124 @@
           "show": true
         },
         {
+          "$$hashKey": "object:854",
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Rate-counter metric emitted by download_file_mapper for retry and timeout events. event=retry counts a scheduled next attempt; event=timeout counts each timed-out attempt. Render directly without Grafana compute-rate.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "hiddenSeries": false,
+      "id": 60,
+      "legend": {
+        "avg": false,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.5.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "aggregator": "sum",
+          "alias": "$tag_event | $tag_reason | $tag_op_name | $tag_scheme | $tag_save_mode | attempt=$tag_attempt/$tag_max_attempts",
+          "currentTagKey": "",
+          "currentTagValue": "",
+          "downsampleAggregator": "avg",
+          "downsampleAggregatorDisabled": false,
+          "downsampleFillPolicy": "none",
+          "downsampleFillPolicyDisabled": false,
+          "isCounter": true,
+          "metric": "ad.ai.data_forge.download.event",
+          "rateDownsampleType": "before_downsample",
+          "refId": "A",
+          "shouldComputeRate": false,
+          "tags": {
+            "attempt": "*",
+            "event": "*",
+            "job_id": "*",
+            "max_attempts": "*",
+            "op_name": "*",
+            "reason": "*",
+            "save_mode": "*",
+            "scheme": "*"
+          },
+          "tenant": "default"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "下载事件速率（retry/timeout）",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "$$hashKey": "object:960",
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "$$hashKey": "object:961",
           "format": "short",
           "label": null,
           "logBase": 1,
@@ -1649,7 +1886,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 67
       },
       "id": 20,
       "panels": [],
@@ -1673,7 +1910,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 60
+        "y": 68
       },
       "hiddenSeries": false,
       "id": 21,
@@ -1774,7 +2011,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 76
       },
       "id": 11,
       "panels": [],
@@ -1798,7 +2035,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 69
+        "y": 77
       },
       "hiddenSeries": false,
       "id": 12,
@@ -1996,12 +2233,12 @@
     "list": []
   },
   "time": {
-    "from": "now-7d",
+    "from": "now-3h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Data-Juicer Metrics",
   "uid": "LUEhrf1vk",
-  "version": 9
+  "version": 17
 }
