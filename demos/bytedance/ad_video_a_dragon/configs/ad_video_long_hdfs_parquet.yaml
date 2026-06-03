@@ -1,0 +1,87 @@
+# 广告视频-视频-长视频
+project_name: "ad-video-long"
+executor_type: "ray"
+ray_address: "auto"
+min_common_dep_num_to_combine: 0
+
+notification_hooks:
+  - type: "adc_lark_message"
+    enabled: true
+    interval: "5min"
+    on_success: true
+    on_failure: true
+    fail_on_error: false
+    ctx:
+      userAccount: "guohongyu.7"
+      apiBase: "https://ai-data-center.bytedance.net/api"
+    template_id: "AAqtelosmXDl1"
+    custom_fields:
+      biz: "ad_video_long"
+      output_url: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_video_long"
+    custom_stats: []
+
+dataset:
+  configs:
+    - type: remote
+      source: hdfs
+      path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_sampled"
+      format: "parquet"
+      override_num_blocks: 2048
+      concurrency: 512
+      num_cpus: 0.5
+      skip_zero_row_group_files: true
+
+process:
+  - general_field_filter:
+      batch_size: 200
+      num_proc: 512
+      num_cpus: 1
+      filter_condition: "video_duration > 60"
+  - json_object_mapper:
+      batch_size: 200
+      num_proc: 512
+      num_cpus: 1
+      output_key: "extra"
+      include_all: true
+      exclude_keys:
+        - "p_date"
+  - field_assign_mapper:
+      batch_size: 200
+      num_proc: 512
+      num_cpus: 1
+      assignments:
+        id: {template: "vid-{image_uri}", type: "string"}
+        source: {value: "ad_video_raw_data", type: "string"}
+        type: {value: "video", type: "string"}
+        has_audio_in_video: {value: true, type: "bool"}
+        texts: {value: null, type: "string"}
+        audios: {value: null, type: "string"}
+        images: {value: null, type: "string"}
+        urls: {value: null, type: "list<string>"}
+        videos: {value: null, type: "list<binary>"}
+        md5: {value: null, type: "string"}
+
+export:
+  target: "hdfs"
+  type: "parquet"
+  path: "hdfs://haruna/home/byte_life_gen_ai/user/wangqianle/ad_raw/video_v1/20260117_video_long"
+  mode: "overwrite"
+  filesystem: "pyarrow"
+  schema:
+    fields:
+      - {name: "id", type: "string"}
+      - {name: "urls", type: "list<string>"}
+      - {name: "videos", type: "list<binary>"}
+      - {name: "md5", type: "string"}
+      - {name: "extra", type: "string"}
+      - {name: "source", type: "string"}
+      - {name: "texts", type: "string"}
+      - {name: "audios", type: "string"}
+      - {name: "images", type: "string"}
+      - {name: "has_audio_in_video", type: "bool"}
+      - {name: "type", type: "string"}
+  extra_args:
+    concurrency: 64
+    avoid_write_fusion: true
+    min_rows_per_file: 5000
+    max_rows_per_file: 10000
