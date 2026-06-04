@@ -27,6 +27,7 @@ from data_juicer.core.io_utils import (
 from data_juicer.core.ray_exporter import RayExporter, RayHdfsFanoutDatasink, summarize_filesystem_path
 from data_juicer.ops.base_op import DEFAULT_BATCH_SIZE
 from data_juicer.utils.constant import DATA_JUICER_INTERNAL_FIELDS, HashKeys
+from data_juicer.utils.export_mode_utils import normalize_export_write_mode_aliases
 
 
 def _quota_reserve_batch(table: pa.Table, *, quota_actor):
@@ -838,6 +839,13 @@ class ExportManager:
             if export_cfg.get("targets"):
                 targets = [dict(target) for target in export_cfg["targets"]]
                 for target in targets:
+                    normalized_target = normalize_export_write_mode_aliases(
+                        target,
+                        target=target.get("target"),
+                        context="export.targets[]",
+                    )
+                    target.clear()
+                    target.update(normalized_target)
                     target.setdefault("mode", "error_if_exists")
                     target.setdefault("extra_args", {})
                     target.setdefault("filter_condition", "")
@@ -860,6 +868,7 @@ class ExportManager:
             )
             export_cfg.setdefault("extra_args", {})
             export_cfg.setdefault("aws_credentials", {})
+            export_cfg = normalize_export_write_mode_aliases(export_cfg, context="export")
             return export_cfg
 
         return {

@@ -39,6 +39,13 @@ export:
   max_rows_mode: limit
 ```
 
+Structured exports accept `mode` and `operation` as guarded aliases where the
+selected backend supports append/overwrite semantics. File-like targets such as
+Ray HDFS, Hive, Lark, and Ray file fan-out use canonical `mode` values
+(`error_if_exists`, `overwrite`, `append` where supported); Magnus uses canonical
+`operation` values (`APPEND`, `OVERWRITE`). If both fields are set but disagree,
+Data-Juicer fails fast during config/export setup.
+
 ### Command Line
 
 ```bash
@@ -198,7 +205,7 @@ export:
       filter_condition: "lang == 'zh'"
 ```
 
-`export.targets` cannot be used together with `export.target`. The first version supports Ray fan-out to `target: hdfs` or `target: local` with `parquet` and `jsonl`; all targets in one list must use the same `target` and `type`. HDFS paths must start with `hdfs://`; local paths can be absolute, relative, or `file://` paths, but the directory must be visible to every Ray worker. Conditions use the same expression syntax as `general_field_filter`. A row can match multiple targets, and any write failure fails the task. `append` is at-least-once, so retries or reruns can produce duplicate part files.
+`export.targets` cannot be used together with `export.target`. The first version supports Ray fan-out to `target: hdfs` or `target: local` with `parquet` and `jsonl`; all targets in one list must use the same `target` and `type`. HDFS paths must start with `hdfs://`; local paths can be absolute, relative, or `file://` paths, but the directory must be visible to every Ray worker. Conditions use the same expression syntax as `general_field_filter`. A row can match multiple targets, and any write failure fails the task. `operation: APPEND|OVERWRITE|ERROR_IF_EXISTS` is accepted as an alias for fan-out `mode`, but conflicting `mode` and `operation` values are rejected. `append` is at-least-once, so retries or reruns can produce duplicate part files.
 
 `ray_data_checkpoint.enabled: true` is supported with `export.targets` only when every target explicitly sets `mode: append`. Omitted `mode` still defaults to `error_if_exists` and is rejected in checkpoint fan-out configs. `ray_data_checkpoint.delete_no_checkpoint_files: true` is accepted, but fan-out still uses a custom Ray datasink with post-write checkpointing; it does not provide atomic cleanup across target directories or exactly-once output.
 
