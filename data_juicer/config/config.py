@@ -31,6 +31,7 @@ from data_juicer.ops import load_builtin_ops
 from data_juicer.ops.base_op import OPERATORS
 from data_juicer.ops.op_fusion import FUSION_STRATEGIES
 from data_juicer.utils.constant import RAY_JOB_ENV_VAR
+from data_juicer.utils.export_mode_utils import normalize_export_write_mode_aliases
 from data_juicer.utils.metrics_utils import set_metrics_context
 from data_juicer.utils.logger_utils import setup_logger
 from data_juicer.utils.mm_utils import SpecialTokens
@@ -978,6 +979,7 @@ def normalize_export_config(cfg: Namespace) -> Namespace:
         cfg.export = dict_to_namespace(export_cfg)
         return cfg
     _validate_export_max_rows(export_cfg, cfg)
+    export_cfg = normalize_export_write_mode_aliases(export_cfg, context="export")
 
     path = export_cfg.get("path")
     if path:
@@ -1059,6 +1061,11 @@ def _validate_export_targets(export_cfg: dict, cfg: Namespace) -> None:
         path = target_cfg.get("path")
         if target not in {"hdfs", "local"}:
             raise ValueError("`export.targets` first version only supports `target: local/hdfs`.")
+        target_cfg = normalize_export_write_mode_aliases(
+            target_cfg,
+            target=target,
+            context=f"export.targets[{index}]",
+        )
         if export_type not in {"parquet", "jsonl"}:
             raise ValueError("`export.targets` first version only supports `type: parquet/jsonl`.")
         if target == "hdfs" and (not isinstance(path, str) or not path.startswith("hdfs://")):

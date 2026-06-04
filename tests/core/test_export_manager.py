@@ -261,6 +261,55 @@ class ExportManagerTest(unittest.TestCase):
         exporter.export.assert_called_once_with(dataset, columns=["text"])
 
     @patch("data_juicer.core.export_manager.RayExporter")
+    @patch("data_juicer.core.export_manager.copy_local_to_uri")
+    def test_ray_hdfs_parquet_export_accepts_operation_alias(
+        self,
+        mock_copy_local_to_uri,
+        mock_ray_exporter,
+    ):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+                "filesystem": "pyarrow",
+                "operation": "OVERWRITE",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset(["text"])
+        exporter = MagicMock()
+        mock_ray_exporter.return_value = exporter
+
+        manager._export_to_hdfs(dataset=dataset, columns=["text"])
+
+        mock_copy_local_to_uri.assert_not_called()
+        mock_ray_exporter.assert_called_once_with(
+            "hdfs://cluster/path/output_dir",
+            "parquet",
+            0,
+            keep_stats_in_res_ds=False,
+            keep_hashes_in_res_ds=False,
+            filesystem="pyarrow",
+            webhdfs=None,
+            mode="overwrite",
+        )
+
+    def test_export_mode_operation_conflict_fails_fast(self):
+        cfg = self._make_cfg(
+            {
+                "target": "hdfs",
+                "path": "hdfs://cluster/path/output_dir",
+                "type": "parquet",
+                "mode": "append",
+                "operation": "OVERWRITE",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflicting.*mode.*operation"):
+            ExportManager(cfg, executor_type="ray")
+
+    @patch("data_juicer.core.export_manager.RayExporter")
     def test_ray_hdfs_jsonl_export_uses_distributed_writer(self, mock_ray_exporter):
         cfg = self._make_cfg(
             {
@@ -1460,6 +1509,42 @@ class ExportManagerTest(unittest.TestCase):
         )
         mock_upload_file_to_lark_sheet.assert_not_called()
 
+    @patch("data_juicer.core.export_manager.append_csv_to_lark_sheet")
+    @patch("data_juicer.core.export_manager.upload_file_to_lark_sheet")
+    def test_lark_export_accepts_operation_alias(
+        self,
+        mock_upload_file_to_lark_sheet,
+        mock_append_csv_to_lark_sheet,
+    ):
+        cfg = self._make_cfg(
+            {
+                "target": "lark",
+                "lark_path": "https://example.feishu.cn/sheets/shtcn123?sheet=abc",
+                "lark_app_id": "app_id",
+                "lark_app_secret": "app_secret",
+                "type": "csv",
+                "operation": "APPEND",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="default")
+
+        class CsvDataset:
+            features = {"text": object()}
+
+            def remove_columns(self, columns):
+                return self
+
+            def to_csv(self, export_path, num_proc=1, storage_options=None):
+                with open(export_path, "w") as fout:
+                    fout.write("text\nhello_process_by_dj\n")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("data_juicer.core.export_manager.make_staging_dir", return_value=tmp_dir):
+                manager._export_to_lark(CsvDataset())
+
+        mock_append_csv_to_lark_sheet.assert_called_once()
+        mock_upload_file_to_lark_sheet.assert_not_called()
+
     def test_lark_file_export_requires_range(self):
         cfg = self._make_cfg(
             {
@@ -1604,6 +1689,24 @@ class ExportManagerTest(unittest.TestCase):
             concurrency=100,
             ray_remote_args={"num_cpus": 2},
             arrow_parquet_args={"compression": "snappy"},
+        )
+
+    def test_ray_hive_export_accepts_operation_alias(self):
+        ray_dataset = RayLikeDataset(["id", "name"])
+        cfg = self._make_cfg(
+            {
+                "target": "hive",
+                "table_name": "db.table_name",
+                "operation": "OVERWRITE",
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+
+        manager._export_to_hive(dataset=ray_dataset, columns=None)
+
+        ray_dataset.write_hive_table.assert_called_once_with(
+            table_name="db.table_name",
+            mode="overwrite",
         )
 
     def test_ray_hive_export_removes_stats_and_hash_columns(self):
@@ -1762,6 +1865,41 @@ class ExportManagerTest(unittest.TestCase):
         ray_dataset.write_hive_table.assert_called_once_with(
             table_name="db.table_name",
             partition={"date": "20260426"},
+        )
+
+    @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")
+    def test_magnus_export_accepts_mode_alias(self, mock_write_ray_dataset_to_magnus):
+        class RayLikeDataset:
+            def columns(self):
+                return ["id", "name"]
+
+        cfg = self._make_cfg(
+            {
+                "target": "magnus",
+                "table_name": "catalog.db.table",
+                "mode": "overwrite",
+                "schema": {"fields": [{"name": "id", "type": "string"}]},
+                "magnus_conf": {},
+            }
+        )
+        manager = ExportManager(cfg, executor_type="ray")
+        dataset = RayLikeDataset()
+
+        manager._export_to_magnus(dataset)
+
+        mock_write_ray_dataset_to_magnus.assert_called_once_with(
+            dataset,
+            "catalog.db.table",
+            partition_columns=None,
+            partition_values=None,
+            schema={"fields": [{"name": "id", "type": "string"}]},
+            magnus_conf={},
+            create_table_if_not_exists=False,
+            magnus_failure_policy="abort",
+            operation="OVERWRITE",
+            validate_overwrite_partition_before_write=False,
+            infer_schema_on_create=False,
+            serialize_complex_fields=False,
         )
 
     @patch("data_juicer.core.export_manager.write_ray_dataset_to_magnus")

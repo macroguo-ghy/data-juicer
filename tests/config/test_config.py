@@ -700,6 +700,91 @@ class ConfigTest(DataJuicerTestCaseBase):
         finally:
             os.unlink(temp_config)
 
+    def test_structured_export_targets_accepts_operation_alias(self):
+        config_data = {
+            'project_name': 'structured_export_targets_operation_alias',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'targets': [
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_a',
+                        'type': 'parquet',
+                        'operation': 'APPEND',
+                    },
+                    {
+                        'target': 'hdfs',
+                        'path': 'hdfs://cluster/path/output_b',
+                        'type': 'parquet',
+                        'operation': 'OVERWRITE',
+                    },
+                ],
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(cfg.export.targets[0].mode, 'append')
+            self.assertEqual(cfg.export.targets[1].mode, 'overwrite')
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_export_accepts_operation_alias_for_single_target(self):
+        config_data = {
+            'project_name': 'structured_export_single_operation_alias',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'target': 'hdfs',
+                'path': 'hdfs://cluster/path/output_dir',
+                'type': 'parquet',
+                'operation': 'OVERWRITE',
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(cfg.export.mode, 'overwrite')
+            self.assertFalse(hasattr(cfg.export, 'operation'))
+        finally:
+            os.unlink(temp_config)
+
+    def test_structured_magnus_export_accepts_mode_alias(self):
+        config_data = {
+            'project_name': 'structured_export_magnus_mode_alias',
+            'executor_type': 'ray',
+            'dataset_path': './tests/core/data/test_data/sample.jsonl',
+            'export': {
+                'target': 'magnus',
+                'table_name': 'catalog.db.table',
+                'magnus_conf': {},
+                'mode': 'overwrite',
+            },
+            'process': [],
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.safe_dump(config_data, f)
+            temp_config = f.name
+
+        try:
+            cfg = init_configs(args=['--config', temp_config], load_configs_only=True)
+            self.assertEqual(cfg.export.operation, 'OVERWRITE')
+            self.assertFalse(hasattr(cfg.export, 'mode'))
+        finally:
+            os.unlink(temp_config)
+
     def test_structured_export_targets_accepts_ray_local_jsonl_targets(self):
         config_data = {
             'project_name': 'structured_export_local_targets',
@@ -920,6 +1005,15 @@ class ConfigTest(DataJuicerTestCaseBase):
                     'target': 'hdfs',
                     'path': 'hdfs://cluster/path/output_a',
                     'type': 'parquet',
+                    'mode': 'append',
+                    'operation': 'OVERWRITE',
+                }],
+            }, 'conflicting.*mode.*operation'),
+            ({
+                'targets': [{
+                    'target': 'hdfs',
+                    'path': 'hdfs://cluster/path/output_a',
+                    'type': 'parquet',
                     'filter_condition': 123,
                 }],
             }, 'filter_condition'),
@@ -1028,6 +1122,13 @@ class ConfigTest(DataJuicerTestCaseBase):
         for target_kind, targets in [
             ('hdfs', base_targets),
             (
+                'hdfs_operation_alias',
+                [
+                    {**base_targets[0], 'mode': None, 'operation': 'APPEND'},
+                    {**base_targets[1], 'mode': None, 'operation': 'APPEND'},
+                ],
+            ),
+            (
                 'local',
                 [
                     {**base_targets[0], 'target': 'local', 'path': './outputs/checkpoint_local/output_a'},
@@ -1057,7 +1158,8 @@ class ConfigTest(DataJuicerTestCaseBase):
                     self.assertTrue(cfg.ray_data_checkpoint.enabled)
                     self.assertEqual(len(cfg.export.targets), 2)
                     self.assertTrue(all(target.mode == 'append' for target in cfg.export.targets))
-                    self.assertTrue(all(target.target == target_kind for target in cfg.export.targets))
+                    expected_target = 'hdfs' if target_kind == 'hdfs_operation_alias' else target_kind
+                    self.assertTrue(all(target.target == expected_target for target in cfg.export.targets))
                     self.assertEqual(cfg.ray_data_checkpoint.delete_no_checkpoint_files, delete_no_checkpoint_files)
                 finally:
                     os.unlink(temp_config)
