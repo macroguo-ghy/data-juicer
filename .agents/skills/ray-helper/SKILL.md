@@ -194,6 +194,8 @@ Prefer the compact helper scripts before pasting full RayUI API payloads into th
 
 The scripts also accept compact JSON summaries as local files. Use raw `/api/jobs/<job_id>` or `/api/data/datasets` output only when the helper cannot parse the URL or when a missing field must be inspected directly.
 
+For Godel live dashboard URLs, `ray_job_summary.py` and `ray_compare_jobs.py` automatically retry through Ray History Server event logs when the live API has been archived or still reports a stale `RUNNING` job after all Ray Data datasets are finished.
+
 Useful endpoints:
 
 ```bash

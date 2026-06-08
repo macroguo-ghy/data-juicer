@@ -29,6 +29,8 @@ SECRET_KEYS = {
     "ray.io/identify-token",
 }
 
+FINAL_JOB_STATUSES = {"SUCCEEDED", "FAILED", "STOPPED"}
+
 JOB_KEYS = [
     "type",
     "job_id",
@@ -101,6 +103,93 @@ class ParsedRayJob(NamedTuple):
 def _json_get(url: str, timeout: int = 30) -> Dict[str, Any]:
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return json.load(response)
+
+
+def _is_godel_url(url: str) -> bool:
+    return "godel-stream-applications.byted.org" in urllib.parse.urlparse(url).netloc
+
+
+def _godel_history_lookup_name(url: str) -> Optional[str]:
+    parsed = urllib.parse.urlparse(url)
+    parts = [urllib.parse.unquote(part) for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    app_segment, dashboard_segment = parts[0], parts[1]
+    if "-" not in app_segment:
+        return None
+    cluster, dc = app_segment.rsplit("-", 1)
+
+    if dashboard_segment.endswith("-dashboard"):
+        dashboard_segment = dashboard_segment[: -len("-dashboard")]
+    if dashboard_segment.endswith("-ray-on-godel"):
+        name = dashboard_segment[: -len("-ray-on-godel")]
+    elif "-" in dashboard_segment:
+        name = dashboard_segment.rsplit("-", 1)[0]
+    else:
+        name = dashboard_segment
+
+    if not cluster or not dc or not name:
+        return None
+    return f"{name}-{dc}-{cluster}"
+
+
+def _event_log_candidates(payload: Dict[str, Any]) -> List[str]:
+    logs = payload.get("data", {}).get("eventlogs") or payload.get("eventlogs") or []
+    logs = [log for log in logs if isinstance(log, dict) and log.get("name")]
+    logs.sort(key=lambda log: (log.get("lastUpdate") or 0, bool(log.get("isCurrent"))), reverse=True)
+    return [str(log["name"]) for log in logs]
+
+
+def _fetch_payloads(api_base: str, job_id: str, timeout: int) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    job_payload = _json_get(f"{api_base}/api/jobs/{job_id}", timeout=timeout)
+    dataset_payload = _json_get(f"{api_base}/api/data/datasets", timeout=timeout)
+    return job_payload, dataset_payload
+
+
+def _resolve_godel_history_api_base(url: str, job_id: str, timeout: int) -> Optional[str]:
+    lookup_name = _godel_history_lookup_name(url)
+    if not lookup_name:
+        return None
+
+    event_logs = _json_get(
+        f"https://ray-history-server.byted.org/v2/history/{lookup_name}/api/event_logs",
+        timeout=timeout,
+    )
+    for history_key in _event_log_candidates(event_logs):
+        api_base = f"https://ray-history-server.byted.org/history/{history_key}"
+        try:
+            job_payload = _json_get(f"{api_base}/api/jobs/{job_id}", timeout=timeout)
+        except Exception:
+            continue
+        if str(job_payload.get("job_id")) == str(job_id):
+            return api_base
+    return None
+
+
+def _datasets_finished(payload: Dict[str, Any]) -> bool:
+    datasets = payload.get("datasets")
+    if datasets is None and isinstance(payload.get("data"), dict):
+        datasets = payload["data"].get("datasets")
+    if not datasets:
+        return False
+    return all(isinstance(dataset, dict) and dataset.get("state") == "FINISHED" for dataset in datasets)
+
+
+def _is_final_job_payload(payload: Dict[str, Any]) -> bool:
+    return (
+        payload.get("status") in FINAL_JOB_STATUSES
+        or payload.get("end_time") is not None
+        or payload.get("driver_exit_code") is not None
+    )
+
+
+def _is_stale_godel_running_job(job_payload: Dict[str, Any], dataset_payload: Dict[str, Any]) -> bool:
+    return (
+        job_payload.get("status") == "RUNNING"
+        and not _is_final_job_payload(job_payload)
+        and _datasets_finished(dataset_payload)
+    )
 
 
 def _strip_suffix_operator_index(name: str) -> str:
@@ -377,8 +466,36 @@ def build_summary(job_payload: Dict[str, Any], dataset_payload: Dict[str, Any]) 
 
 def fetch_summary(url: str, job_id: Optional[str] = None, timeout: int = 30) -> Dict[str, Any]:
     parsed = parse_ray_job_url(url, job_id=job_id)
-    job_payload = _json_get(f"{parsed.api_base}/api/jobs/{parsed.job_id}", timeout=timeout)
-    dataset_payload = _json_get(f"{parsed.api_base}/api/data/datasets", timeout=timeout)
+    if _is_godel_url(url):
+        try:
+            job_payload, dataset_payload = _fetch_payloads(parsed.api_base, parsed.job_id, timeout)
+        except Exception as exc:
+            try:
+                history_api_base = _resolve_godel_history_api_base(url, parsed.job_id, timeout)
+            except Exception:
+                history_api_base = None
+            if not history_api_base:
+                raise exc
+            job_payload, dataset_payload = _fetch_payloads(history_api_base, parsed.job_id, timeout)
+            return build_summary(job_payload, dataset_payload)
+
+        if _is_stale_godel_running_job(job_payload, dataset_payload):
+            try:
+                history_api_base = _resolve_godel_history_api_base(url, parsed.job_id, timeout)
+            except Exception:
+                history_api_base = None
+            if history_api_base:
+                history_job_payload, history_dataset_payload = _fetch_payloads(
+                    history_api_base,
+                    parsed.job_id,
+                    timeout,
+                )
+                if _is_final_job_payload(history_job_payload):
+                    return build_summary(history_job_payload, history_dataset_payload)
+
+        return build_summary(job_payload, dataset_payload)
+
+    job_payload, dataset_payload = _fetch_payloads(parsed.api_base, parsed.job_id, timeout)
     return build_summary(job_payload, dataset_payload)
 
 

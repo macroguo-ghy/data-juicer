@@ -208,6 +208,185 @@ def test_ray_job_summary_build_fetch_and_cli(monkeypatch, capsys):
     assert printed["job"]["job_id"] == "03000000"
 
 
+def test_ray_job_summary_resolves_archived_godel_url(monkeypatch):
+    ray_job_summary = load_script("ray_job_summary.py")
+
+    godel_url = (
+        "https://godel-stream-applications.byted.org/rabbit-hl/"
+        "j-paubxt82r1tu-jw1-batch-dashboard/#/jobs/03000000"
+    )
+    history_key = "j-paubxt82r1tu-jw1-hl-rabbit:20260608035326-nhwluy6u"
+
+    def fake_json_get(url, timeout=30):
+        if url == (
+            "https://godel-stream-applications.byted.org/rabbit-hl/"
+            "j-paubxt82r1tu-jw1-batch-dashboard/api/jobs/03000000"
+        ):
+            raise ValueError("HTML redirect")
+        if url == (
+            "https://ray-history-server.byted.org/v2/history/"
+            "j-paubxt82r1tu-jw1-hl-rabbit/api/event_logs"
+        ):
+            return {
+                "result": True,
+                "data": {
+                    "eventlogs": [
+                        {"name": "j-paubxt82r1tu-jw1-hl-rabbit:old", "lastUpdate": 1},
+                        {"name": history_key, "lastUpdate": 2},
+                    ]
+                },
+            }
+        if url.endswith("/history/j-paubxt82r1tu-jw1-hl-rabbit:old/api/jobs/03000000"):
+            raise ValueError("Job 03000000 does not exist")
+        if url.endswith(f"/history/{history_key}/api/jobs/03000000"):
+            return {
+                "job_id": "03000000",
+                "status": "SUCCEEDED",
+                "message": "Job finished successfully.",
+                "entrypoint": "",
+                "runtime_env": {},
+                "metadata": {},
+                "end_time": 1780896740264,
+                "driver_exit_code": 0,
+            }
+        if url.endswith(f"/history/{history_key}/api/data/datasets"):
+            return {"datasets": [{"dataset": "dataset_12_0", "state": "FINISHED", "operators": []}]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(ray_job_summary, "_json_get", fake_json_get)
+
+    summary = ray_job_summary.fetch_summary(godel_url)
+
+    assert summary["job"]["status"] == "SUCCEEDED"
+    assert summary["job"]["driver_exit_code"] == 0
+    assert summary["datasets"][0]["state"] == "FINISHED"
+
+
+def test_ray_job_summary_prefers_history_when_godel_live_status_is_stale(monkeypatch):
+    ray_job_summary = load_script("ray_job_summary.py")
+
+    godel_url = (
+        "https://godel-stream-applications.byted.org/rabbit-hl/"
+        "j-paubxt82r1tu-jw1-batch-dashboard/#/jobs/03000000"
+    )
+    history_key = "j-paubxt82r1tu-jw1-hl-rabbit:20260608035326-nhwluy6u"
+    calls = []
+
+    def fake_json_get(url, timeout=30):
+        calls.append(url)
+        if url == (
+            "https://godel-stream-applications.byted.org/rabbit-hl/"
+            "j-paubxt82r1tu-jw1-batch-dashboard/api/jobs/03000000"
+        ):
+            return {
+                "job_id": "03000000",
+                "status": "RUNNING",
+                "message": "Job is currently running.",
+                "entrypoint": "",
+                "runtime_env": {},
+                "metadata": {},
+                "end_time": None,
+                "driver_exit_code": None,
+            }
+        if url == (
+            "https://godel-stream-applications.byted.org/rabbit-hl/"
+            "j-paubxt82r1tu-jw1-batch-dashboard/api/data/datasets"
+        ):
+            return {"datasets": [{"dataset": "dataset_12_0", "state": "FINISHED", "operators": []}]}
+        if url == (
+            "https://ray-history-server.byted.org/v2/history/"
+            "j-paubxt82r1tu-jw1-hl-rabbit/api/event_logs"
+        ):
+            return {"result": True, "data": {"eventlogs": [{"name": history_key, "lastUpdate": 2}]}}
+        if url.endswith(f"/history/{history_key}/api/jobs/03000000"):
+            return {
+                "job_id": "03000000",
+                "status": "SUCCEEDED",
+                "message": "Job finished successfully.",
+                "entrypoint": "",
+                "runtime_env": {},
+                "metadata": {},
+                "end_time": 1780896740264,
+                "driver_exit_code": 0,
+            }
+        if url.endswith(f"/history/{history_key}/api/data/datasets"):
+            return {"datasets": [{"dataset": "dataset_12_0", "state": "FINISHED", "operators": []}]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(ray_job_summary, "_json_get", fake_json_get)
+
+    summary = ray_job_summary.fetch_summary(godel_url)
+
+    assert summary["job"]["status"] == "SUCCEEDED"
+    assert any("/v2/history/j-paubxt82r1tu-jw1-hl-rabbit/api/event_logs" in call for call in calls)
+
+
+def test_ray_job_summary_keeps_active_godel_live_status(monkeypatch):
+    ray_job_summary = load_script("ray_job_summary.py")
+
+    godel_url = (
+        "https://godel-stream-applications.byted.org/rabbit-hl/"
+        "j-paubxt82r1tu-jw1-batch-dashboard/#/jobs/03000000"
+    )
+
+    def fake_json_get(url, timeout=30):
+        if url.endswith("/api/jobs/03000000"):
+            return {
+                "job_id": "03000000",
+                "status": "RUNNING",
+                "entrypoint": "",
+                "runtime_env": {},
+                "metadata": {},
+            }
+        if url.endswith("/api/data/datasets"):
+            return {"datasets": [{"dataset": "dataset_12_0", "state": "RUNNING", "operators": []}]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(ray_job_summary, "_json_get", fake_json_get)
+
+    summary = ray_job_summary.fetch_summary(godel_url)
+
+    assert summary["job"]["status"] == "RUNNING"
+    assert summary["datasets"][0]["state"] == "RUNNING"
+
+
+def test_ray_job_summary_keeps_godel_live_summary_when_history_lookup_fails(monkeypatch):
+    ray_job_summary = load_script("ray_job_summary.py")
+
+    godel_url = (
+        "https://godel-stream-applications.byted.org/rabbit-hl/"
+        "j-paubxt82r1tu-jw1-batch-dashboard/#/jobs/03000000"
+    )
+
+    def fake_json_get(url, timeout=30):
+        if url == (
+            "https://godel-stream-applications.byted.org/rabbit-hl/"
+            "j-paubxt82r1tu-jw1-batch-dashboard/api/jobs/03000000"
+        ):
+            return {
+                "job_id": "03000000",
+                "status": "RUNNING",
+                "entrypoint": "",
+                "runtime_env": {},
+                "metadata": {},
+            }
+        if url == (
+            "https://godel-stream-applications.byted.org/rabbit-hl/"
+            "j-paubxt82r1tu-jw1-batch-dashboard/api/data/datasets"
+        ):
+            return {"datasets": [{"dataset": "dataset_12_0", "state": "FINISHED", "operators": []}]}
+        if url.endswith("/api/event_logs"):
+            raise ValueError("history temporarily unavailable")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(ray_job_summary, "_json_get", fake_json_get)
+
+    summary = ray_job_summary.fetch_summary(godel_url)
+
+    assert summary["job"]["status"] == "RUNNING"
+    assert summary["datasets"][0]["state"] == "FINISHED"
+
+
 def test_compare_jobs_reports_config_and_operator_differences():
     ray_compare_jobs = load_script("ray_compare_jobs.py")
 
