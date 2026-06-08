@@ -196,6 +196,25 @@ The scripts also accept compact JSON summaries as local files. Use raw `/api/job
 
 For Godel live dashboard URLs, `ray_job_summary.py` and `ray_compare_jobs.py` automatically retry through Ray History Server event logs when the live API has been archived or still reports a stale `RUNNING` job after all Ray Data datasets are finished.
 
+For HDFS output-directory growth checks, use `hdfs_ls_summary.py` instead of printing large `hdfs dfs -ls` output or hand-writing `jq` / `awk` diffs:
+
+```bash
+.agents/skills/ray-helper/scripts/hdfs_ls_summary.py \
+  --path hdfs://haruna/path/to/output \
+  --samples 2 \
+  --interval 60 \
+  --username <username> \
+  --user-email <email>
+```
+
+If the `ExecuteHdfsCommand` responses are already saved locally, compare them directly:
+
+```bash
+.agents/skills/ray-helper/scripts/hdfs_ls_summary.py \
+  --compare-response /tmp/dj_hdfs_ls_before.json /tmp/dj_hdfs_ls_after.json \
+  --format markdown
+```
+
 Useful endpoints:
 
 ```bash

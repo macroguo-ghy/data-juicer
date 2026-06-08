@@ -655,3 +655,258 @@ def test_hdfs_checkpoint_bytedcli_command_shape(monkeypatch):
             zone="CN",
             cluster="default",
         )
+
+
+def test_hdfs_ls_summary_parses_response_and_compares_growth(tmp_path, capsys):
+    hdfs_ls_summary = load_script("hdfs_ls_summary.py")
+
+    first_output = """Found 2 items
+-rw-r--r--   3 user supergroup        100 2026-06-08 16:01 hdfs://haruna/out/part-000.parquet
+-rw-r--r--   3 user supergroup        200 2026-06-08 16:02 hdfs://haruna/out/part-001.parquet
+"""
+    second_output = """Found 2 items
+-rw-r--r--   3 user supergroup        150 2026-06-08 16:01 hdfs://haruna/out/part-000.parquet
+-rw-r--r--   3 user supergroup        200 2026-06-08 16:02 hdfs://haruna/out/part-001.parquet
+"""
+    first_file = tmp_path / "first.json"
+    second_file = tmp_path / "second.json"
+    first_file.write_text(
+        json.dumps(
+            {
+                "data": {
+                    "resp_body_json": {
+                        "status_code": 0,
+                        "command": "hdfs dfs -ls hdfs://haruna/out",
+                        "output": first_output,
+                        "output_encoding": "utf-8",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_file.write_text(
+        json.dumps({"data": {"resp_body_json": {"status_code": 0, "output": second_output}}}),
+        encoding="utf-8",
+    )
+
+    summary = hdfs_ls_summary.load_summary_from_response(str(first_file))
+    assert summary["file_count"] == 2
+    assert summary["total_bytes"] == 300
+    assert summary["latest_mtime"] == "2026-06-08 16:02"
+    assert summary["latest_path"] == "hdfs://haruna/out/part-001.parquet"
+
+    comparison = hdfs_ls_summary.compare_summaries(
+        summary,
+        hdfs_ls_summary.load_summary_from_response(str(second_file)),
+    )
+    assert comparison["delta_file_count"] == 0
+    assert comparison["delta_total_bytes"] == 50
+    assert comparison["changed_files"] == [
+        {
+            "path": "hdfs://haruna/out/part-000.parquet",
+            "old_size": 100,
+            "new_size": 150,
+            "delta_bytes": 50,
+            "old_mtime": "2026-06-08 16:01",
+            "new_mtime": "2026-06-08 16:01",
+        }
+    ]
+
+    assert (
+        hdfs_ls_summary.main(
+            ["--compare-response", str(first_file), str(second_file), "--format", "json"]
+        )
+        == 0
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["comparison"]["delta_total_bytes"] == 50
+
+    assert hdfs_ls_summary.main(["--response", str(first_file)]) == 0
+    assert "HDFS LS Summary" in capsys.readouterr().out
+
+
+def test_hdfs_ls_summary_bytedcli_command_shape(monkeypatch):
+    hdfs_ls_summary = load_script("hdfs_ls_summary.py")
+
+    def fake_run(command, check, capture_output, text):
+        assert command[:5] == ["bytedcli", "--json", "bits", "rpc-call", "ad.ai.data_forge"]
+        body = json.loads(command[command.index("--body") + 1])
+        assert body["command_line"] == "hdfs dfs -ls hdfs://haruna/out"
+        assert body["user_context"]["username"] == "u"
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "resp_body_json": {
+                            "status_code": 0,
+                            "output": (
+                                "Found 1 items\n"
+                                "-rw-r--r--   3 user supergroup 42 2026-06-08 16:01 "
+                                "hdfs://haruna/out/part.parquet\n"
+                            ),
+                        }
+                    }
+                }
+            )
+        )
+
+    monkeypatch.setattr(hdfs_ls_summary.subprocess, "run", fake_run)
+    summary = hdfs_ls_summary.fetch_summary_with_bytedcli(
+        "hdfs://haruna/out",
+        username="u",
+        user_email="u@example.com",
+        env="ppe_terranova",
+        idc="hl",
+        zone="CN",
+        cluster="default",
+    )
+    assert summary["file_count"] == 1
+    assert summary["total_bytes"] == 42
+
+    def fake_run_failed(command, check, capture_output, text):
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {"data": {"resp_body_json": {"status_code": 1, "status_message": "missing"}}}
+            )
+        )
+
+    monkeypatch.setattr(hdfs_ls_summary.subprocess, "run", fake_run_failed)
+    with pytest.raises(ValueError, match="status_code=1"):
+        hdfs_ls_summary.fetch_summary_with_bytedcli(
+            "hdfs://haruna/out",
+            username="u",
+            user_email="u@example.com",
+            env="ppe_terranova",
+            idc="hl",
+            zone="CN",
+            cluster="default",
+        )
+
+    def fake_run_without_output(command, check, capture_output, text):
+        return SimpleNamespace(stdout=json.dumps({"data": {"resp_body_json": {}}}))
+
+    monkeypatch.setattr(hdfs_ls_summary.subprocess, "run", fake_run_without_output)
+    with pytest.raises(ValueError, match="did not contain output"):
+        hdfs_ls_summary.fetch_summary_with_bytedcli(
+            "hdfs://haruna/out",
+            username="u",
+            user_email="u@example.com",
+            env="ppe_terranova",
+            idc="hl",
+            zone="CN",
+            cluster="default",
+        )
+
+
+def test_hdfs_ls_summary_error_paths_and_live_sampling(tmp_path, monkeypatch, capsys):
+    hdfs_ls_summary = load_script("hdfs_ls_summary.py")
+
+    string_body_file = tmp_path / "string_body.json"
+    string_body_file.write_text(
+        json.dumps(
+            {
+                "data": {
+                    "resp_body_json": json.dumps(
+                        {
+                            "status_code": 0,
+                            "output": (
+                                "Found 2 items\n"
+                                "drwxr-xr-x   - user supergroup 0 2026-06-08 15:00 "
+                                "hdfs://haruna/out/dir\n"
+                                "-rw-r--r--   3 user supergroup 1024 2026-06-08 16:00 "
+                                "hdfs://haruna/out/file.parquet\n"
+                            ),
+                        }
+                    )
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = hdfs_ls_summary.load_summary_from_response(str(string_body_file))
+    assert summary["file_count"] == 1
+    assert summary["dir_count"] == 1
+    assert "1.0KiB" in hdfs_ls_summary.format_summary_markdown(summary)
+
+    bad_body_file = tmp_path / "bad_body.json"
+    bad_body_file.write_text(json.dumps({"data": {"resp_body_json": 1}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        hdfs_ls_summary.load_summary_from_response(str(bad_body_file))
+
+    failed_file = tmp_path / "failed.json"
+    failed_file.write_text(
+        json.dumps({"data": {"resp_body_json": {"status_code": 1, "status_message": "denied"}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="status_code=1"):
+        hdfs_ls_summary.load_summary_from_response(str(failed_file))
+
+    missing_output_file = tmp_path / "missing_output.json"
+    missing_output_file.write_text(json.dumps({"data": {"resp_body_json": {}}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="Cannot find string output"):
+        hdfs_ls_summary.load_summary_from_response(str(missing_output_file))
+
+    assert hdfs_ls_summary.summarize_ls_output("bad\n-rw bad\n-rw x y z not-int a b c\n")[
+        "file_count"
+    ] == 0
+
+    samples = [
+        {
+            "file_count": 1,
+            "dir_count": 0,
+            "total_bytes": 10,
+            "latest_mtime": "2026-06-08 16:00",
+            "latest_path": "hdfs://haruna/out/file.parquet",
+            "_files": {"hdfs://haruna/out/file.parquet": {"size": 10, "mtime": "2026-06-08 16:00"}},
+        },
+        {
+            "file_count": 2,
+            "dir_count": 0,
+            "total_bytes": 30,
+            "latest_mtime": "2026-06-08 16:01",
+            "latest_path": "hdfs://haruna/out/new.parquet",
+            "_files": {
+                "hdfs://haruna/out/file.parquet": {"size": 15, "mtime": "2026-06-08 16:00"},
+                "hdfs://haruna/out/new.parquet": {"size": 15, "mtime": "2026-06-08 16:01"},
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        hdfs_ls_summary,
+        "fetch_summary_with_bytedcli",
+        lambda *args, **kwargs: samples.pop(0),
+    )
+    monkeypatch.setattr(hdfs_ls_summary.time, "sleep", lambda interval: None)
+    args = SimpleNamespace(
+        response=None,
+        path="hdfs://haruna/out",
+        username="u",
+        user_email="u@example.com",
+        env="ppe_terranova",
+        idc="hl",
+        zone="CN",
+        cluster="default",
+        samples=2,
+        interval=60,
+        sample_size=10,
+    )
+    live = hdfs_ls_summary._read_summary(args)
+    assert live["comparison"]["delta_file_count"] == 1
+    assert live["comparison"]["delta_total_bytes"] == 20
+    assert "HDFS LS Comparison" in hdfs_ls_summary.format_comparison_markdown(live["comparison"])
+
+    args.samples = 1
+    args.username = ""
+    args.user_email = ""
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.delenv("BYTE_USER_EMAIL", raising=False)
+    with pytest.raises(ValueError, match="requires --username"):
+        hdfs_ls_summary._read_summary(args)
+
+    with pytest.raises(ValueError, match="samples must be"):
+        hdfs_ls_summary.main(["--response", str(string_body_file), "--samples", "0"])
+
+    assert hdfs_ls_summary.main(["--response", str(string_body_file), "--format", "json"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert "_files" not in printed

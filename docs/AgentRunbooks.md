@@ -30,6 +30,25 @@ For HDFS checkpoint metadata fetched through `ExecuteHdfsCommand`, summarize the
   --format markdown
 ```
 
+For HDFS output-directory growth checks, avoid dumping large `hdfs dfs -ls` listings. Save the `ExecuteHdfsCommand` responses and compare them:
+
+```bash
+.agents/skills/ray-helper/scripts/hdfs_ls_summary.py \
+  --compare-response /tmp/dj_hdfs_ls_before.json /tmp/dj_hdfs_ls_after.json \
+  --format markdown
+```
+
+Or let the helper sample through `ExecuteHdfsCommand` directly:
+
+```bash
+.agents/skills/ray-helper/scripts/hdfs_ls_summary.py \
+  --path hdfs://haruna/path/to/output \
+  --samples 2 \
+  --interval 60 \
+  --username <your-username> \
+  --user-email <your-email>
+```
+
 ## Online HDFS Read-Only Inspection
 
 Use this flow when inspecting production HDFS paths such as `hdfs://haruna/...` from a local Mac or another environment that cannot resolve the production HDFS nameservice directly. Do not rely on local `hdfs dfs` in that case; it may fail with errors such as `UnknownHostException: haruna` even when the file is valid online.
