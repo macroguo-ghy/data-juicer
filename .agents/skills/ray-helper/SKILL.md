@@ -182,6 +182,20 @@ If `metricRay` is empty, still report `metricCpu` and the cluster-level `ray_cor
 
 Open RayUI and select a finished or running job relevant to the user request. If the job id is visible, use it directly; otherwise inspect the jobs page and choose by status, time, or entrypoint.
 
+Prefer the compact helper scripts before pasting full RayUI API payloads into the conversation:
+
+```bash
+# One job: decode config-base64, redact secrets, and summarize Ray Data operators.
+.agents/skills/ray-helper/scripts/ray_job_summary.py '<RAY_JOB_URL>' --format markdown
+
+# Two jobs: compare config, dataset context, and operator block-size/output changes.
+.agents/skills/ray-helper/scripts/ray_compare_jobs.py '<OLD_RAY_JOB_URL>' '<CURRENT_RAY_JOB_URL>' --format markdown
+```
+
+The scripts also accept compact JSON summaries as local files. Use raw `/api/jobs/<job_id>` or `/api/data/datasets` output only when the helper cannot parse the URL or when a missing field must be inspected directly.
+
+For Godel live dashboard URLs, `ray_job_summary.py` and `ray_compare_jobs.py` automatically retry through Ray History Server event logs when the live API has been archived or still reports a stale `RUNNING` job after all Ray Data datasets are finished.
+
 Useful endpoints:
 
 ```bash

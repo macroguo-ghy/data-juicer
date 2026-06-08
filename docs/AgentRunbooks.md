@@ -4,6 +4,32 @@
 
 Use [Online Ray E2E Submission And Debug Runbook](OnlineRayE2ERunbook.md) when submitting a Data-Juicer Ray job through `ad.ai.data_forge` `LaunchMerlinFederalJob`, checking Federal job status, opening Ray UI, and locating failures through Merlin, Ray, and Data-Juicer logs.
 
+## Token-Efficient Ray Dashboard Inspection
+
+Use the ray-helper scripts before pasting full Ray Dashboard, Ray History, or Godel API payloads into an agent conversation. They decode Data-Juicer `--config-base64`, redact secrets, keep only the Ray Data fields needed for diagnosis, and trim long values.
+
+Summarize one job:
+
+```bash
+.agents/skills/ray-helper/scripts/ray_job_summary.py '<RAY_JOB_URL>' --format markdown
+```
+
+Compare two jobs:
+
+```bash
+.agents/skills/ray-helper/scripts/ray_compare_jobs.py '<OLD_RAY_JOB_URL>' '<CURRENT_RAY_JOB_URL>' --format markdown
+```
+
+If a payload has already been saved, use the compact JSON output files as inputs to `ray_compare_jobs.py` instead of re-fetching URLs.
+
+For HDFS checkpoint metadata fetched through `ExecuteHdfsCommand`, summarize the saved response instead of printing binary/base64 output:
+
+```bash
+.agents/skills/ray-helper/scripts/hdfs_checkpoint_summary.py \
+  --metadata-response /tmp/dj_hdfs_cmd.response.json \
+  --format markdown
+```
+
 ## Online HDFS Read-Only Inspection
 
 Use this flow when inspecting production HDFS paths such as `hdfs://haruna/...` from a local Mac or another environment that cannot resolve the production HDFS nameservice directly. Do not rely on local `hdfs dfs` in that case; it may fail with errors such as `UnknownHostException: haruna` even when the file is valid online.
